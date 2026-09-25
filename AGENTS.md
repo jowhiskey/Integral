@@ -17,7 +17,9 @@ Current phase: **AST core implementation only** (node types, serialization, math
 5. **No editing methods on nodes** — nodes are dumb data; the editing engine applies ops as values and interprets nav profiles as data.
 6. **Never route evaluation through `AST → string → math.parse()`.** `math.parse` only at string-import boundaries.
 7. Integral never parses plain-text math as its input paradigm — live editing is key event → op → new tree. Plain-text input workflows belong to consuming projects.
-8. **Implement the spec exactly; do not redesign.** If `docs/context/editor-spec.md` is ambiguous or seems wrong, stop and ask — never decide silently.
+8. **Implement the spec exactly; do not redesign.** If `docs/context/editor-spec.md` is ambiguous or seems wrong, stop and a
+sk — never decide silently.
+9. **Never edit `AGENTS.md` or any `docs/context/*` file.** These files are generated from the owner’s knowledge base and synced from outside. Read them; if your work warrants a docs change, note it in the session report instead.
 
 ## Branching workflow
 
@@ -32,6 +34,11 @@ Current phase: **AST core implementation only** (node types, serialization, math
 | Node set, invariants, JSON format, editing-layer principles, vocabulary | `docs/context/editor-spec.md` |
 
 ## Changelog
+
+### 2026-09-26 — [workflow]
+- ADDED: Hard rule 9 — the coding agent never edits `AGENTS.md` or `docs/context/*`; these files are generated from the knowledge base and synced from outside. Note warranted docs changes in the session report instead.
+  Reason: the spec/knowledge base is the single source of truth; docs generation belongs to the owner-side sync workflow only.
+  Impact: do not commit doc changes even alongside code work.
 
 ### 2026-09-25 — [workflow]
 - ADDED: Clean-repo bootstrap. AGENTS.md + `docs/context/editor-spec.md` (full AST spec v1: node set, structural invariants, versioned JSON envelope, editing-layer principles, vocabulary interface, implementation phasing).
