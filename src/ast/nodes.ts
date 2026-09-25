@@ -35,6 +35,11 @@ export abstract class MathNode {
   abstract readonly type: NodeTag;
   abstract toJSON(): NodeJson;
   abstract toMathNode(): MathJsNode;
+
+  // TODO: MathML Core rendering — deferred with the editor layer (spec phasing).
+  toMathML(): never {
+    throw new Error('toMathML: not implemented');
+  }
 }
 
 const jsonOrNull = (node: MathNode | null): NodeJson | null => (node === null ? null : node.toJSON());
