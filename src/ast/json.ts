@@ -14,8 +14,8 @@ export type NodeJson =
   | { type: 'sub'; base: string; sub: string }
   | { type: 'unit'; value: NodeJson | null; unit: string };
 
-/** Envelope per formula: { "v": 1, "root": …node }. */
+/** Envelope per formula: { "v": 1, "root": …node }. root null = entirely empty formula. */
 export interface Envelope {
   v: 1;
-  root: NodeJson;
+  root: NodeJson | null;
 }

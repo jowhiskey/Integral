@@ -12,6 +12,7 @@ import {
   SymbolNode,
   UnitNode,
   fromJSON,
+  isEvaluable,
   toJSON,
 } from '../src/ast/index.js';
 
@@ -64,6 +65,14 @@ describe('roundtrip: fromJSON(toJSON(ast))', () => {
     expect(json.root).toEqual({ type: 'op', op: 'add', args: [{ type: 'num', value: 5 }, null] });
   });
 
+  it('accepts an entirely empty formula (root null or omitted)', () => {
+    expect(fromJSON({ v: 1, root: null })).toBeNull();
+    expect(fromJSON({ v: 1 })).toBeNull();
+    expect(toJSON(null)).toEqual({ v: 1, root: null });
+    expect(fromJSON(toJSON(null))).toBeNull();
+    expect(isEvaluable(fromJSON({ v: 1, root: null }))).toBe(false);
+  });
+
   it('accepts omitted empty slots on read', () => {
     expect(fromJSON({ v: 1, root: { type: 'frac', num: { type: 'num', value: 1 } } })).toEqual(
       new FractionNode(new NumberNode(1), null),
@@ -89,8 +98,6 @@ describe('fromJSON rejects invalid trees', () => {
     ['envelope array', [{ v: 1 }]],
     ['unsupported version', { v: 2, root: { type: 'num', value: 1 } }],
     ['missing version', { root: { type: 'num', value: 1 } }],
-    ['missing root', { v: 1 }],
-    ['null root', { v: 1, root: null }],
     ['unknown type tag', { v: 1, root: { type: 'matrix', args: [] } }],
     ['non-string type tag', { v: 1, root: { type: 5 } }],
     [

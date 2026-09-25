@@ -18,11 +18,11 @@ import {
   UnitNode,
 } from './nodes.js';
 
-export function toJSON(root: MathNode): Envelope {
-  return { v: 1, root: root.toJSON() };
+export function toJSON(root: MathNode | null): Envelope {
+  return { v: 1, root: root === null ? null : root.toJSON() };
 }
 
-export function fromJSON(envelope: unknown): MathNode {
+export function fromJSON(envelope: unknown): MathNode | null {
   if (envelope === null || typeof envelope !== 'object' || Array.isArray(envelope)) {
     throw new Error('fromJSON: envelope must be an object');
   }
@@ -31,7 +31,7 @@ export function fromJSON(envelope: unknown): MathNode {
     throw new Error(`fromJSON: unsupported envelope version ${JSON.stringify(v) ?? 'undefined'} (expected 1)`);
   }
   if (root === null || root === undefined) {
-    throw new Error('fromJSON: envelope root is required');
+    return null; // empty formula: empty-slot rule extended to the root
   }
   return parseNode(root, 'root') as MathNode;
 }
