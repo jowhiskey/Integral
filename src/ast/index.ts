@@ -4,3 +4,4 @@ export * from './evaluable.js';
 export * from './json.js';
 export * from './nodes.js';
 export * from './serialize.js';
+export * from './vocabulary.js';
