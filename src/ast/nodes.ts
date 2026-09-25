@@ -27,7 +27,7 @@ export const OPERATOR_SYMBOLS: Readonly<Record<string, InstanceType<typeof MathO
   mod: 'mod',
 };
 
-const UNARY_OPS = new Set(['unaryMinus', 'unaryPlus']);
+export const UNARY_OPS = new Set(['unaryMinus', 'unaryPlus']);
 
 const incomplete = (what: string): Error => new Error(`toMathNode: incomplete tree (${what})`);
 
