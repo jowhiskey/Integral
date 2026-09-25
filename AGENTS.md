@@ -37,3 +37,7 @@ Current phase: **AST core implementation only** (node types, serialization, math
 - ADDED: Clean-repo bootstrap. AGENTS.md + `docs/context/editor-spec.md` (full AST spec v1: node set, structural invariants, versioned JSON envelope, editing-layer principles, vocabulary interface, implementation phasing).
   Reason: fresh start for implementation; spec is the frozen contract the first commits implement against.
   Impact: current scope is the AST core only; `toMathML()` is a throwing stub; editor layer deferred.
+### 2026-09-25 — [architecture]
+- ADDED: AST core implemented (10 node classes, toJSON/fromJSON with envelope v1 + invariant validation, toMathNode fold, isEvaluable, vocabulary types + defaults, toMathML stub; 66 tests).
+  Reason: spec v1 frozen, first implementation slice.
+  Impact: JSON contract now has a reference implementation; UnitNode projection frozen (implicit-multiply OperatorNode); pnpm pinned to 10.34.5 via packageManager (corepack 0.31 incompatible with pnpm 12).
