@@ -1,0 +1,28 @@
+{
+  "name": "integral",
+  "version": "0.1.0",
+  "description": "Isomorphic WYSIWYG math editor package: direct AST manipulation, MathML Core rendering, mathjs conversion.",
+  "type": "module",
+  "exports": {
+    "./ast": {
+      "types": "./dist/ast/index.d.ts",
+      "import": "./dist/ast/index.js"
+    },
+    "./editor": {
+      "types": "./dist/editor/index.d.ts",
+      "import": "./dist/editor/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "packageManager": "pnpm@10.34.5",
+  "dependencies": {
+    "mathjs": "^15.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
+  }
+}
