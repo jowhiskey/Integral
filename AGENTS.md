@@ -29,6 +29,11 @@ docs/context/   # editor-spec.md — the frozen AST spec (read before touching n
 
 ## Changelog
 
+### 2026-09-30 — [ast]
+- CHANGED: `fromJSON` validates **non-empty** `UnitNode.unit` strings against the vocabulary unit set (default = the prefix-aware derived list, checked via a per-call `Set` — no second table) and rejects non-units through the existing validation-error mechanism. New **additive optional `vocabulary` parameter** on `fromJSON`: hosts with custom units validate against their own list; omitted → default static vocabulary. Empty `""` stays legal — documented incomplete-state exception, pinned by a test. Compound unit strings (`m/s`) now reject.
+  Reason: `unit.unit` was shape-validated only — any string passed the parse boundary, and a consumer that resolves a shared name namespace (names vs. unit symbols) silently misread non-unit strings as units: wrong numbers, no error anywhere.
+  Impact: tests 68 → 82 (rejections incl. nested args + error-message shape, base/prefixed accepts with `toJSON` round-trip, `""` exception pinned, custom-vocabulary accept-with/reject-without); all pre-existing fixtures unchanged (20 roundtrip incl. empty-unit case, 21 rejection cases); editor-spec.md §Encoding clarifications updated.
+
 ### 2026-09-28 — [architecture]
 - CHANGED: `defaultStaticVocabulary.units` is now derived prefix-aware: base `math.Unit.UNITS` keys plus per-unit prefix×base candidates, kept only when `Unit.isValuelessUnit()` accepts them. 251 → 2770 entries; interface shape untouched (additive). Tests: prefixed spot-checks, isValuelessUnit on every entry, size-sanity band (4×–30× of UNITS key count).
   Reason: exact `UNITS` keys miss prefixed forms (`km`, `cm`, `mm`, `kg`, `kN`, `MPa`) — hosts filtering symbols by membership against the list misclassified prefixed unit symbols as unknown references.

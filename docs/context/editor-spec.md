@@ -51,6 +51,7 @@ Deliberately **not** in v1: AssignmentNode (names live on the host's block conce
 - **Group flat-row rejection:** in v1 the only representable invalid shape is `child` as an array — `fromJSON` rejects arrays (child must be a single node object). Deeper structural prevention is the editing engine's job.
 - **SubscriptNode fields:** `base` and `sub` are both strings in v1 (label mode). Index mode (structured scripts) = additive change with version bump if ever needed.
 - **Empty-string semantics:** empty `sym.name`, `sub.base`/`sub.sub`, `unit.unit`, `fn.name` are legal (incomplete) JSON → isEvaluable false, toMathNode throws.
+- **Unit-string validation (added 2026-09-30):** **non-empty** `unit.unit` must be a unit in the vocabulary's unit set — `fromJSON` rejects it otherwise, through the existing validation-error mechanism (same error shape as other invalid payloads). `fromJSON` takes an **optional vocabulary argument** (defaults to the default static vocabulary) so hosts with custom units validate against their own list; omission → default list applies. Empty `unit.unit` (`""`) is the explicit, deliberate exception — the legal incomplete state above, pinned by a test. Compound unit strings (`m/s`) reject — they cannot survive the frozen `SymbolNode` projection anyway.
 - **`group.parens` is required and must be `'always'`.**
 - **`isEvaluable` requires `op` to be in the known fn→symbol map** (add, subtract, multiply, divide, unaryMinus, unaryPlus, pow, mod) — unknown ops make a tree non-evaluable, rejected at conversion.
 
@@ -103,9 +104,9 @@ Not Day-1 scope, but decided so the AST never needs redesign:
 - **Structural nodes self-group; GroupNode is only for user-expressed parens.** FractionNode/PowerNode/RootNode slots are unambiguous — wrapping their contents in GroupNode would be redundant. `auto` groups are a *rendering* concern: they must never be written back into the stored tree.
 - **No separate "semantic" format.** The AST already *is* the semantic structure (near-isomorphic to mathjs's parse tree); a second format would be a second source of truth and break op-log replay (ops address the AST by path). Caret/selection = per-user session state, not document state; derived data (rendering hints, cached MathML) stays out. Schema evolution = storage migration problem: budget a `migrate(json) → json` step in `fromJSON` from commit one.
 
-## Implementation status (2026-09-28)
+## Implementation status (2026-09-30)
 
-AST core implemented: 10 node classes, toJSON/fromJSON + invariant validation, toMathNode fold, isEvaluable, vocabulary types + **prefix-aware** default static vocabulary (`deriveDefaultUnits()`, 2770 unit entries), toMathML throwing stub. 68 tests passing, incl. oracle fixtures evaluating identically to `math.parse(...).evaluate()` (hand-written literals in tests until editor output exists). pnpm pinned `10.34.5` via `packageManager` field.
+AST core implemented: 10 node classes, toJSON/fromJSON + invariant validation (incl. **non-empty unit-string validation against the vocabulary**, 2026-09-30 — see §Encoding clarifications), toMathNode fold, isEvaluable, vocabulary types + **prefix-aware** default static vocabulary (`deriveDefaultUnits()`, 2770 unit entries), toMathML throwing stub. 82 tests passing, incl. oracle fixtures evaluating identically to `math.parse(...).evaluate()` (hand-written literals in tests until editor output exists). pnpm pinned `10.34.5` via `packageManager` field.
 
 Pre-npm note: hosts consuming Integral via a package `link:` each bundle their own mathjs copy alongside Integral's — unit instances are not `instanceof`-compatible across that boundary; hosts should duck-type units. Bundle-time dedup is a packaging concern for the npm switch.
 
