@@ -14,6 +14,7 @@ import {
   fromJSON,
   isEvaluable,
   toJSON,
+  type StaticVocabulary,
 } from '../src/ast/index.js';
 
 describe('roundtrip: fromJSON(toJSON(ast))', () => {
@@ -118,5 +119,53 @@ describe('fromJSON rejects invalid trees', () => {
     ['flat row nested in op args', { v: 1, root: { type: 'op', op: 'add', args: [[{ type: 'num', value: 1 }]] } }],
   ])('rejects %s', (_label, bad) => {
     expect(() => fromJSON(bad)).toThrow();
+  });
+});
+
+describe('fromJSON unit-field validation (vocabulary membership)', () => {
+  const unitEnvelope = (unit: string) => ({
+    v: 1,
+    root: { type: 'unit', value: { type: 'num', value: 50 }, unit },
+  });
+
+  it.each([
+    ['variable name as unit', 'width'],
+    ['arbitrary identifier', 'not_a_unit'],
+    ['camelCase identifier', 'someIdentifier'],
+    ['compound unit string', 'm/s'],
+    ['whitespace string', ' '],
+  ])('rejects non-unit string %s', (_label, unit) => {
+    expect(() => fromJSON(unitEnvelope(unit))).toThrow(/not a unit in the vocabulary/);
+  });
+
+  it('rejects a non-unit string nested deep in the tree', () => {
+    const bad = {
+      v: 1,
+      root: {
+        type: 'op',
+        op: 'add',
+        args: [{ type: 'num', value: 1 }, { type: 'unit', value: { type: 'num', value: 2 }, unit: 'width' }],
+      },
+    };
+    expect(() => fromJSON(bad)).toThrow(/not a unit in the vocabulary/);
+  });
+
+  it.each(['m', 'kg', 's', 'km', 'cm', 'mm'])('accepts real unit %s (base and prefixed spot checks)', (unit) => {
+    const ast = fromJSON(unitEnvelope(unit));
+    expect(ast).toEqual(new UnitNode(new NumberNode(50), unit));
+    expect(toJSON(ast)).toEqual(unitEnvelope(unit));
+  });
+
+  it('keeps the empty unit string legal (incomplete-tree rule)', () => {
+    const ast = fromJSON(unitEnvelope(''));
+    expect(ast).toEqual(new UnitNode(new NumberNode(50), ''));
+    expect(isEvaluable(ast)).toBe(false);
+  });
+
+  it('accepts custom-vocabulary units when a vocabulary is passed, rejects them otherwise', () => {
+    const custom: StaticVocabulary = { constants: [], units: ['widget'], functions: [] };
+    const ast = fromJSON(unitEnvelope('widget'), custom);
+    expect(ast).toEqual(new UnitNode(new NumberNode(50), 'widget'));
+    expect(() => fromJSON(unitEnvelope('widget'))).toThrow(/not a unit in the vocabulary/);
   });
 });
