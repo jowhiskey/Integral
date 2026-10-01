@@ -73,3 +73,29 @@ describe('isEvaluable — all slots filled, no dangling operators', () => {
     }
   });
 });
+
+describe('isEvaluable scope is structural (documented boundary)', () => {
+  it.each([
+    ['sqrt with zero args', 'sqrt', []],
+    ['max with zero args', 'max', []],
+  ])('%s passes the structural gate but throws at evaluation', (_label, name, args) => {
+    // Pinned deliberately (adapted from the audit, which asserted the gate
+    // must return false): the gate is structural by definition — function
+    // existence and arity are runtime concerns of the evaluating scope
+    // (host-defined functions can legitimately be zero-arg or unknown to
+    // this layer), so zero-arg calls are evaluable-but-throwing. See the
+    // scope documentation in evaluable.ts.
+    const ast = new FunctionNode(name, args);
+    expect(isEvaluable(ast)).toBe(true);
+    expect(() => ast.toMathNode().evaluate()).toThrow();
+  });
+
+  it.each([
+    ['an undefined function name', 'definitelyNotAFunction'],
+    ['a unit string used as a function name', 'mm'],
+  ])('fn with %s passes the structural gate but throws at evaluation', (_label, name) => {
+    const ast = new FunctionNode(name, [new NumberNode(1)]);
+    expect(isEvaluable(ast)).toBe(true);
+    expect(() => ast.toMathNode().evaluate()).toThrow();
+  });
+});
