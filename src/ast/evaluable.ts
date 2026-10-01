@@ -1,5 +1,15 @@
 // Evaluation gate: a pure tree walk checking that all slots are filled and no
 // operator is dangling. Incomplete trees are legal JSON but not evaluable.
+//
+// Scope (structural, by definition): isEvaluable() answers "is this tree
+// structurally complete — every slot filled, every operator known and used
+// with a legal arity?" — nothing more. It is NOT a guarantee that evaluation
+// succeeds: a FunctionNode with zero args or an unknown function name passes
+// this gate and then throws at evaluation, because function existence and
+// arity are runtime concerns of the evaluating scope (host-defined functions
+// can legitimately be zero-arg or unknown to this layer). Hosts that need a
+// semantic guarantee must attempt the evaluation or check names against their
+// own scope. This boundary is deliberate and pinned by tests.
 
 import {
   FractionNode,
