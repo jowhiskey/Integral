@@ -18,6 +18,7 @@ docs/context/   # editor-spec.md — the frozen AST spec (read before touching n
 5. **No consuming-project references** in code, docs, commit messages, or rationale. Negative references count as references.
 6. **Isomorphic**: no DOM APIs in `src/ast` — it must run in Node and the browser. DOM/MathML lives in the editor layer.
 7. **Direct AST→mathjs fold** (`toMathNode()`), never strings — no `AST → string → math.parse` anywhere.
+8. **Minimal code, maximal reuse.** Every added line of code is a potential future bug — before writing a new function/method, look for an existing pattern to reuse or extend; prefer simplifying and recycling over near-duplicates; delete code your change makes redundant.
 
 ## CI
 `pnpm test` on push; keep it green on every PR.
@@ -28,6 +29,11 @@ docs/context/   # editor-spec.md — the frozen AST spec (read before touching n
 | Anything AST-related (nodes, JSON, vocabulary, walker) | `docs/context/editor-spec.md` |
 
 ## Changelog
+
+### 2026-10-03 — [process]
+- ADDED: Hard rule 8 — minimal code, maximal reuse. Every added line of code is a potential future bug: before writing a new function/method, look for an existing pattern to reuse or extend; prefer simplifying and recycling over near-duplicates; delete code your change makes redundant.
+  Reason: keep the codebase as small as possible — recycle patterns instead of inventing near-identical methods; owner directive after rapid recent growth.
+  Impact: agent guidance only; no code change.
 
 ### 2026-10-01 — [ast] (fix session: adversarial-audit fixes + red-test port)
 - CHANGED: implemented the seven decided adversarial-audit spec changes (owner-ratified picks). `fromJSON` now: rejects non-finite `num` values (NaN/±Infinity — `JSON.stringify` collapses them to `null`, so a legitimate envelope became contract-invalid and unloadable after one persistence cycle) and normalizes `-0` to `+0` (sign unrepresentable in JSON; normalization is a persistence fixed point); enforces `AST_LIMITS = { maxDepth: 100, maxNodes: 500 }` via an iterative pre-pass with typed `ValidationLimitError` (a deep envelope used to die as an uncontrolled stack-overflow `RangeError`; 1M-deep now pinned safe; args longer than the whole node budget rejected eagerly); requires identifier-shaped, `_`-free non-empty `sub.base`/`sub.sub` (the `base_sub` SymbolNode projection was non-injective — distinct trees forged one name, and hostile labels display-reparsed as different trees); rejects >2-arg `op pow` chains (n-ary encodes no association while mathjs parses `^` right-associative — 4096 vs ≈2.4e24 divergence) and enforces unary op arity (exactly one arg — gap closure demanded by the audit reds, ratified). `isEvaluable()` scope documented as structural, never semantic (zero-arg/unknown-name functions are evaluable-but-throwing — function existence/arity is the evaluating scope's runtime concern; host-defined zero-arg functions are legal). Custom-vocabulary contract made explicit: omitted `units` = no units (was a silent 2770-entry default fallback — hosts must pass their units explicitly), entries format-guarded (identifier shape, not parser-shadowed), unknown well-formed strings accepted on host authority (indistinguishable from host `createUnit` units — mathjs instances aren't shared pre-npm). `deriveDefaultUnits()` drops parser-shadowed names (`math[name] !== undefined`): exactly `chain`/`min`/`sec` drop, 2770 → 2767; the exhaustive sweep passes with no skip list. New additive exports: `AST_LIMITS`, `ValidationError`, `ValidationLimitError`, `isUnitSymbolShape`, `isParserShadowed` (hosts building trees from text should throw the same typed limit errors at their own seams; the enforced boundary is `fromJSON` — TS-constructor-built trees bypass the budgets).
