@@ -19,6 +19,7 @@ docs/context/   # editor-spec.md — the frozen AST spec (read before touching n
 6. **Isomorphic**: no DOM APIs in `src/ast` — it must run in Node and the browser. DOM/MathML lives in the editor layer.
 7. **Direct AST→mathjs fold** (`toMathNode()`), never strings — no `AST → string → math.parse` anywhere.
 8. **Minimal code, maximal reuse.** Every added line of code is a potential future bug — before writing a new function/method, look for an existing pattern to reuse or extend; prefer simplifying and recycling over near-duplicates; delete code your change makes redundant.
+9. **Retry budget — stop instead of looping.** No verification step (test suite, build, probe) gets more than two unchanged attempts: one rerun may rule out flakiness; a second identical failure signature is a STOP — never a third identical rerun. The same cap applies to fixes: two failed fix attempts on the same error with no progress = stop and report (in-session stop-and-ask, or the report's friction section). On the stop, report what failed, the failure signature, what was tried, and a diagnosis hypothesis — for mass-timeout / zero-assertion patterns, suspect the environment first (machine lock/throttle, orphaned processes, killed runs). Retries without new information burn tokens and context and prove nothing; stopping to report is always cheaper than looping.
 
 ## CI
 No CI yet (no `.github/workflows`) — "green" means the local suite (`pnpm test` + `pnpm build`/tsc), agent-verified; host applications exercise Integral through their own CI.
