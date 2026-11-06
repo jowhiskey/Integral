@@ -32,6 +32,7 @@ import {
   type SlotName,
 } from './caret.js';
 import { EngineError } from './errors.js';
+import { resolveMove, type NavDir } from './nav.js';
 
 /** Where an op acts — always an explicit path, never a policy decision. */
 export type Position =
@@ -60,9 +61,18 @@ export interface MoveCaretOp {
   readonly to: Caret;
 }
 
-/** The session-1 op vocabulary — plain data values (serializable, so op logs
- *  can be persisted, replayed, and property-tested without a DOM). */
-export type Op = InsertOp | DeleteAtOp | MoveCaretOp;
+/** Relative caret movement in a direction, resolved through the nav-profile
+ *  registry. No target (document edge, empty formula, direction into
+ *  nothing) is a defined no-op: the state is returned unchanged. Pure caret
+ *  movement never enters the undo log. */
+export interface MoveOp {
+  readonly op: 'move';
+  readonly dir: NavDir;
+}
+
+/** The op vocabulary — plain data values (serializable, so op logs can be
+ *  persisted, replayed, and property-tested without a DOM). */
+export type Op = InsertOp | DeleteAtOp | MoveCaretOp | MoveOp;
 
 /** One applied op. Undo snapshots the full tree + caret state before the op —
  *  mechanics chosen over inverse ops: byte-exact restoration by construction
@@ -128,9 +138,35 @@ export function applyOp(state: EditingState, op: Op): EditingState {
       return applyMutating(state, op, deleteAtFrom);
     case 'moveCaret':
       return applyMoveCaret(state, op);
+    case 'move':
+      return applyMove(state, op);
     default:
       throw new EngineError('unknown-op', `applyOp: unknown op ${JSON.stringify((op as { op: unknown }).op)}`);
   }
+}
+
+const NAV_DIRS: readonly NavDir[] = ['left', 'right', 'up', 'down'];
+
+function sameCaret(a: Caret, b: Caret): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** Relative movement: resolved against the nav profiles; the tree is never
+ *  touched, the log is never appended. Unresolvable/uninteresting targets
+ *  are no-ops — the exact state object comes back. */
+function applyMove(state: EditingState, op: MoveOp): EditingState {
+  if (!NAV_DIRS.includes(op.dir)) {
+    throw new EngineError('unknown-op', `move: unknown direction ${JSON.stringify(op.dir)}`);
+  }
+  if (state.caret.kind === 'empty') return state;
+  const env = toJSON(state.root);
+  const target = resolveMove(env, state.caret, op.dir);
+  if (target === null || sameCaret(target, state.caret)) return state;
+  if (!caretResolvesIn(env, target)) {
+    // unreachable: the resolver only addresses real positions
+    throw new Error('engine invariant: movement produced an unresolvable caret');
+  }
+  return { root: state.root, caret: target, log: state.log, vocabulary: state.vocabulary };
 }
 
 /** Walk back exactly one op: restore the tree and caret snapshotted before it.

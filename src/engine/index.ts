@@ -1,6 +1,7 @@
-// Editing engine entry point: ops as values, the reducer, undo, and the
-// caret type — runtime-agnostic (no DOM, no framework), like the AST subpath.
-// The editor/DOM layer and navigation profiles build on top of this.
+// Editing engine entry point: ops as values, the reducer, undo, the caret
+// type, and nav profiles — runtime-agnostic (no DOM, no framework), like
+// the AST subpath.
 export * from './caret.js';
 export * from './errors.js';
+export * from './nav.js';
 export * from './ops.js';
