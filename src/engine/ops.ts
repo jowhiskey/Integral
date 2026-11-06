@@ -27,18 +27,32 @@ import {
   rowArgs,
   setSlot,
   slotValue,
+  slotsOf,
   type Caret,
   type Path,
   type SlotName,
 } from './caret.js';
 import { EngineError } from './errors.js';
-import { resolveMove, type NavDir } from './nav.js';
+import { NAV_PROFILES, resolveMove, type NavDir } from './nav.js';
 
-/** Where an op acts — always an explicit path, never a policy decision. */
+/** Where an op acts — always an explicit path, never a policy decision.
+ *
+ *  Arc-session-3 additions (insert-only placements; deleteAt rejects them):
+ *  `fill` targets a NULL args cell (the operand-expected position a typed
+ *  operator leaves behind — filling replaces the null in place, one op);
+ *  `replaceRoot` / `replaceSlot` / `replaceCell` target an OCCUPIED root /
+ *  fixed slot / args cell and swap its content for the op's node subtree
+ *  (one op = one log entry; the wrapper carries its own null cells inside,
+ *  fromJSON stays the validation gate; strict occupancy is what catches
+ *  policy bugs — an empty target is an error, never a lenient fill). */
 export type Position =
   | { readonly at: 'root' }
   | { readonly at: 'slot'; readonly path: Path; readonly slot: SlotName }
-  | { readonly at: 'row'; readonly path: Path; readonly index: number };
+  | { readonly at: 'row'; readonly path: Path; readonly index: number }
+  | { readonly at: 'fill'; readonly path: Path; readonly index: number }
+  | { readonly at: 'replaceRoot' }
+  | { readonly at: 'replaceSlot'; readonly path: Path; readonly slot: SlotName }
+  | { readonly at: 'replaceCell'; readonly path: Path; readonly index: number };
 
 /** Place the given node at a position: fill the empty root slot, fill an
  *  empty fixed slot, or splice into an args row at an index. */
@@ -250,6 +264,45 @@ function insertInto(env: Envelope, op: InsertOp): void {
       args.splice(at.index, 0, op.node);
       break;
     }
+    case 'fill': {
+      const parent = requireRowParent(env, at.path);
+      const args = rowArgs(parent);
+      if (at.index < 0 || at.index >= args.length) {
+        throw new EngineError('index-out-of-range', `fill: cell index ${at.index} out of range [0, ${args.length})`);
+      }
+      if (args[at.index] !== null) {
+        throw new EngineError('slot-occupied', `fill: args[${at.index}] is a node, not an empty cell`);
+      }
+      args[at.index] = op.node;
+      break;
+    }
+    case 'replaceRoot': {
+      if (env.root === null) {
+        throw new EngineError('slot-empty', 'replace at root: the formula is empty');
+      }
+      env.root = op.node;
+      break;
+    }
+    case 'replaceSlot': {
+      const parent = requireSlotParent(env, at.path, at.slot);
+      if (slotValue(parent, at.slot) === null) {
+        throw new EngineError('slot-empty', `replace: slot '${at.slot}' at [${at.path.join(',')}] is empty`);
+      }
+      setSlot(parent, at.slot, op.node);
+      break;
+    }
+    case 'replaceCell': {
+      const parent = requireRowParent(env, at.path);
+      const args = rowArgs(parent);
+      if (at.index < 0 || at.index >= args.length) {
+        throw new EngineError('index-out-of-range', `replace: cell index ${at.index} out of range [0, ${args.length})`);
+      }
+      if (args[at.index] === null) {
+        throw new EngineError('slot-empty', `replace: args[${at.index}] is an empty cell, not a node`);
+      }
+      args[at.index] = op.node;
+      break;
+    }
   }
 }
 
@@ -283,6 +336,13 @@ function deleteAtFrom(env: Envelope, op: DeleteAtOp): void {
       args.splice(at.index, 1);
       break;
     }
+    default:
+      // 'fill' / 'replace*' are insert-only placements (arc session 3);
+      // untouched deleteAt semantics are pinned by the session-1 suite.
+      throw new EngineError(
+        'unknown-op',
+        `deleteAt: position '${(at as { at: string }).at}' is insert-only`,
+      );
   }
 }
 
@@ -317,15 +377,69 @@ function enteredThrough(caret: Caret, path: Path, slot: SlotName): boolean {
   );
 }
 
+/** The enteredThrough analog for an args cell: the caret's address passes
+ *  strictly deeper than the row, entering through this index. A row caret
+ *  ON the row itself does not enter any cell — seam indices are not owned
+ *  by the cells they precede, so they survive replaces untouched. */
+function enteredThroughCell(caret: Caret, path: Path, index: number): boolean {
+  const entry = entryPath(caret);
+  return (
+    entry.length > path.length &&
+    entry.slice(0, path.length).every((step, i) => step === path[i]) &&
+    entry[path.length] === index
+  );
+}
+
+/** The first empty child of a node, shallow: args cells in reading order
+ *  first, then fixed slots in flow order (nav-profile flow, declaration
+ *  order where a type declares none). The natural-continue position — the
+ *  operand a freshly attached structure is waiting for. */
+export function firstEmpty(node: NodeJson): { index: number } | { slot: SlotName } | null {
+  if (isRowNode(node)) {
+    const args = rowArgs(node);
+    const index = args.findIndex((cell) => cell === null);
+    return index === -1 ? null : { index };
+  }
+  const flow = NAV_PROFILES[node.type]?.flow ?? slotsOf(node);
+  for (const slot of flow) {
+    if (slotValue(node, slot) === null) return { slot };
+  }
+  return null;
+}
+
+/** Replace's relocation: the caret dives to the inserted subtree's first
+ *  empty child (natural continue); a subtree with no empty cell lands the
+ *  caret on the inserted node itself. */
+function diveCaret(inserted: NodeJson, path: Path): Caret {
+  const empty = firstEmpty(inserted);
+  if (empty === null) return { kind: 'node', path };
+  return 'slot' in empty
+    ? { kind: 'slot', path, slot: empty.slot }
+    : { kind: 'row', path, index: empty.index };
+}
+
 /**
  * After an op the caret is always in a defined state. Rules:
  * - insert at root          → the new node (root path).
- * - insert filling a slot   → a caret that was IN that slot moves onto the
- *                             inserted node; every other caret survives where
- *                             it still resolves.
+ * - insert filling a slot   → a caret that was IN that slot, or sitting ON
+ *                             the slot's owner, moves onto the inserted node
+ *                             (the natural-continue hop that pairs with the
+ *                             typewriter's dive: typing at a node with a
+ *                             pending slot continues inside it); every other
+ *                             caret survives where it still resolves.
  * - row splice              → coordinates in the spliced row's address space
  *                             shift with the splice (adjustRowCaret); nothing
  *                             else moves.
+ * - fill (null args cell)   → the caret that was in the filled cell, or on
+ *                             the row's owner, moves onto the new node
+ *                             (owner hop mirrors the slot rule); every
+ *                             other caret survives.
+ * - replace (occupied root/slot/cell) → a caret whose address enters the
+ *                             replaced content dives to the inserted
+ *                             subtree's first empty child (natural continue),
+ *                             or onto the inserted node when it has none.
+ *                             Carets outside the replaced content survive
+ *                             unchanged — a replace never shifts coordinates.
  * - deleteAt at root        → the empty-formula caret.
  * - deleteAt clearing a slot → the now-empty slot; only a caret whose address
  *                             was inside the removed subtree falls back to it,
@@ -345,7 +459,8 @@ function relocateCaret(caretBefore: Caret, op: InsertOp | DeleteAtOp, env: Envel
     case 'slot': {
       if (op.op === 'insert') {
         const wasThere =
-          caretBefore.kind === 'slot' && samePath(caretBefore.path, at.path) && caretBefore.slot === at.slot;
+          (caretBefore.kind === 'slot' && samePath(caretBefore.path, at.path) && caretBefore.slot === at.slot) ||
+          (caretBefore.kind === 'node' && samePath(caretBefore.path, at.path));
         return wasThere ? { kind: 'node', path: [...at.path, at.slot] } : caretBefore;
       }
       return enteredThrough(caretBefore, at.path, at.slot)
@@ -354,5 +469,35 @@ function relocateCaret(caretBefore: Caret, op: InsertOp | DeleteAtOp, env: Envel
     }
     case 'row':
       return adjustRowCaret(caretBefore, at.path, at.index, op.op === 'insert' ? 1 : -1);
+    case 'fill':
+      if (op.op !== 'insert') {
+        throw new EngineError('unknown-op', `deleteAt: position '${at.at}' is insert-only`);
+      }
+      return (
+        (caretBefore.kind === 'row' &&
+          samePath(caretBefore.path, at.path) &&
+          caretBefore.index === at.index) ||
+          (caretBefore.kind === 'node' && samePath(caretBefore.path, at.path))
+      ) ? { kind: 'node', path: [...at.path, at.index] } : caretBefore;
+    case 'replaceRoot': {
+      if (op.op !== 'insert') {
+        throw new EngineError('unknown-op', `deleteAt: position '${at.at}' is insert-only`);
+      }
+      return diveCaret(op.node, []);
+    }
+    case 'replaceSlot':
+      if (op.op !== 'insert') {
+        throw new EngineError('unknown-op', `deleteAt: position '${at.at}' is insert-only`);
+      }
+      return enteredThrough(caretBefore, at.path, at.slot)
+        ? diveCaret(op.node, [...at.path, at.slot])
+        : caretBefore;
+    case 'replaceCell':
+      if (op.op !== 'insert') {
+        throw new EngineError('unknown-op', `deleteAt: position '${at.at}' is insert-only`);
+      }
+      return enteredThroughCell(caretBefore, at.path, at.index)
+        ? diveCaret(op.node, [...at.path, at.index])
+        : caretBefore;
   }
 }

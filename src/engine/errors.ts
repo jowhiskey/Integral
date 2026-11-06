@@ -11,7 +11,8 @@ export type EngineErrorCode =
   | 'slot-occupied'
   | 'slot-empty'
   | 'index-out-of-range'
-  | 'caret-invalid';
+  | 'caret-invalid'
+  | 'not-a-typing-point';
 
 /** An op could not be applied to the state it was given. The state is
  *  unchanged and nothing was logged. */
