@@ -235,6 +235,36 @@ describe('toMathML: incomplete trees render, never throw (display, not evaluatio
         { v: 1, root: { type: 'frac' } },
         M`<math><mfrac><mi>□</mi><mi>□</mi></mfrac></math>`,
       ],
+      [
+        'unit denominator wraps in a single mrow (x/50mm)',
+        { v: 1, root: { type: 'frac', num: { type: 'sym', name: 'x' }, den: { type: 'unit', value: { type: 'num', value: 50 }, unit: 'mm' } } },
+        M`<math><mfrac><mi>x</mi><mrow><mn>50</mn><mspace width="0.1667em"/><mi mathvariant="normal">mm</mi></mrow></mfrac></math>`,
+      ],
+      [
+        'null numerator next to a unit denominator',
+        { v: 1, root: { type: 'frac', num: null, den: { type: 'unit', value: { type: 'num', value: 50 }, unit: 'mm' } } },
+        M`<math><mfrac><mi>□</mi><mrow><mn>50</mn><mspace width="0.1667em"/><mi mathvariant="normal">mm</mi></mrow></mfrac></math>`,
+      ],
+      [
+        'unit with a null value in a pow-op exponent slot',
+        { v: 1, root: { type: 'op', op: 'pow', args: [{ type: 'sym', name: 'x' }, { type: 'unit', value: null, unit: 'mm' }] } },
+        M`<math><msup><mi>x</mi><mrow><mi>□</mi><mspace width="0.1667em"/><mi mathvariant="normal">mm</mi></mrow></msup></math>`,
+      ],
+      [
+        'empty-string unit in a fraction numerator',
+        { v: 1, root: { type: 'frac', num: { type: 'unit', value: { type: 'num', value: 50 }, unit: '' }, den: { type: 'sym', name: 'y' } } },
+        M`<math><mfrac><mrow><mn>50</mn><mi mathvariant="normal"></mi></mrow><mi>y</mi></mfrac></math>`,
+      ],
+      [
+        'unit radicand in a square root (msqrt slot)',
+        { v: 1, root: { type: 'root', radicand: { type: 'unit', value: { type: 'num', value: 50 }, unit: 'mm' } } },
+        M`<math><msqrt><mrow><mn>50</mn><mspace width="0.1667em"/><mi mathvariant="normal">mm</mi></mrow></msqrt></math>`,
+      ],
+      [
+        'unit index in an nth root (mroot slot)',
+        { v: 1, root: { type: 'root', radicand: { type: 'num', value: 16 }, index: { type: 'unit', value: { type: 'num', value: 50 }, unit: 'mm' } } },
+        M`<math><mroot><mn>16</mn><mrow><mn>50</mn><mspace width="0.1667em"/><mi mathvariant="normal">mm</mi></mrow></mroot></math>`,
+      ],
     ];
     for (const [label, envelope, expected] of cases) {
       const ast = fromJSON(envelope);
@@ -338,5 +368,124 @@ describe('toMathML: text escaping (host-provided strings are untrusted)', () => 
     const mathml = ast.toMathML();
     expect(mathml).toBe(M`<math><mi>a&lt;b</mi></math>`);
     expect((mathml.match(/<mi>/g) ?? []).length).toBe(1); // the escaped '<' opens no tag
+  });
+});
+
+describe('toMathML: fixed-arity slots wrap multi-element fragments in a single mrow', () => {
+  // Test-side scanners: split a fragment into its top-level elements, and take
+  // the inner markup of the outermost <tag>…</tag>.
+  const topLevel = (fragment: string): string[] => {
+    const elements: string[] = [];
+    let depth = 0;
+    let start = -1;
+    let i = 0;
+    while (i < fragment.length) {
+      if (fragment[i] !== '<') {
+        i = fragment.indexOf('<', i);
+        if (i === -1) break;
+        continue;
+      }
+      const close = fragment.indexOf('>', i);
+      const tag = fragment.slice(i, close + 1);
+      if (tag.startsWith('</')) {
+        depth -= 1;
+        if (depth === 0) elements.push(fragment.slice(start, close + 1));
+      } else if (!tag.endsWith('/>')) {
+        if (depth === 0) start = i;
+        depth += 1;
+      } else if (depth === 0) {
+        elements.push(tag);
+      }
+      i = close + 1;
+    }
+    return elements;
+  };
+  const innerOf = (mathml: string, tag: string): string => {
+    const open = `<${tag}>`;
+    return mathml.slice(mathml.indexOf(open) + open.length, mathml.lastIndexOf(`</${tag}>`));
+  };
+  const envelopeStripped = (mathml: string): string => mathml.slice('<math>'.length, -'</math>'.length);
+  // The loose (unwrapped) row of a multi-element fragment: strip the envelope's
+  // own mrow. Single-element nodes are never loose — their element is the row.
+  const looseOf = (node: MathNode): string => {
+    const mathml = node.toMathML();
+    return mathml.startsWith('<math><mrow>') && mathml.endsWith('</mrow></math>')
+      ? mathml.slice('<math><mrow>'.length, -'</mrow></math>'.length)
+      : envelopeStripped(mathml);
+  };
+
+  const unit50mm = (): UnitNode => new UnitNode(new NumberNode(50), 'mm');
+
+  it('host repro x/50mm: <mfrac> holds exactly two children and the denominator slot is a single <mrow> (byte-pinned)', () => {
+    const ast = new FractionNode(new SymbolNode('x'), unit50mm());
+    expect(ast.toMathML()).toBe(
+      M`<math><mfrac><mi>x</mi><mrow><mn>50</mn><mspace width="0.1667em"/><mi mathvariant="normal">mm</mi></mrow></mfrac></math>`,
+    );
+  });
+
+  it('the same tree through fromJSON renders byte-identical', () => {
+    const ast = fromJSON({
+      v: 1,
+      root: { type: 'frac', num: { type: 'sym', name: 'x' }, den: { type: 'unit', value: { type: 'num', value: 50 }, unit: 'mm' } },
+    });
+    expect(toMathML(ast)).toBe(
+      M`<math><mfrac><mi>x</mi><mrow><mn>50</mn><mspace width="0.1667em"/><mi mathvariant="normal">mm</mi></mrow></mfrac></math>`,
+    );
+  });
+
+  // Fragment kinds × fixed-arity slots. UnitNode is the only multi-element
+  // producer (value + mspace + unit label as loose siblings); n-ary op rows,
+  // function rows, and group fence rows carry their own mrow and must NOT be
+  // double-wrapped (single-element controls below).
+  const fragments: [string, MathNode, boolean][] = [
+    ['unit 50 mm (value + mspace + label)', unit50mm(), true],
+    ['unit with null value (placeholder + mspace + label)', new UnitNode(null, 'mm'), true],
+    ['unit with empty unit string (value + empty label)', new UnitNode(new NumberNode(50), ''), true],
+    ['unit with a group value (nested row stays intact)', new UnitNode(new GroupNode(new OperatorNode('add', [new NumberNode(5), new NumberNode(3)])), 'mm'), true],
+    ['number', new NumberNode(50), false],
+    ['symbol', new SymbolNode('x'), false],
+    ['n-ary op row', new OperatorNode('add', [new SymbolNode('a'), new SymbolNode('b'), new SymbolNode('c')]), false],
+    ['unary op row', new OperatorNode('unaryMinus', [new NumberNode(5)]), false],
+    ['function row', new FunctionNode('max', [new SymbolNode('a'), new NumberNode(2)]), false],
+    ['group fence row', new GroupNode(new OperatorNode('add', [new NumberNode(5), new NumberNode(3)])), false],
+    ['fraction', new FractionNode(new NumberNode(1), new NumberNode(2)), false],
+    ['power', new PowerNode(new NumberNode(2), new NumberNode(3)), false],
+    ['root msqrt', new RootNode(new NumberNode(16)), false],
+    ['root mroot', new RootNode(new NumberNode(16), new NumberNode(3)), false],
+    ['subscript', new SubscriptNode('x', 'max'), false],
+  ];
+
+  const slots: [string, string, number, number, (f: MathNode) => string][] = [
+    // [label, tag, arity, slotIndex, render(fragment)]
+    ['mfrac numerator', 'mfrac', 2, 0, (f) => new FractionNode(f, new SymbolNode('y')).toMathML()],
+    ['mfrac denominator', 'mfrac', 2, 1, (f) => new FractionNode(new SymbolNode('y'), f).toMathML()],
+    ['msup base', 'msup', 2, 0, (f) => new PowerNode(f, new NumberNode(2)).toMathML()],
+    ['msup exponent', 'msup', 2, 1, (f) => new PowerNode(new SymbolNode('x'), f).toMathML()],
+    ['msup via 2-arg pow op', 'msup', 2, 0, (f) => new OperatorNode('pow', [f, new NumberNode(2)]).toMathML()],
+    ['msqrt radicand', 'msqrt', 1, 0, (f) => new RootNode(f).toMathML()],
+    ['mroot radicand', 'mroot', 2, 0, (f) => new RootNode(f, new NumberNode(3)).toMathML()],
+    ['mroot index', 'mroot', 2, 1, (f) => new RootNode(new NumberNode(16), f).toMathML()],
+  ];
+
+  for (const [slotLabel, tag, arity, slotIndex, render] of slots) {
+    for (const [fragLabel, fragment, isLoose] of fragments) {
+      it(`${slotLabel} × ${fragLabel}: the slot holds exactly one child element`, () => {
+        const children = topLevel(innerOf(render(fragment), tag));
+        expect(children, `${slotLabel}: fixed arity`).toHaveLength(arity);
+        const loose = looseOf(fragment);
+        expect(children[slotIndex]).toBe(isLoose ? `<mrow>${loose}</mrow>` : envelopeStripped(fragment.toMathML()));
+      });
+    }
+  }
+
+  it('a null slot next to a multi-element fragment: placeholder stays bare, the fragment wraps', () => {
+    expect(new FractionNode(null, unit50mm()).toMathML()).toBe(
+      M`<math><mfrac><mi>□</mi><mrow><mn>50</mn><mspace width="0.1667em"/><mi mathvariant="normal">mm</mi></mrow></mfrac></math>`,
+    );
+  });
+
+  it('msub slots are string labels: always exactly two single <mi> children, even with escaped text', () => {
+    const children = topLevel(innerOf(new SubscriptNode('a<b', 'c&d').toMathML(), 'msub'));
+    expect(children).toEqual([M`<mi>a&lt;b</mi>`, M`<mi>c&amp;d</mi>`]);
   });
 });

@@ -124,6 +124,18 @@ export abstract class MathNode {
   }
 
   /**
+   * Render a child into a fixed-arity slot (<mfrac>, <msup>, <msqrt>, <mroot>):
+   * null = empty slot → visible placeholder. A multi-element fragment (a
+   * UnitNode renders value + mspace + unit label as loose siblings) is wrapped
+   * in a single mrow, so the slot always holds exactly one child element.
+   */
+  protected slotMathml(child: MathNode | null): string {
+    if (child === null) return EMPTY_SLOT;
+    const fragment = child.mathmlContent();
+    return isSingleMathmlElement(fragment) ? fragment : `<mrow>${fragment}</mrow>`;
+  }
+
+  /**
    * Render the sole child this node's own row hosts (GroupNode's fence row):
    * a flat operator row inlines directly, everything else renders wrapped.
    */
@@ -203,7 +215,7 @@ export class OperatorNode extends MathNode {
     // longer chains are TS-only shapes (fromJSON rejects >2) and fall back to
     // a flat row so the renderer never throws.
     if (this.op === 'pow' && this.args.length <= 2) {
-      return `<msup>${this.childMathml(this.args[0] ?? null)}${this.childMathml(this.args[1] ?? null)}</msup>`;
+      return `<msup>${this.slotMathml(this.args[0] ?? null)}${this.slotMathml(this.args[1] ?? null)}</msup>`;
     }
     return `<mrow>${this.rowTokens()}</mrow>`;
   }
@@ -284,7 +296,7 @@ export class FractionNode extends MathNode {
     return new MathOperatorNode('/', 'divide', [this.num.toMathNode(), this.den.toMathNode()]);
   }
   protected mathmlContent(): string {
-    return `<mfrac>${this.childMathml(this.num)}${this.childMathml(this.den)}</mfrac>`;
+    return `<mfrac>${this.slotMathml(this.num)}${this.slotMathml(this.den)}</mfrac>`;
   }
 }
 
@@ -301,7 +313,7 @@ export class PowerNode extends MathNode {
     return new MathOperatorNode('^', 'pow', [this.base.toMathNode(), this.exp.toMathNode()]);
   }
   protected mathmlContent(): string {
-    return `<msup>${this.childMathml(this.base)}${this.childMathml(this.exp)}</msup>`;
+    return `<msup>${this.slotMathml(this.base)}${this.slotMathml(this.exp)}</msup>`;
   }
 }
 
@@ -326,9 +338,9 @@ export class RootNode extends MathNode {
   protected mathmlContent(): string {
     // index null (or omitted) = square root: msqrt; otherwise mroot.
     if (this.index === null) {
-      return `<msqrt>${this.childMathml(this.radicand)}</msqrt>`;
+      return `<msqrt>${this.slotMathml(this.radicand)}</msqrt>`;
     }
-    return `<mroot>${this.childMathml(this.radicand)}${this.childMathml(this.index)}</mroot>`;
+    return `<mroot>${this.slotMathml(this.radicand)}${this.slotMathml(this.index)}</mroot>`;
   }
 }
 

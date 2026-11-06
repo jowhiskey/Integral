@@ -3,15 +3,18 @@ name: CI
 on:
   pull_request:
     branches: [develop, main]
+  schedule:
+    # Nightly run against the default branch (develop), 03:00 UTC.
+    - cron: '0 3 * * *'
 
 jobs:
   gates:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # Reads the pnpm version from the repo's packageManager pin
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
