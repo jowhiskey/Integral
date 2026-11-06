@@ -8,6 +8,10 @@
       "types": "./dist/ast/index.d.ts",
       "import": "./dist/ast/index.js"
     },
+    "./engine": {
+      "types": "./dist/engine/index.d.ts",
+      "import": "./dist/engine/index.js"
+    },
     "./editor": {
       "types": "./dist/editor/index.d.ts",
       "import": "./dist/editor/index.js"
