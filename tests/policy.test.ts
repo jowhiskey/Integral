@@ -403,17 +403,41 @@ describe('typing-point classes', () => {
     expect(parsed(after)).toEqual({ v: 1, root: { type: 'op', op: 'unaryMinus', args: [sym('x')] } });
   });
 
-  it('row seams are not typing points (end seam and splice-before-node reject, nothing logged)', () => {
+  // Arc session 4 carve-out: the typing-point rejections *inside* swap
+  // territory became operator swaps (pinned entry model); the end seam — no
+  // operator to address — keeps its typed rejection.
+  it('row seams: the end seam stays a typed rejection, a mid-row seam becomes the operator swap (session 4)', () => {
     const chain = { v: 1, root: { type: 'op', op: 'add', args: [sym('a'), sym('b'), sym('c')] } };
     expectReject(seedAt(chain, { kind: 'row', path: [], index: 3 }), tok.times);
-    expectReject(seedAt(chain, { kind: 'row', path: [], index: 1 }), tok.times);
+    // Seam 1 sits on the first + glyph: × swaps it (higher precedence wraps
+    // the bound pair a,b — the swap suite pins the full semantics).
+    const state = seedAt(chain, { kind: 'row', path: [], index: 1 });
+    const after = typeToken(state, tok.times);
+    expect(parsed(after)).toEqual({
+      v: 1,
+      root: {
+        type: 'op',
+        op: 'add',
+        args: [{ type: 'op', op: 'multiply', args: [sym('a'), sym('b')] }, sym('c')],
+      },
+    });
+    expect(after.log.length).toBe(state.log.length + 1);
   });
 
-  it('mid-row nodes and node-before-pending-cells are not typing points', () => {
+  // Arc session 4 carve-out: mid-row complete nodes are swap positions now.
+  // Retyping the row's own operator is the defined byte-identical no-op.
+  it('mid-row nodes are operator positions (session 4): same-op retypes are byte-identical no-ops', () => {
     const midRow = { v: 1, root: { type: 'op', op: 'add', args: [sym('a'), sym('b'), sym('c')] } };
-    expectReject(seedAt(midRow, { kind: 'node', path: [1] }), tok.plus);
+    const state = seedAt(midRow, { kind: 'node', path: [1] });
+    const before = JSON.stringify([treeOf(state), state.caret, state.log.length]);
+    const after = typeToken(state, tok.plus);
+    expect(JSON.stringify([treeOf(after), after.caret, after.log.length])).toBe(before);
+    // The operator *ahead* of the node swaps: node-on-b changes the + between b and c.
     const pending = { v: 1, root: { type: 'op', op: 'add', args: [sym('a'), null] } };
-    expectReject(seedAt(pending, { kind: 'node', path: [0] }), tok.plus);
+    const pendingState = seedAt(pending, { kind: 'node', path: [0] });
+    const pendingBefore = JSON.stringify([treeOf(pendingState), pendingState.caret, pendingState.log.length]);
+    const pendingAfter = typeToken(pendingState, tok.plus);
+    expect(JSON.stringify([treeOf(pendingAfter), pendingAfter.caret, pendingAfter.log.length])).toBe(pendingBefore);
   });
 
   it('multiply and mod have no unary form: they reject at operand-expected positions', () => {

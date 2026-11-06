@@ -17,9 +17,25 @@
 // typing points (row splices, mid-row nodes) are typed errors, not guesses.
 
 import type { Envelope, NodeJson } from '../ast/json.js';
-import { caretResolvesIn, isRowNode, nodeAt, rowArgs, type Caret, type Path, type SlotName } from './caret.js';
+import {
+  caretResolvesIn,
+  isRowNode,
+  nodeAt,
+  pathOfRef,
+  refOfPath,
+  rowArgs,
+  type Caret,
+  type Path,
+  type Ref,
+  type SlotName,
+} from './caret.js';
 import { EngineError } from './errors.js';
 import { applyOp, envelopeOf, firstEmpty, type EditingState, type InsertOp, type Op } from './ops.js';
+import { PRECEDENCE, type PrecedenceRow } from './precedence.js';
+import { decideSwap } from './swap.js';
+
+export { PRECEDENCE } from './precedence.js';
+export type { PrecedenceRow } from './precedence.js';
 
 /** Row-kind operator tokens the policy accepts (mathjs fn names). Divide
  *  and pow are structure tokens (FractionNode / PowerNode), not row ops. */
@@ -38,32 +54,13 @@ export type StructureToken =
 /** One typed item: a structure token (policy) or a leaf value (fill). */
 export type TypedToken = StructureToken | { readonly t: 'leaf'; readonly node: NodeJson };
 
-// ——— Precedence table (engine-owned, framework-free) ———
+// ——— Precedence table ———
 //
-// Ordering and associativity are pinned against math.parse by the oracle:
-// add/subtract < multiply/divide/mod < unaryMinus/unaryPlus < pow, and pow
-// is the only right-associative operator. Contexts without a row (unknown
-// op names, function rows, every fixed slot outside den/exp) are barriers —
-// nothing binds out of them — and the token set above is closed, so an
-// absent row is always a reject, never a guess.
-
-export interface PrecedenceRow {
-  readonly prec: number;
-  readonly assoc: 'left' | 'right';
-  /** Unary form (if any) for operand-expected positions. */
-  readonly unary?: 'unaryMinus' | 'unaryPlus';
-}
-
-export const PRECEDENCE: Readonly<Record<string, PrecedenceRow>> = {
-  add: { prec: 1, assoc: 'left', unary: 'unaryPlus' },
-  subtract: { prec: 1, assoc: 'left', unary: 'unaryMinus' },
-  multiply: { prec: 2, assoc: 'left' },
-  divide: { prec: 2, assoc: 'left' },
-  mod: { prec: 2, assoc: 'left' },
-  unaryMinus: { prec: 3, assoc: 'left' },
-  unaryPlus: { prec: 3, assoc: 'left' },
-  pow: { prec: 4, assoc: 'right' },
-};
+// The engine-owned table lives in ./precedence.js (shared with the operator
+// swap, arc session 4): ordering/associativity pinned against math.parse by
+// the oracle — add/subtract < multiply/divide/mod < unaryMinus/unaryPlus <
+// pow, and pow is the only right-associative operator. Contexts without a
+// row are barriers — never guesses — and the token set above is closed.
 
 /** One policy decision: the rule kind that fired, the mechanical ops that
  *  realize it, and the caret the state will carry after they apply. */
@@ -78,35 +75,9 @@ export interface AttachDecision {
 }
 
 // ——— Internal addressing over the JSON envelope ———
+// Ref / refOfPath / pathOfRef live in ./caret.js (shared with the swap).
 
-/** Where content sits or will land: the root, a fixed slot, an args cell. */
-type Ref =
-  | { readonly at: 'root' }
-  | { readonly at: 'slot'; readonly path: Path; readonly slot: SlotName }
-  | { readonly at: 'cell'; readonly path: Path; readonly index: number };
-
-/** The ref of the node at `path` (its container position in the envelope). */
-function refOfPath(path: Path): Ref {
-  if (path.length === 0) return { at: 'root' };
-  const step = path[path.length - 1];
-  return typeof step === 'number'
-    ? { at: 'cell', path: path.slice(0, -1), index: step }
-    : { at: 'slot', path: path.slice(0, -1), slot: step };
-}
-
-/** The absolute path a ref addresses. */
-function pathOfRef(ref: Ref): Path {
-  switch (ref.at) {
-    case 'root':
-      return [];
-    case 'slot':
-      return [...ref.path, ref.slot];
-    case 'cell':
-      return [...ref.path, ref.index];
-  }
-}
-
-/** A typed value that continues here: the node the caret sits on, and the
+/** A typed value that continues here: the node the caret sits on, and
  *  ref it occupies. Genuinely ambiguous positions (splices, mid-row nodes)
  *  are typed errors, not guesses. */
 interface Hold {
@@ -399,8 +370,12 @@ function enclosingGroup(env: Envelope, caret: Caret): Path | null {
 
 /** Type one token into the session: leaves fill the operand-expected
  *  position mechanically (plain session-1 inserts); structure tokens pass
- *  through decideAttach. Pure function of the given state — throws the
- *  policy/mechanical errors above on out-of-model input. */
+ *  through decideAttach. Operator/divide/pow tokens at mid-row operator
+ *  positions — where typing cannot start — are operator swaps (arc session
+ *  4): decideSwap decides them first; it returns null at every typing point
+ *  and every position outside its scope (group tokens, unknown-op rows, end
+ *  seams), so session-3 behavior is untouched there. Pure function of the
+ *  given state — throws the policy/mechanical errors on out-of-model input. */
 export function typeToken(state: EditingState, token: TypedToken): EditingState {
   const env = envelopeOf(state);
   if (token.t === 'leaf') {
@@ -409,6 +384,13 @@ export function typeToken(state: EditingState, token: TypedToken): EditingState 
       throw new EngineError('not-a-typing-point', 'a leaf needs an operand-expected position to fill');
     }
     return applyOp(state, insertAt(tp.ref, token.node));
+  }
+  const swap = decideSwap(env, state.caret, token);
+  if (swap !== null) {
+    if (swap.ops.length === 0) return state; // same operator retyped: a byte-identical no-op
+    let next = state;
+    for (const op of swap.ops) next = applyOp(next, op);
+    return next;
   }
   let next = state;
   for (const op of decideAttach(env, state.caret, token).ops) next = applyOp(next, op);

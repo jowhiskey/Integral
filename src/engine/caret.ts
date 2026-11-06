@@ -51,6 +51,36 @@ export type Caret =
   | { readonly kind: 'slot'; readonly path: Path; readonly slot: SlotName }
   | { readonly kind: 'row'; readonly path: Path; readonly index: number };
 
+// ——— Refs: where content sits or will land (the envelope-level analog of a
+// caret, used by the policy layers to address insertion/swap targets) ———
+
+/** Where content sits or will land: the root, a fixed slot, an args cell. */
+export type Ref =
+  | { readonly at: 'root' }
+  | { readonly at: 'slot'; readonly path: Path; readonly slot: SlotName }
+  | { readonly at: 'cell'; readonly path: Path; readonly index: number };
+
+/** The ref of the node at `path` (its container position in the envelope). */
+export function refOfPath(path: Path): Ref {
+  if (path.length === 0) return { at: 'root' };
+  const step = path[path.length - 1];
+  return typeof step === 'number'
+    ? { at: 'cell', path: path.slice(0, -1), index: step }
+    : { at: 'slot', path: path.slice(0, -1), slot: step };
+}
+
+/** The absolute path a ref addresses. */
+export function pathOfRef(ref: Ref): Path {
+  switch (ref.at) {
+    case 'root':
+      return [];
+    case 'slot':
+      return [...ref.path, ref.slot];
+    case 'cell':
+      return [...ref.path, ref.index];
+  }
+}
+
 // ——— JSON-level resolution (NodeJson, never node instances) ———
 
 type JsonRecord = Record<string, unknown> & { type: NodeJson['type'] };

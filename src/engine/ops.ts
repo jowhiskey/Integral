@@ -54,6 +54,13 @@ export type Position =
   | { readonly at: 'replaceSlot'; readonly path: Path; readonly slot: SlotName }
   | { readonly at: 'replaceCell'; readonly path: Path; readonly index: number };
 
+/** The occupied-replace placements (swap replaces a whole re-folded row
+ *  subtree at one of these, reusing the replace mechanics). */
+export type ReplacePosition =
+  | { readonly at: 'replaceRoot' }
+  | { readonly at: 'replaceSlot'; readonly path: Path; readonly slot: SlotName }
+  | { readonly at: 'replaceCell'; readonly path: Path; readonly index: number };
+
 /** Place the given node at a position: fill the empty root slot, fill an
  *  empty fixed slot, or splice into an args row at an index. */
 export interface InsertOp {
@@ -84,9 +91,28 @@ export interface MoveOp {
   readonly dir: NavDir;
 }
 
+/**
+ * Swap an operator mid-row (arc session 4): replace the subtree at `at` with
+ * `node` (the re-folded maximal row), landing the caret at `to` — the changed
+ * operator's junction in the new shape (a row seam, or the natural dive for
+ * frac/pow swaps). The op is pure data: policy computes the restructuring,
+ * the reducer is its executor. Reuses the replace placements' mechanics and
+ * their occupancy errors; the relocation is the op's own defined rule (the
+ * policy never corrects placement with moveCaret).
+ */
+export interface SwapOp {
+  readonly op: 'swap';
+  /** The restructured replacement subtree (the whole maximal row node). */
+  readonly node: NodeJson;
+  /** Replace placement for the swapped-out subtree (root/slot/cell). */
+  readonly at: ReplacePosition;
+  /** Caret after the swap; validated against the transformed tree. */
+  readonly to: Caret;
+}
+
 /** The op vocabulary — plain data values (serializable, so op logs can be
  *  persisted, replayed, and property-tested without a DOM). */
-export type Op = InsertOp | DeleteAtOp | MoveCaretOp | MoveOp;
+export type Op = InsertOp | DeleteAtOp | MoveCaretOp | MoveOp | SwapOp;
 
 /** One applied op. Undo snapshots the full tree + caret state before the op —
  *  mechanics chosen over inverse ops: byte-exact restoration by construction
@@ -154,6 +180,10 @@ export function applyOp(state: EditingState, op: Op): EditingState {
       return applyMoveCaret(state, op);
     case 'move':
       return applyMove(state, op);
+    case 'swap':
+      // Replace mechanics reused: occupancy errors, strict replace semantics,
+      // the fromJSON gate — the only op-owned extra is the junction caret.
+      return applyMutating(state, op, swapInto);
     default:
       throw new EngineError('unknown-op', `applyOp: unknown op ${JSON.stringify((op as { op: unknown }).op)}`);
   }
@@ -205,7 +235,7 @@ const cloneEnvelope = (env: Envelope): Envelope => JSON.parse(JSON.stringify(env
 /** One tree-mutating op: serialize + clone, transform the clone at the JSON
  *  level, rebuild through fromJSON (the contract gate), relocate the caret
  *  by the op's defined rule. */
-function applyMutating<T extends InsertOp | DeleteAtOp>(
+function applyMutating<T extends InsertOp | DeleteAtOp | SwapOp>(
   state: EditingState,
   op: T,
   transform: (env: Envelope, op: T) => void,
@@ -346,6 +376,12 @@ function deleteAtFrom(env: Envelope, op: DeleteAtOp): void {
   }
 }
 
+/** The swap transform: the replace placements' own mechanics, nothing more —
+ *  the policy handed the reducer a finished replacement subtree. */
+function swapInto(env: Envelope, op: SwapOp): void {
+  insertInto(env, { op: 'insert', node: op.node, at: op.at });
+}
+
 function requireSlotParent(env: Envelope, path: Path, slot: SlotName): NodeJson {
   const parent = nodeAt(env, path);
   if (parent === null || !hasSlot(parent, slot)) {
@@ -430,6 +466,10 @@ function diveCaret(inserted: NodeJson, path: Path): Caret {
  * - row splice              → coordinates in the spliced row's address space
  *                             shift with the splice (adjustRowCaret); nothing
  *                             else moves.
+ * - swap (arc session 4)    → the changed operator's junction in the
+ *                             re-folded row: a row seam on the new binding
+ *                             for operator swaps, the natural dive for ÷/^
+ *                             (structure tokens carry their own empty slot).
  * - fill (null args cell)   → the caret that was in the filled cell, or on
  *                             the row's owner, moves onto the new node
  *                             (owner hop mirrors the slot rule); every
@@ -451,7 +491,13 @@ function diveCaret(inserted: NodeJson, path: Path): Caret {
  * The final validity check happens in applyMutating — a relocation rule that
  * produced an unresolvable caret is an engine bug, not an accepted state.
  */
-function relocateCaret(caretBefore: Caret, op: InsertOp | DeleteAtOp, env: Envelope): Caret {
+function relocateCaret(caretBefore: Caret, op: InsertOp | DeleteAtOp | SwapOp, env: Envelope): Caret {
+  if (op.op === 'swap') {
+    // The swap's own relocation: the junction caret the policy derived from
+    // the re-folded shape (row seam on the changed operator, or the natural
+    // dive for divide/pow). Validated like every relocation below.
+    return op.to;
+  }
   const at = op.at;
   switch (at.at) {
     case 'root':
