@@ -6,6 +6,7 @@
 ## Layout
 ```
 src/ast/        # node classes, JSON envelope (versioned, additive-only), toMathNode fold, vocabulary
+src/engine/     # editing engine (since 2026-11-06): ops as values, pure reducer, caret, undo — runtime-agnostic, no DOM
 src/editor/     # (later) caret navigation, MathML rendering, key handling — NOT plain-text input
 docs/context/   # editor-spec.md — the frozen AST spec (read before touching node types)
 ```
@@ -31,6 +32,7 @@ CI exists since 2026-11-06: `.github/workflows/ci.yml`, PR-triggered plus a nigh
 | Area | Read first |
 |---|---|
 | Anything AST-related (nodes, JSON, vocabulary, walker) | `docs/context/editor-spec.md` |
+| Editing engine (ops, caret, undo) | `docs/context/editor-spec.md` |
 
 ## History & docs feedback
 - **Recent history:** `git log` — docs commits carry structured session records (what landed, why, impact, friction). Your session brief carries the current state; this file and `docs/context/*` carry the stable reference.
