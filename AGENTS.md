@@ -24,6 +24,9 @@ docs/context/   # editor-spec.md — the frozen AST spec (read before touching n
 ## CI
 CI exists since 2026-11-06: `.github/workflows/ci.yml`, PR-triggered plus a nightly scheduled run of `develop` (the `schedule:` trigger landed 2026-11-06 — cron 03:00 UTC; nothing runs on pushes, doc commits, or merges). Node 22; pnpm via the `packageManager` pin; `pnpm install --frozen-lockfile` → `pnpm test` → `pnpm build`. "Green" for trunk work is the local suite (`pnpm test` + `pnpm build`/tsc), agent-verified, gating the `develop` push; the nightly run verifies `develop` after the fact. For feature-branch work the local suite is the in-session gate; PRs get the real run — check it at PR time (the coding session cannot observe runs; PRs are opened outside it). A red run for environmental reasons is a workflow fix on the same branch. Host applications exercise Integral through their own CI in addition.
 
+## Working environment
+- **Scratch files never leave the worktree.** Every transient file — commit-message files, one-shot scripts, probe output — lives at a repo-relative path inside the worktree (e.g. `.git/COMMIT_MSG` for `git commit -F`), deleted after use. Creating anything outside the worktree is banned outright (no `C:\tmp`, no `/tmp`, no `/c/...`, no drive-root paths, no home scratch). Why: the toolchain has two file writers with different path languages — Git Bash/MSYS maps `/tmp` to its own temp dir and `/c/tmp` to `C:\tmp`, while Windows-native file tools resolve `/tmp`/`/c/tmp` as literally-named folders against the current drive — so out-of-worktree scratch repeatedly lands at the drive root. Direct `node` execution of a scratch script importing repo TypeScript may additionally be blocked by the tool's approval layer; the sanctioned repro route is a temporary vitest file inside the worktree (deleted after use).
+
 ## Routing — read before touching
 | Area | Read first |
 |---|---|
