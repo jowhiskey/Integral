@@ -22,7 +22,7 @@ docs/context/   # editor-spec.md — the frozen AST spec (read before touching n
 9. **Retry budget — stop instead of looping.** No verification step (test suite, build, probe) gets more than two unchanged attempts: one rerun may rule out flakiness; a second identical failure signature is a STOP — never a third identical rerun. The same cap applies to fixes: two failed fix attempts on the same error with no progress = stop and report (in-session stop-and-ask, or the report's friction section). On the stop, report what failed, the failure signature, what was tried, and a diagnosis hypothesis — for mass-timeout / zero-assertion patterns, suspect the environment first (machine lock/throttle, orphaned processes, killed runs). Retries without new information burn tokens and context and prove nothing; stopping to report is always cheaper than looping.
 
 ## CI
-No CI yet (no `.github/workflows`) — "green" means the local suite (`pnpm test` + `pnpm build`/tsc), agent-verified; host applications exercise Integral through their own CI.
+CI exists since 2026-11-06: `.github/workflows/ci.yml`, PR-triggered (pull requests to `develop`/`main` only — nothing on pushes, doc commits, or merges). Node 22; pnpm via the `packageManager` pin; `pnpm install --frozen-lockfile` → `pnpm test` → `pnpm build`. "Green" for branch work is still the local suite (`pnpm test` + `pnpm build`/tsc), agent-verified; PRs get the real run — check it at PR time (the coding session cannot observe runs; PRs are opened outside it). A red run for environmental reasons is a workflow fix on the same branch. Host applications exercise Integral through their own CI in addition.
 
 ## Routing — read before touching
 | Area | Read first |
