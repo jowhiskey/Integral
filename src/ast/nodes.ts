@@ -31,14 +31,104 @@ export const UNARY_OPS = new Set(['unaryMinus', 'unaryPlus']);
 
 const incomplete = (what: string): Error => new Error(`toMathNode: incomplete tree (${what})`);
 
+// ——— MathML Core rendering (visual-first: display, not evaluation) ———
+//
+// Every legal envelope renders; incomplete trees never throw — a null slot
+// shows a visible placeholder, an empty-string field renders empty. Fences
+// exist only where the tree has a GroupNode: precedence is structural, the
+// renderer never re-derives it. Layout constructs (mspace) are injected here,
+// never stored in the tree.
+
+/** mathjs fn name → displayed operator symbol (Unicode minus/times, not ASCII). */
+const OP_DISPLAY: Readonly<Record<string, string>> = {
+  add: '+',
+  subtract: '\u2212', // −
+  multiply: '\u00D7', // ×
+  divide: '/',
+  unaryMinus: '\u2212', // −
+  unaryPlus: '+',
+  pow: '^',
+  mod: 'mod',
+};
+
+/** Visible empty-slot glyph: U+25A1 WHITE SQUARE (rendering-side only, never stored). */
+const EMPTY_SLOT = '<mi>□</mi>';
+
+/** Thin space between a unit's value and its symbol (MathML Core mspace, ~0.167em). */
+const UNIT_SPACE = '<mspace width="0.1667em"/>';
+
+/** XML-escape text content — sym/fn names and unit strings are host-provided. */
+const escapeMathml = (text: string): string =>
+  text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/**
+ * True when the fragment is exactly one balanced top-level element: the math
+ * wrapper stays bare in that case and gains an mrow otherwise (a UnitNode
+ * renders value + mspace + unit symbol — loose siblings at the top level).
+ */
+function isSingleMathmlElement(fragment: string): boolean {
+  let depth = 0;
+  let roots = 0;
+  let i = 0;
+  while (i < fragment.length) {
+    if (fragment[i] !== '<') {
+      if (depth === 0) return false; // stray top-level text
+      i = fragment.indexOf('<', i);
+      continue;
+    }
+    const close = fragment.indexOf('>', i);
+    if (close === -1) return false;
+    const tag = fragment.slice(i, close + 1);
+    if (tag.startsWith('</')) {
+      depth -= 1;
+    } else if (!tag.endsWith('/>')) {
+      if (depth === 0) roots += 1;
+      depth += 1;
+    } else if (depth === 0) {
+      roots += 1;
+    }
+    i = close + 1;
+  }
+  return depth === 0 && roots === 1;
+}
+
 export abstract class MathNode {
   abstract readonly type: NodeTag;
   abstract toJSON(): NodeJson;
   abstract toMathNode(): MathJsNode;
 
-  // TODO: MathML Core rendering — deferred with the editor layer (spec phasing).
-  toMathML(): never {
-    throw new Error('toMathML: not implemented');
+  /** MathML Core markup for this node: `<math>…</math>`, fragment wrapped in an mrow. */
+  toMathML(): string {
+    const fragment = this.mathmlContent();
+    return isSingleMathmlElement(fragment)
+      ? `<math>${fragment}</math>`
+      : `<math><mrow>${fragment}</mrow></math>`;
+  }
+
+  /** The node as a MathML fragment (possibly loose siblings, no outer element). */
+  protected abstract mathmlContent(): string;
+
+  /**
+   * Loose flat-row form of this node — the token row without its own mrow — or
+   * null when the node is not a flat operator row. Only a parent that hosts
+   * the row as the sole content of its own row (GroupNode's fence row) uses
+   * this: fences + the wrapped op's row are one mrow, never two.
+   */
+  protected flatRow(): string | null {
+    return null;
+  }
+
+  /** Render a child slot: null = empty slot → visible placeholder. */
+  protected childMathml(child: MathNode | null): string {
+    return child === null ? EMPTY_SLOT : child.mathmlContent();
+  }
+
+  /**
+   * Render the sole child this node's own row hosts (GroupNode's fence row):
+   * a flat operator row inlines directly, everything else renders wrapped.
+   */
+  protected hostedChildMathml(child: MathNode | null): string {
+    return child === null ? EMPTY_SLOT : (child.flatRow() ?? child.mathmlContent());
   }
 }
 
@@ -55,6 +145,9 @@ export class NumberNode extends MathNode {
   toMathNode(): MathJsNode {
     return new MathConstantNode(this.value);
   }
+  protected mathmlContent(): string {
+    return `<mn>${escapeMathml(String(this.value))}</mn>`;
+  }
 }
 
 export class SymbolNode extends MathNode {
@@ -67,6 +160,9 @@ export class SymbolNode extends MathNode {
   }
   toMathNode(): MathJsNode {
     return new MathSymbolNode(this.name);
+  }
+  protected mathmlContent(): string {
+    return `<mi>${escapeMathml(this.name)}</mi>`;
   }
 }
 
@@ -96,6 +192,35 @@ export class OperatorNode extends MathNode {
     // Fold the n-ary chain left-associatively into binary OperatorNodes.
     return args.reduce((left, right) => new MathOperatorNode(symbol, this.op as MathJsOperatorFn, [left, right]));
   }
+  protected mathmlContent(): string {
+    if (UNARY_OPS.has(this.op)) {
+      if (this.args.length === 0) {
+        return `<mrow><mo>${this.opDisplay()}</mo>${EMPTY_SLOT}</mrow>`;
+      }
+      return `<mrow><mo>${this.opDisplay()}</mo>${this.args.map((a) => this.childMathml(a)).join('')}</mrow>`;
+    }
+    // A ≤2-arg pow op is stored-legal and must display like PowerNode (msup);
+    // longer chains are TS-only shapes (fromJSON rejects >2) and fall back to
+    // a flat row so the renderer never throws.
+    if (this.op === 'pow' && this.args.length <= 2) {
+      return `<msup>${this.childMathml(this.args[0] ?? null)}${this.childMathml(this.args[1] ?? null)}</msup>`;
+    }
+    return `<mrow>${this.rowTokens()}</mrow>`;
+  }
+  protected flatRow(): string | null {
+    return UNARY_OPS.has(this.op) || (this.op === 'pow' && this.args.length <= 2)
+      ? null
+      : this.rowTokens();
+  }
+  /** Flat token row: args (never zero — an empty op shows one slot) joined by separator mo's. */
+  private rowTokens(): string {
+    const args = this.args.length === 0 ? [null] : this.args;
+    return args.map((a) => this.childMathml(a)).join(`<mo>${this.opDisplay()}</mo>`);
+  }
+  /** Displayed glyph; unknown op names (host-built junk) render as their name. */
+  private opDisplay(): string {
+    return OP_DISPLAY[this.op] ?? escapeMathml(this.op);
+  }
 }
 
 /** n-ary function call. */
@@ -115,6 +240,12 @@ export class FunctionNode extends MathNode {
     });
     return new MathFunctionNode(this.name, args);
   }
+  protected mathmlContent(): string {
+    // Name + fenced args; commas separate multiple args, a zero-arg call
+    // (complete, evaluable — host zero-arg functions are legal) shows ().
+    const args = this.args.map((a) => this.childMathml(a)).join('<mo>,</mo>');
+    return `<mrow><mi>${escapeMathml(this.name)}</mi><mo fence="true">(</mo>${args}<mo fence="true">)</mo></mrow>`;
+  }
 }
 
 /** Order-of-operations marker with exactly one child; the only v1 parens value is 'always'. */
@@ -133,6 +264,11 @@ export class GroupNode extends MathNode {
     if (this.child === null) throw incomplete('group child is empty');
     return new MathParenthesisNode(this.child.toMathNode());
   }
+  protected mathmlContent(): string {
+    // parens: 'always' — user-expressed parens, the only fence source. A bare
+    // flat operator row as the child is the fence row's own content: one mrow.
+    return `<mrow><mo fence="true">(</mo>${this.hostedChildMathml(this.child)}<mo fence="true">)</mo></mrow>`;
+  }
 }
 
 export class FractionNode extends MathNode {
@@ -147,6 +283,9 @@ export class FractionNode extends MathNode {
     if (this.num === null || this.den === null) throw incomplete('fraction slot is empty');
     return new MathOperatorNode('/', 'divide', [this.num.toMathNode(), this.den.toMathNode()]);
   }
+  protected mathmlContent(): string {
+    return `<mfrac>${this.childMathml(this.num)}${this.childMathml(this.den)}</mfrac>`;
+  }
 }
 
 export class PowerNode extends MathNode {
@@ -160,6 +299,9 @@ export class PowerNode extends MathNode {
   toMathNode(): MathJsNode {
     if (this.base === null || this.exp === null) throw incomplete('power slot is empty');
     return new MathOperatorNode('^', 'pow', [this.base.toMathNode(), this.exp.toMathNode()]);
+  }
+  protected mathmlContent(): string {
+    return `<msup>${this.childMathml(this.base)}${this.childMathml(this.exp)}</msup>`;
   }
 }
 
@@ -181,6 +323,13 @@ export class RootNode extends MathNode {
     }
     return new MathFunctionNode('nthRoot', [this.radicand.toMathNode(), this.index.toMathNode()]);
   }
+  protected mathmlContent(): string {
+    // index null (or omitted) = square root: msqrt; otherwise mroot.
+    if (this.index === null) {
+      return `<msqrt>${this.childMathml(this.radicand)}</msqrt>`;
+    }
+    return `<mroot>${this.childMathml(this.radicand)}${this.childMathml(this.index)}</mroot>`;
+  }
 }
 
 /** Label mode only in v1: base and sub are plain strings; projects to a flat SymbolNode (e.g. x_max). */
@@ -196,6 +345,11 @@ export class SubscriptNode extends MathNode {
     if (this.base === '' || this.sub === '') throw incomplete('subscript label is empty');
     // Flat SymbolNode — name identity: two symbols are the same name iff these are equal.
     return new MathSymbolNode(`${this.base}_${this.sub}`);
+  }
+  protected mathmlContent(): string {
+    // Label mode: both parts are strings. Empty is the incomplete state and
+    // renders empty, not as a slot placeholder — only null slots are □.
+    return `<msub><mi>${escapeMathml(this.base)}</mi><mi>${escapeMathml(this.sub)}</mi></msub>`;
   }
 }
 
@@ -214,5 +368,15 @@ export class UnitNode extends MathNode {
     // Spike-verified unit-bearing construct: implicit multiply with a unit symbol
     // evaluates to a mathjs Unit (identical to what math.parse produces for '50 mm').
     return new MathOperatorNode('*', 'multiply', [this.value.toMathNode(), new MathSymbolNode(this.unit)], true);
+  }
+  protected mathmlContent(): string {
+    // Engineering convention: the unit symbol is upright, separated from the
+    // value by a thin mspace (implicit multiply, no × glyph). An empty unit
+    // string is the incomplete state — empty upright mi, and no separator
+    // (nothing to separate).
+    if (this.unit === '') {
+      return `${this.childMathml(this.value)}<mi mathvariant="normal"></mi>`;
+    }
+    return `${this.childMathml(this.value)}${UNIT_SPACE}<mi mathvariant="normal">${escapeMathml(this.unit)}</mi>`;
   }
 }

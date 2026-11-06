@@ -32,6 +32,15 @@ export function toJSON(root: MathNode | null): Envelope {
 }
 
 /**
+ * MathML for a whole formula. Scene-side display mapping: never throws on
+ * incomplete trees (isEvaluable plays no role here — rendering is display,
+ * not evaluation). The empty formula (root null) is the empty string.
+ */
+export function toMathML(root: MathNode | null): string {
+  return root === null ? '' : root.toMathML();
+}
+
+/**
  * Deserialize a formula envelope.
  *
  * Non-empty UnitNode.unit strings must be members of the vocabulary's unit
