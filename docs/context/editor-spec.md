@@ -144,7 +144,7 @@ Pre-npm note: hosts consuming Integral via a package `link:` each bundle their o
 
 ## Open items
 
-- Framework + version for the editor layer (signals vs. stores for caret state etc.) — must not block the AST core; the `./editor` subpath stays an empty placeholder until decided.
+- Framework + version for the editor layer — **decided 2026-11-06: Svelte 5** (signals for caret state etc. live in this layer only; the AST core is framework-free permanently). The `./editor` subpath stays an empty placeholder until the DOM layer is scoped — the decision removes the blocker, it does not start the layer.
 - NumberNode: `number` for v1; bignumber mode later = additive value-format flag, not structural.
 - Subscript index-mode export policy (`x_n` as accessor) — when sequences exist.
 - Selection ranges — not expressible in the v1 caret union (deferred). An optional `{from:'self'}`-style vertical edge (down from a self-on-container caret) is an available additive schema extension; vertical-jump positional memory is an editor/DOM-layer concern (nav profiles landed 2026-11-06).
