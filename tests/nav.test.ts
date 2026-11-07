@@ -322,12 +322,17 @@ describe('no-target movement is a defined no-op', () => {
     for (const dir of DIRS) expect(applyOp(state, moveOp(dir))).toBe(state);
   });
 
-  it('the far end of the root row has no target', () => {
+  it('the far ends of the root row rest at its border seams (amended session 4: row ends are stations)', () => {
     const state = initSession(SEEDS.chain);
     const atEnd = applyOp(state, { op: 'moveCaret', to: nodeCaret([2]) });
-    expect(applyOp(atEnd, moveOp('right'))).toBe(atEnd);
+    const movedRight = applyOp(atEnd, moveOp('right'));
+    expect(movedRight.caret).toEqual(rowCaret([], 3));
+    expect(movedRight.log.length).toBe(atEnd.log.length); // movement never logs
+    expect(applyOp(movedRight, moveOp('right'))).toBe(movedRight); // the end seam is the terminal station
     const atStart = applyOp(state, { op: 'moveCaret', to: nodeCaret([0]) });
-    expect(applyOp(atStart, moveOp('left'))).toBe(atStart);
+    const movedLeft = applyOp(atStart, moveOp('left'));
+    expect(movedLeft.caret).toEqual(rowCaret([], 0));
+    expect(applyOp(movedLeft, moveOp('left'))).toBe(movedLeft); // seam 0 mirrors it
   });
 
   it('a moved state is a new object carrying the same root and log references', () => {
@@ -448,14 +453,15 @@ describe('root: the index participates only when the tree carries one', () => {
 });
 
 describe('args rows: continuous flow, gaps stepwise, empty rows reachable', () => {
-  it('a flat chain is walked cell by cell', () => {
+  it('a flat chain is walked cell by cell; the border overflows rest at the row seams', () => {
     const env = envOf(SEEDS.chain); // add[a, b, c]
     expect(resolveMove(env, nodeCaret(), 'right')).toEqual(nodeCaret([0]));
     expect(resolveMove(env, nodeCaret([0]), 'right')).toEqual(nodeCaret([1]));
     expect(resolveMove(env, nodeCaret([1]), 'right')).toEqual(nodeCaret([2]));
-    expect(resolveMove(env, nodeCaret([2]), 'right')).toBe(null);
+    // dead-end overflow: the caret parks after (before) the row's content
+    expect(resolveMove(env, nodeCaret([2]), 'right')).toEqual(rowCaret([], 3));
     expect(resolveMove(env, nodeCaret([2]), 'left')).toEqual(nodeCaret([1]));
-    expect(resolveMove(env, nodeCaret([0]), 'left')).toBe(null);
+    expect(resolveMove(env, nodeCaret([0]), 'left')).toEqual(rowCaret([], 0));
   });
 
   it('a row caret (insertion boundary) participates in movement', () => {
@@ -479,10 +485,12 @@ describe('args rows: continuous flow, gaps stepwise, empty rows reachable', () =
 describe('deep climbs and jumps through nested structures', () => {
   const env = envOf(SEEDS.canonical); // (5 + 4·3) / 2
 
-  it('horizontal flow walks continuously into nested containers', () => {
+  it('horizontal flow walks continuously into nested containers; slot barriers rest the overflow at the innermost row seam', () => {
     expect(resolveMove(env, nodeCaret(), 'right')).toEqual(nodeCaret(['num', 'child', 0]));
     expect(resolveMove(env, nodeCaret(['num', 'child', 0]), 'right')).toEqual(nodeCaret(['num', 'child', 1, 0]));
-    expect(resolveMove(env, nodeCaret(['num', 'child', 1, 1]), 'right')).toBe(null); // doc right edge
+    // the group's parens stop the flow: the caret parks at the row end seam
+    // just inside them (no station beyond exists in the union)
+    expect(resolveMove(env, nodeCaret(['num', 'child', 1, 1]), 'right')).toEqual(rowCaret(['num', 'child'], 2));
     expect(resolveMove(env, nodeCaret(), 'left')).toEqual(nodeCaret(['den']));
   });
 

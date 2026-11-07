@@ -104,15 +104,24 @@ function typingPoint(env: Envelope, caret: Caret): TypingPoint {
     case 'slot':
       return { kind: 'operand', ref: { at: 'slot', path: caret.path, slot: caret.slot } };
     case 'row': {
-      // The only row positions typing understands: an empty args cell.
-      // Splices (before a node or at the end seam) edit nothing a typed
-      // operator can address — reject rather than invent semantics.
+      // Row positions typing understands: an empty args cell (fill); the END
+      // seam — the station after the last operand, where the caret parks at
+      // the document's right edge — routes to the last cell's typing point
+      // (operators extend/wrap there exactly as they do standing on the last
+      // operand); an interior seam addresses an operator glyph — the swap's
+      // model, not a typed insertion — and stays the typed rejection.
       const parent = nodeAt(env, caret.path) as NodeJson;
       const args = rowArgs(parent);
-      if (args[caret.index] !== null) {
-        throw new EngineError('not-a-typing-point', `a splice at args[${caret.index}] is not a typing point`);
+      if (args[caret.index] === null) {
+        return { kind: 'operand', ref: { at: 'cell', path: caret.path, index: caret.index } };
       }
-      return { kind: 'operand', ref: { at: 'cell', path: caret.path, index: caret.index } };
+      if (caret.index === args.length && args.length > 0) {
+        const last = args[args.length - 1];
+        return last === null
+          ? { kind: 'operand', ref: { at: 'cell', path: caret.path, index: args.length - 1 } }
+          : typingPointAtNode(env, [...caret.path, args.length - 1]);
+      }
+      throw new EngineError('not-a-typing-point', `a splice at args[${caret.index}] is not a typing point`);
     }
     case 'node':
       return typingPointAtNode(env, caret.path);
@@ -456,6 +465,42 @@ function typeAtToken(
   return typeToken({ ...state, caret: { kind: 'node', path: caret.path } }, token);
 }
 
+/** The number a typed digit continues into: a node caret standing on a
+ *  number — the number's own end station, the same position backspace peels
+ *  from — or an end-seam caret parked after the row's last operand when that
+ *  operand is a number. Null at every other position: identifiers/units stay
+ *  atomic, in-token offsets are not addressed here (typeAtToken owns them). */
+function mergeTarget(env: Envelope, caret: Caret): Path | null {
+  if (caret.kind === 'node') {
+    const node = nodeAt(env, caret.path);
+    return node !== null && node.type === 'num' ? caret.path : null;
+  }
+  if (caret.kind === 'row') {
+    const row = nodeAt(env, caret.path);
+    if (row === null || !isRowNode(row)) return null;
+    const args = rowArgs(row);
+    if (caret.index !== args.length || args.length === 0) return null;
+    const last = args[args.length - 1];
+    return last !== null && last.type === 'num' ? [...caret.path, args.length - 1] : null;
+  }
+  return null;
+}
+
+/** The node caret on the last operand — the station a FILLED END seam types
+ *  as: identical op emission, relocation, and undo snapshots as holding that
+ *  operand (typing at the row's end must not fork from typing on its last
+ *  item). Null unless the caret is exactly a filled end seam. The digit
+ *  merge into a trailing number is seam-native (mergeTarget) — its one
+ *  replace keeps the seam, so repeated digits never jump the caret. */
+function endSeamStation(env: Envelope, caret: Caret): Caret | null {
+  if (caret.kind !== 'row') return null;
+  const row = nodeAt(env, caret.path);
+  if (row === null || !isRowNode(row)) return null;
+  const args = rowArgs(row);
+  if (caret.index !== args.length || args.length === 0) return null;
+  return args[args.length - 1] === null ? null : { kind: 'node', path: [...caret.path, args.length - 1] };
+}
+
 // ——— The typing surface ———
 
 /** Type one token into the session: leaves fill the operand-expected
@@ -478,12 +523,37 @@ export function typeToken(state: EditingState, token: TypedToken): EditingState 
     return typeAtToken(state, env, state.caret, token);
   }
   if (token.t === 'leaf') {
+    if (token.node.type === 'num') {
+      // A digit at a number's end station merges into that number — the
+      // same one-replace-op merge typeAtToken runs at in-token offsets,
+      // extended to the two stations the caret occupies without ever being
+      // in-token: standing on a number, or parked at the row's end seam
+      // with the number as the last operand (seam-native: the seam caret
+      // survives the replace).
+      const path = mergeTarget(env, state.caret);
+      if (path !== null) {
+        const node = nodeAt(env, path) as NodeJson;
+        const value = Number(tokenText(node) + String(token.node.value));
+        if (Number.isFinite(value)) {
+          return applyOp(state, replaceAt(refOfPath(path), { type: 'num', value }));
+        }
+      }
+    }
+    // A filled end seam types as the last operand's station (the log's
+    // caretBefore carries that station too — undo lands where holding the
+    // operand would).
+    const seam = endSeamStation(env, state.caret);
+    if (seam !== null) state = { ...state, caret: seam };
     const tp = typingPoint(env, state.caret);
     if (tp.kind !== 'operand') {
       throw new EngineError('not-a-typing-point', 'a leaf needs an operand-expected position to fill');
     }
     return applyOp(state, insertAt(tp.ref, token.node));
   }
+  // Structure tokens: a filled end seam types as the last operand's station
+  // (decideSwap is null there either way — the last operand owns no operator).
+  const seam = endSeamStation(env, state.caret);
+  if (seam !== null) state = { ...state, caret: seam };
   const swap = decideSwap(env, state.caret, token);
   if (swap !== null) {
     if (swap.ops.length === 0) return state; // same operator retyped: a byte-identical no-op

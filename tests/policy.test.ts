@@ -404,16 +404,31 @@ describe('typing-point classes', () => {
   });
 
   // Arc session 4 carve-out: the typing-point rejections *inside* swap
-  // territory became operator swaps (pinned entry model); the end seam — no
-  // operator to address — keeps its typed rejection.
-  it('row seams: the end seam stays a typed rejection, a mid-row seam becomes the operator swap (session 4)', () => {
+  // territory became operator swaps; the session-4 fix session routes the
+  // END seam — previously a typed rejection — to the last operand's hold,
+  // so typing there appends/extends exactly as standing on that operand.
+  it('row seams: the end seam routes to the last operand (its hold), a mid-row seam becomes the operator swap (session 4)', () => {
     const chain = { v: 1, root: { type: 'op', op: 'add', args: [sym('a'), sym('b'), sym('c')] } };
-    expectReject(seedAt(chain, { kind: 'row', path: [], index: 3 }), tok.times);
+    // × at the end seam behaves as typed on c: higher precedence nests a
+    // multiply in the right operand — one op, one log entry.
+    const endState = seedAt(chain, { kind: 'row', path: [], index: 3 });
+    const after = typeToken(endState, tok.times);
+    expect(parsed(after)).toEqual({
+      v: 1,
+      root: {
+        type: 'op',
+        op: 'add',
+        args: [sym('a'), sym('b'), { type: 'op', op: 'multiply', args: [sym('c'), null] }],
+      },
+    });
+    // the dive: the translated station caret rides the replace relocation
+    expect(after.caret).toEqual({ kind: 'row', path: [2], index: 1 }); // the pending cell
+    expect(after.log.length).toBe(endState.log.length + 1); // one op = one new log entry
     // Seam 1 sits on the first + glyph: × swaps it (higher precedence wraps
     // the bound pair a,b — the swap suite pins the full semantics).
     const state = seedAt(chain, { kind: 'row', path: [], index: 1 });
-    const after = typeToken(state, tok.times);
-    expect(parsed(after)).toEqual({
+    const swapped = typeToken(state, tok.times);
+    expect(parsed(swapped)).toEqual({
       v: 1,
       root: {
         type: 'op',
@@ -421,7 +436,7 @@ describe('typing-point classes', () => {
         args: [{ type: 'op', op: 'multiply', args: [sym('a'), sym('b')] }, sym('c')],
       },
     });
-    expect(after.log.length).toBe(state.log.length + 1);
+    expect(swapped.log.length).toBe(state.log.length + 1);
   });
 
   // Arc session 4 carve-out: mid-row complete nodes are swap positions now.

@@ -19,7 +19,8 @@
 //         station inside (enter-from-side = resolveMove from a node caret on
 //         the container)
 //       - no uid hit (math/container background) → empty caret for the empty
-//         formula, otherwise enter the root from the clicked side
+//         formula; an op/row root parked at its start/end seam in the outer
+//         edge zones; otherwise enter the root from the clicked side
 // The result is validated with caretResolvesIn; placement is pure state and never
 // enters the undo log (the controller sets the caret directly, not via moveCaret).
 
@@ -29,8 +30,10 @@ import {
   NAV_PROFILES,
   caretResolvesIn,
   exitStation,
+  isRowNode,
   nodeAt,
   resolveMove,
+  rowArgs,
   tokenText,
   type Caret,
   type NavRegistry,
@@ -103,12 +106,23 @@ export function caretFromHit(env: Envelope, hit: ClickHit, registry: NavRegistry
     case 'separator':
       caret = { kind: 'row', path: hit.path, index: hit.index };
       break;
-    case 'none':
+    case 'none': {
+      // Background (no uid hit): in the outer edge zones around an op/fn
+      // root row the caret parks at the row's border seam — the visible
+      // start/end of the formula — instead of diving into the far flow
+      // end; the middle zones keep the enter-from-side dive. Non-row roots
+      // have no border seam to express: they keep the dive unchanged.
+      const root = env.root;
+      if (root !== null && isRowNode(root) && (hit.fraction <= EDGE_ZONE || hit.fraction >= 1 - EDGE_ZONE)) {
+        caret = { kind: 'row', path: [], index: hit.fraction >= 1 - EDGE_ZONE ? rowArgs(root).length : 0 };
+        break;
+      }
       caret =
         env.root === null
           ? { kind: 'empty' }
           : (enterSide(env, [], hit.fraction < 0.5 ? 'left' : 'right', registry) ?? { kind: 'node', path: [] });
       break;
+    }
     case 'node': {
       const node = nodeAt(env, hit.path);
       if (node === null) {

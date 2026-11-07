@@ -288,8 +288,7 @@ describe('consecutive changed ops merge flat (equal-precedence edge rule)', () =
 // ——— Rejections: swap territory ends where session 3 left it ———
 
 describe('rejections and unchanged positions (outside swap territory)', () => {
-  it('the end seam and seam 0 address no operator — typed rejection, nothing logged', () => {
-    expectRejectAt('a+b+c', { kind: 'row', path: [], index: 3 }, tok.times);
+  it('seam 0 addresses no operator — typed rejection, nothing logged (the end seam is the last operand’s hold now: session-4 fix session)', () => {
     expectRejectAt('a+b+c', { kind: 'row', path: [], index: 0 }, tok.times);
   });
 

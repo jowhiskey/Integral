@@ -123,10 +123,10 @@ describe('slot-edge click-to-exit (container outer-edge zone)', () => {
     expect(f.controller.getState().log.length).toBe(0);
   });
 
-  it('a click in the left outer-edge zone with no left exit falls back to the dive (root edge); middle clicks dive to the nearest flow end', () => {
+  it('a click in the left outer-edge zone parks at the row’s start seam (no left content to rest in); middle clicks dive to the nearest flow end', () => {
     const f = mk();
-    click(f.el('[0]'), 1); // fraction 0.05 ≤ 0.25 → exit left → row start → climbs to root → null → fallback dive left end
-    expect(f.controller.getState().caret).toEqual(node([0, 'child', 0]));
+    click(f.el('[0]'), 1); // fraction 0.05 ≤ 0.25 → exit left → the row’s border seam: before the group (amended session 4)
+    expect(f.controller.getState().caret).toEqual(row(0));
     click(f.el('[0]'), 12); // fraction 0.6 → not an edge zone → dive right end
     expect(f.controller.getState().caret).toEqual(node([0, 'child', 1]));
     click(f.el('[0]'), 8); // fraction 0.4 → dive left end

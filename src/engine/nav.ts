@@ -16,11 +16,15 @@
 //   (or its empty-slot caret when the slot is empty). Horizontal flow is
 //   continuous: crossing into a slot dives to the leftmost/rightmost
 //   station inside it.
-// - movement with no target (document edge, empty formula, direction into
-//   nothing) is a defined no-op: the resolver returns null.
+// - movement with no target (empty formula, direction into nothing) is a
+//   defined no-op: the resolver returns null. Exception: a horizontal
+//   overflow that runs off an args row's border with no station up the
+//   climb rests at that row's border seam — the caret parks at the
+//   start/end of the region it flowed out of instead of the move dying.
 
 import type { Envelope, NodeJson } from '../ast/json.js';
 import {
+  caretResolvesIn,
   hasSlot,
   isRowNode,
   nodeAt,
@@ -229,10 +233,20 @@ function climb(env: Envelope, path: Path, dir: NavDir, registry: NavRegistry): C
   if (typeof step === 'number' && isRowNode(owner)) {
     // The exited child is cell `step` of an args row: horizontal flow
     // continues at the neighboring cell — a gap is a rest station, a filled
-    // cell is dived — or exits the row when the row runs out.
+    // cell is dived — or exits the row when the row runs out. An overflow
+    // with no station anywhere up the climb (the document's edge) rests at
+    // the row's border seam: the caret parks after (or before) the row's
+    // content instead of the move dying — row ends are stations a click or
+    // a later per-parent-end model can build on. Horizontal entry still
+    // dives deep (the dive-through rule is unchanged).
     const args = rowArgs(owner);
     const next = step + (dir === 'right' ? 1 : -1);
-    if (next < 0 || next >= args.length) return climb(env, ownerPath, dir, registry);
+    if (next < 0 || next >= args.length) {
+      const up = climb(env, ownerPath, dir, registry);
+      if (up !== null) return up;
+      const seam: Caret = { kind: 'row', path: ownerPath, index: dir === 'right' ? args.length : 0 };
+      return caretResolvesIn(env, seam) ? seam : null;
+    }
     if (args[next] === null) return { kind: 'row', path: ownerPath, index: next };
     return deepest(env, [...ownerPath, next], registry, dir === 'right' ? 'left' : 'right');
   }

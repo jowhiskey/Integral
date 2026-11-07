@@ -206,8 +206,13 @@ describe('caretFromHit + hitFromMouseEvent: the pure resolver and the event adap
     ).toEqual(slotCaret);
 
     expect(caretFromHit({ v: 1, root: null }, { kind: 'none', fraction: 0.2 })).toEqual({ kind: 'empty' });
-    expect(caretFromHit(env, { kind: 'none', fraction: 0.2 })).toEqual(node([0]));
-    expect(caretFromHit(env, { kind: 'none', fraction: 0.8 })).toEqual(node([1]));
+    // background border zones park at the root row's border seams (amended
+    // session 4: the start/end of the formula are stations); the middle
+    // zones keep the enter-from-side dive
+    expect(caretFromHit(env, { kind: 'none', fraction: 0.04 })).toEqual(row(0));
+    expect(caretFromHit(env, { kind: 'none', fraction: 0.4 })).toEqual(node([0]));
+    expect(caretFromHit(env, { kind: 'none', fraction: 0.6 })).toEqual(node([1]));
+    expect(caretFromHit(env, { kind: 'none', fraction: 0.96 })).toEqual(row(2));
 
     expect(caretFromHit({ v: 1, root: num(7) }, { kind: 'node', path: [], fraction: 0.2 })).toEqual(node([]));
     // an unresolvable node path falls back to the root caret

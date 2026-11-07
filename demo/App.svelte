@@ -118,6 +118,21 @@
       },
     },
     {
+      label: 'x + a/b — end seam live check (Right out of the b parks after the fraction; typing there appends/merges; a background click beyond the ink parks at start/end)',
+      envelope: {
+        v: 1,
+        root: {
+          type: 'op',
+          op: 'add',
+          args: [sym('x'), { type: 'frac', num: sym('a'), den: sym('b') }],
+        },
+      },
+    },
+    {
+      label: 'x+5 — multi-digit typing + delete recovery (type digits at the end: 5→56; Backspace, then + and digit rebuild the row)',
+      envelope: { v: 1, root: { type: 'op', op: 'add', args: [sym('x'), num(5)] } },
+    },
+    {
       label: 'deep nesting: ((2x)^□)/□ — incomplete pow + frac',
       envelope: {
         v: 1,
