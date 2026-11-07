@@ -135,6 +135,10 @@ export interface EditingState {
   readonly root: MathNode | null;
   readonly caret: Caret;
   readonly log: readonly LogEntry[];
+  /** Redo list (additive): entries popped off the log by undo. Any NEW
+   *  tree-changing op clears it (applyMutating); pure movement and undo/redo
+   *  themselves keep it. Empty = redo is a defined no-op. */
+  readonly redo: readonly LogEntry[];
   readonly vocabulary?: StaticVocabulary;
 }
 
@@ -149,7 +153,7 @@ const EMPTY_ENVELOPE: Envelope = { v: 1, root: null };
 export function initSession(envelope?: unknown, vocabulary?: StaticVocabulary): EditingState {
   const root = fromJSON(envelope ?? EMPTY_ENVELOPE, vocabulary);
   const caret: Caret = root === null ? { kind: 'empty' } : { kind: 'node', path: [] };
-  return { root, caret, log: [], vocabulary };
+  return { root, caret, log: [], redo: [], vocabulary };
 }
 
 /** The session's current tree envelope (what the host persists). */
@@ -210,7 +214,7 @@ function applyMove(state: EditingState, op: MoveOp): EditingState {
     // unreachable: the resolver only addresses real positions
     throw new Error('engine invariant: movement produced an unresolvable caret');
   }
-  return { root: state.root, caret: target, log: state.log, vocabulary: state.vocabulary };
+  return { root: state.root, caret: target, log: state.log, redo: state.redo, vocabulary: state.vocabulary };
 }
 
 /** Walk back exactly one op: restore the tree and caret snapshotted before it.
@@ -222,6 +226,7 @@ export function undo(state: EditingState): EditingState {
     root: fromJSON(entry.before, state.vocabulary),
     caret: entry.caretBefore,
     log: state.log.slice(0, -1),
+    redo: [...state.redo, entry],
     vocabulary: state.vocabulary,
   };
 }
@@ -230,6 +235,28 @@ export function undo(state: EditingState): EditingState {
  *  structuredClone's type declaration lives in DOM libs, which this subpath
  *  must not pull in. Envelopes are JSON by definition, so nothing survives a
  *  JSON clone that shouldn't. */
+/** Step the redo list forward one entry: re-apply the undone op onto its own
+ *  before-snapshot. The reducer is pure and deterministic, so re-applying
+ *  reproduces the post-op state byte-exactly (tree, caret, and the re-logged
+ *  entry) with zero inverse-op derivation. Redo on an empty list is a defined
+ *  no-op — returns the state as-is. The remaining redo entries survive (only
+ *  a NEW op clears the list, in applyMutating). */
+
+export function redo(state: EditingState): EditingState {
+  if (state.redo.length === 0) return state;
+  const entry = state.redo[state.redo.length - 1];
+  const redoRest = state.redo.slice(0, -1);
+  const base: EditingState = {
+    root: fromJSON(entry.before, state.vocabulary),
+    caret: entry.caretBefore,
+    log: state.log,
+    redo: redoRest,
+    vocabulary: state.vocabulary,
+  };
+  const applied = applyOp(base, entry.op);
+  return { ...applied, redo: redoRest };
+}
+
 const cloneEnvelope = (env: Envelope): Envelope => JSON.parse(JSON.stringify(env)) as Envelope;
 
 /** One tree-mutating op: serialize + clone, transform the clone at the JSON
@@ -249,7 +276,8 @@ function applyMutating<T extends InsertOp | DeleteAtOp | SwapOp>(
     // unreachable: the relocation rules cover every removal/shift case
     throw new Error('engine invariant: caret normalization failed');
   }
-  return { root, caret, log: [...state.log, { op, before, caretBefore: state.caret }], vocabulary: state.vocabulary };
+  // A new tree-changing op clears the redo list.
+  return { root, caret, log: [...state.log, { op, before, caretBefore: state.caret }], redo: [], vocabulary: state.vocabulary };
 }
 
 function applyMoveCaret(state: EditingState, op: MoveCaretOp): EditingState {
@@ -261,6 +289,7 @@ function applyMoveCaret(state: EditingState, op: MoveCaretOp): EditingState {
     root: state.root,
     caret: op.to,
     log: [...state.log, { op, before, caretBefore: state.caret }],
+    redo: state.redo,
     vocabulary: state.vocabulary,
   };
 }

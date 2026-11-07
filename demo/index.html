@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Integral — editor demo (DOM layer session 1)</title>
+    <title>Integral — editor demo (DOM layer session 2: keyboard)</title>
     <style>
       body {
         font-family: system-ui, sans-serif;
@@ -30,10 +30,13 @@
     </style>
   </head>
   <body>
-    <h1>Integral editor demo — session 1 (render + caret overlay + click placement)</h1>
+    <h1>Integral editor demo — session 2 (render + caret + click + keyboard)</h1>
     <p>
-      Click anywhere in a formula to place the structural caret. No keyboard input yet
-      (session 2). The readout under each formula shows the caret and the current envelope.
+      Click a formula to focus it, then: type (<code>5+3*2</code>, <code>(a+b)</code>),
+      move with the arrow keys (try Down/Left/Left/Up inside the
+      <code>x+y over c+d</code> fraction — vertical positional memory), undo with
+      Ctrl+Z, redo with Ctrl+Y or Ctrl+Shift+Z. The readout under each formula shows the
+      caret and the current envelope.
     </p>
     <div id="app"></div>
     <script type="module" src="/main.ts"></script>

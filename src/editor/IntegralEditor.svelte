@@ -1,8 +1,8 @@
 <script lang="ts">
   // IntegralEditor — the Svelte 5 wrapper around the editor: a focusable container
   // whose DOM is wired by EditorController (full MathML rebuild per tree change,
-  // overlay caret, click placement). Keyboard input is a later session — this is
-  // the focus-handling stub only.
+  // overlay caret, click placement, keyboard input: typing, arrows with vertical
+  // positional memory, undo/redo).
   import { onMount } from 'svelte';
   import { EditorController } from './controller.js';
   import { envelopeOf } from '../engine/index.js';

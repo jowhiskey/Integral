@@ -9,4 +9,8 @@ export * from './click.js';
 export * from './component-types.js';
 export * from './controller.js';
 
+export * from './keys.js';
+
+export * from './vertical-memory.js';
+
 export { default as IntegralEditor } from './IntegralEditor.svelte';

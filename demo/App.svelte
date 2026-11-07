@@ -2,7 +2,8 @@
   // Demo surface for the DOM-layer arc: a fixed set of example formulas (legal
   // envelopes through fromJSON, including incomplete trees) so every caret
   // situation is reachable by clicking. Dev-only — not part of the published
-  // package. No keyboard editing in this session.
+  // package. Click a formula to focus it, then type / use arrow keys (vertical
+  // memory included) / Ctrl+Z / Ctrl+Y.
   import { onMount } from 'svelte';
   import { EditorController, IntegralEditor } from '../src/editor/index.js';
   import type { Caret, Envelope, NodeJson } from '../src/engine/index.js';
@@ -89,6 +90,17 @@
     { label: '−□ — unary minus with empty operand', envelope: { v: 1, root: { type: 'op', op: 'unaryMinus', args: [null] } } },
     { label: 'empty symbol name', envelope: { v: 1, root: sym('') } },
     { label: '□ mm — unit with empty value', envelope: { v: 1, root: { type: 'unit', value: null, unit: 'mm' } } },
+    {
+      label: 'x+y over c+d — fraction rows for the vertical-memory demo (Down, Left, Left, Up)',
+      envelope: {
+        v: 1,
+        root: {
+          type: 'frac',
+          num: { type: 'op', op: 'add', args: [sym('x'), sym('y')] },
+          den: { type: 'op', op: 'add', args: [sym('c'), sym('d')] },
+        },
+      },
+    },
     {
       label: 'deep nesting: ((2x)^□)/□ — incomplete pow + frac',
       envelope: {
