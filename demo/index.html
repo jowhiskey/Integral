@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Integral — editor demo (DOM layer session 2: keyboard)</title>
+    <title>Integral — editor demo (DOM layer session 5: visual-test case browser)</title>
     <style>
       body {
         font-family: system-ui, sans-serif;
@@ -27,16 +27,60 @@
         margin-top: 0.25em;
         white-space: pre-wrap;
       }
+      .browser .hint {
+        font-size: 0.85em;
+        color: #555;
+        max-width: 70em;
+      }
+      .browser .cat h3 {
+        margin: 0.6em 0 0.2em;
+        font-size: 0.95em;
+      }
+      .browser ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        columns: 3;
+        column-gap: 1.5em;
+      }
+      .browser li {
+        break-inside: avoid;
+        margin: 0.1em 0;
+      }
+      .browser button[data-case-id] {
+        font: inherit;
+        font-size: 0.8em;
+        text-align: left;
+        width: 100%;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        background: #fafafa;
+        padding: 0.15em 0.4em;
+        cursor: pointer;
+      }
+      .browser button[data-case-id].active {
+        border-color: #357;
+        background: #e8f0fa;
+        font-weight: 600;
+      }
+      .example .note {
+        font-size: 0.8em;
+        color: #444;
+        margin-top: 0.25em;
+        max-width: 70em;
+      }
     </style>
   </head>
   <body>
-    <h1>Integral editor demo — session 2 (render + caret + click + keyboard)</h1>
+    <h1>Integral editor demo — session 5 (visual-test case browser)</h1>
     <p>
-      Click a formula to focus it, then: type (<code>5+3*2</code>, <code>(a+b)</code>),
-      move with the arrow keys (try Down/Left/Left/Up inside the
-      <code>x+y over c+d</code> fraction — vertical positional memory), undo with
-      Ctrl+Z, redo with Ctrl+Y or Ctrl+Shift+Z. The readout under each formula shows the
-      caret and the current envelope.
+      The case list is the visual-test catalog (<code>demo/cases.ts</code>), grouped by category with stable IDs.
+      Click a case to load its seed (formula + starting caret) into the case editor; click the active case again to
+      reset to the seed. Instruction cases (marked <code>keys</code>) seed the empty formula — the “type instruction”
+      button runs the key sequence through the real keyboard path. In the editor: type, move with the arrow keys,
+      Backspace / Ctrl+Backspace, undo/redo (Ctrl+Z, Ctrl+Y or Ctrl+Shift+Z), and click to place the caret. The
+      readout under the case editor shows the caret and the current envelope. The scratchpad at the bottom is an
+      always-free empty editor.
     </p>
     <div id="app"></div>
     <script type="module" src="/main.ts"></script>
