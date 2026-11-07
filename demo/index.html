@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Integral — editor demo (DOM layer session 1)</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 2em;
+      }
+      .example {
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        padding: 0.5em 1em;
+        margin: 0.75em 0;
+      }
+      .example .label {
+        font-size: 0.8em;
+        color: #666;
+        margin-bottom: 0.25em;
+      }
+      .example .readout {
+        font-family: ui-monospace, monospace;
+        font-size: 0.75em;
+        color: #357;
+        margin-top: 0.25em;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Integral editor demo — session 1 (render + caret overlay + click placement)</h1>
+    <p>
+      Click anywhere in a formula to place the structural caret. No keyboard input yet
+      (session 2). The readout under each formula shows the caret and the current envelope.
+    </p>
+    <div id="app"></div>
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>
