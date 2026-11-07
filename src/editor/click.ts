@@ -9,11 +9,15 @@
 //     caret per the nav-profile geography:
 //       - placeholder        → its recorded caret (slot caret / empty row cell)
 //       - separator glyph    → the row seam it sits on
+//       - number leaf in a row → the in-token caret at the nearest character
+//         boundary of the token's extent (offset from the click x)
 //       - leaf node, row parent, left/right half → the seam directly before/after
 //         the cell (row caret index i / i+1)
 //       - leaf node otherwise (slot content, root) → the node caret on the leaf
-//       - container, left/right half → the leftmost/rightmost station inside
-//         (enter-from-side = resolveMove from a node caret on the container)
+//       - container, outer-edge zone → the nearest legal station OUTSIDE the
+//         parent (exitStation), else left/right half → the leftmost/rightmost
+//         station inside (enter-from-side = resolveMove from a node caret on
+//         the container)
 //       - no uid hit (math/container background) → empty caret for the empty
 //         formula, otherwise enter the root from the clicked side
 // The result is validated with caretResolvesIn; placement is pure state and never
@@ -24,8 +28,10 @@ import type { Envelope } from '../ast/json.js';
 import {
   NAV_PROFILES,
   caretResolvesIn,
+  exitStation,
   nodeAt,
   resolveMove,
+  tokenText,
   type Caret,
   type NavRegistry,
   type Path,
@@ -41,6 +47,10 @@ export type ClickHit =
   | { readonly kind: 'node'; readonly path: Path; readonly fraction: number };
 
 const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x);
+
+/** The outer-edge zone of a container's extent (fraction from each side) where
+ *  a click exits the parent instead of diving into it. */
+const EDGE_ZONE = 0.25;
 
 const fractionOf = (clientX: number, el: Element): number => {
   const r = el.getBoundingClientRect();
@@ -108,15 +118,34 @@ export function caretFromHit(env: Envelope, hit: ClickHit, registry: NavRegistry
       const profile = registry[node.type] ?? { children: 'leaf' as const };
       if (profile.children === 'leaf') {
         const last = hit.path.length > 0 ? hit.path[hit.path.length - 1] : null;
-        caret =
-          typeof last === 'number'
-            ? // leaf in an args row: the seam directly before/after its cell
-              { kind: 'row', path: hit.path.slice(0, -1), index: last + (hit.fraction < 0.5 ? 0 : 1) }
-            : { kind: 'node', path: hit.path };
+        if (node.type === 'num' && typeof last === 'number') {
+          // a number in an args row: the nearest in-token boundary (character
+          // offset from the click x within the token's extent)
+          const len = tokenText(node).length;
+          const index = Math.max(0, Math.min(len, Math.round(hit.fraction * len)));
+          caret = { kind: 'token', path: hit.path, index };
+        } else {
+          caret =
+            typeof last === 'number'
+              ? // leaf in an args row: the seam directly before/after its cell
+                { kind: 'row', path: hit.path.slice(0, -1), index: last + (hit.fraction < 0.5 ? 0 : 1) }
+              : { kind: 'node', path: hit.path };
+        }
       } else {
-        // container: nearest end by click side (dive into the flow end)
+        // container: a click in the outer-edge zone exits the parent to the
+        // nearest legal station OUTSIDE it (click-to-exit, e.g. just right of
+        // a group's closing paren → the station after the group); the rest
+        // dives into the nearest flow end by click side.
+        const exit =
+          hit.fraction >= 1 - EDGE_ZONE
+            ? exitStation(env, hit.path, 'right', registry)
+            : hit.fraction <= EDGE_ZONE
+              ? exitStation(env, hit.path, 'left', registry)
+              : null;
         caret =
-          enterSide(env, hit.path, hit.fraction < 0.5 ? 'left' : 'right', registry) ?? { kind: 'node', path: hit.path };
+          (exit !== null && caretResolvesIn(env, exit) ? exit : null) ??
+          enterSide(env, hit.path, hit.fraction < 0.5 ? 'left' : 'right', registry) ??
+          { kind: 'node', path: hit.path };
       }
       break;
     }

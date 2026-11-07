@@ -63,6 +63,9 @@ function operatorPosition(env: Envelope, caret: Caret): SwapTarget | null {
   switch (caret.kind) {
     case 'empty':
     case 'slot':
+    case 'token':
+      // in-token positions are the typing surface's (typeAtToken), not an
+      // operator-adjacent station
       return null;
     case 'row': {
       const chain = nodeAt(env, caret.path);

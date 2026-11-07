@@ -1,0 +1,259 @@
+// In-token leaf caret (DOM-arc session 3, engine side): the `token` caret
+// variant inside number tokens only — validity (caretResolvesIn), Left/Right
+// character stepping with structural exits at the ends, vertical keys via the
+// owning structural station, splice/replace relocation interplay, and typing at
+// in-token positions (digit merge at the offset, structure-token split, snap).
+// Every intermediate state is pinned fromJSON-legal with a resolving caret.
+
+import { describe, expect, it } from 'vitest';
+
+import { fromJSON } from '../src/ast/serialize.js';
+
+import {
+  applyOp,
+  caretResolves,
+  caretResolvesIn,
+  decideSwap,
+  envelopeOf,
+  EngineError,
+  initSession,
+  resolveMove,
+  typeToken,
+  undo,
+  type Caret,
+  type EditingState,
+} from '../src/engine/index.js';
+
+const num = (value: number) => ({ type: 'num', value }) as const;
+const sym = (name: string) => ({ type: 'sym', name }) as const;
+const node = (path: readonly (number | string)[]): Caret => ({ kind: 'node', path });
+const row = (path: readonly (number | string)[], index: number): Caret => ({ kind: 'row', path, index });
+const token = (path: readonly (number | string)[], index: number): Caret => ({ kind: 'token', path, index });
+const j = (x: unknown): string => JSON.stringify(x);
+
+/** The engine-arc oracle pattern: the envelope re-parses through fromJSON and
+ *  the caret resolves in it. */
+function legal(state: EditingState): void {
+  const env = envelopeOf(state);
+  fromJSON(env);
+  expect(caretResolves(state.root, state.caret)).toBe(true);
+}
+
+/** Accepts a bare root node or a full envelope. */
+const wrap = (x: unknown): unknown =>
+  x !== null && typeof x === 'object' && !Array.isArray(x) && (x as { v?: unknown }).v === 1 ? x : { v: 1, root: x };
+const envOf = (seed: unknown) => envelopeOf(initSession(wrap(seed)));
+/** A session at a given caret without logging (movement/moveCaret placement). */
+const at = (seed: unknown, caret: Caret): EditingState => ({ ...initSession(wrap(seed)), caret });
+
+describe('token caret validity (caretResolvesIn)', () => {
+  const env = envOf(num(123));
+  it('accepts offsets 0..len on a num, rejects beyond / fractional / non-num / empty formula', () => {
+    expect(caretResolvesIn(env, token([], 0))).toBe(true);
+    expect(caretResolvesIn(env, token([], 3))).toBe(true);
+    expect(caretResolvesIn(env, token([], 4))).toBe(false);
+    expect(caretResolvesIn(env, token([], -1))).toBe(false);
+    expect(caretResolvesIn(env, token([], 1.5))).toBe(false);
+    expect(caretResolvesIn(envOf(sym('a')), token([], 0))).toBe(false);
+    expect(caretResolvesIn(envOf({ v: 1, root: null }), token([], 0))).toBe(false);
+    expect(caretResolvesIn(envOf({ v: 1, root: { type: 'frac', num: num(12), den: null } }), token(['num'], 2))).toBe(true);
+    expect(caretResolvesIn(envOf({ v: 1, root: { type: 'frac', num: num(12), den: null } }), token(['den'], 0))).toBe(false); // null slot
+  });
+});
+
+describe('in-token movement (resolveMove / move op)', () => {
+  it('Left/Right step one character inside a number; the ends exit to the adjacent structural stations', () => {
+    const env = envOf({ v: 1, root: { type: 'op', op: 'add', args: [sym('a'), num(123), sym('b')] } });
+    // stepping inside the token at cell 1
+    expect(resolveMove(env, token([1], 1), 'left')).toEqual(token([1], 0));
+    expect(resolveMove(env, token([1], 1), 'right')).toEqual(token([1], 2));
+    expect(resolveMove(env, token([1], 2), 'right')).toEqual(token([1], 3));
+    // exits: offset 0 + Left → the structural station left of the num (cell 0 dive); offset len + Right → cell 2
+    expect(resolveMove(env, token([1], 0), 'left')).toEqual(node([0]));
+    expect(resolveMove(env, token([1], 3), 'right')).toEqual(node([2]));
+    // structural positions are unchanged: the node caret on the num still climbs
+    expect(resolveMove(env, node([1]), 'left')).toEqual(node([0]));
+    expect(resolveMove(env, node([1]), 'right')).toEqual(node([2]));
+    // a lone root num: token ends have no exit (document edge)
+    const rootEnv = envOf(num(42));
+    expect(resolveMove(rootEnv, token([], 0), 'left')).toBe(null);
+    expect(resolveMove(rootEnv, token([], 2), 'right')).toBe(null);
+    expect(resolveMove(rootEnv, token([], 1), 'left')).toEqual(token([], 0));
+    expect(resolveMove(rootEnv, token([], 1), 'right')).toEqual(token([], 2));
+  });
+
+  it('vertical keys from an in-token position behave like the owning structural station', () => {
+    const env = envOf({ v: 1, root: { type: 'frac', num: num(12), den: num(3) } });
+    expect(resolveMove(env, token(['num'], 1), 'down')).toEqual(resolveMove(env, node(['num']), 'down'));
+    expect(resolveMove(env, token(['num'], 1), 'down')).toEqual(node(['den']));
+    expect(resolveMove(env, token(['den'], 0), 'up')).toEqual(node(['num']));
+    // pow: base up → exp (the raised-script edge)
+    const powEnv = envOf({ v: 1, root: { type: 'pow', base: num(2), exp: num(10) } });
+    expect(resolveMove(powEnv, token(['base'], 1), 'up')).toEqual(node(['exp']));
+    expect(resolveMove(powEnv, token(['exp'], 1), 'down')).toEqual(node(['base']));
+  });
+
+  it('the move op carries token carets, never logs, and no-target moves are the same state', () => {
+    let state = at({ v: 1, root: { type: 'op', op: 'add', args: [sym('a'), num(123), sym('b')] } }, token([1], 1));
+    const before = state;
+    state = applyOp(state, { op: 'move', dir: 'right' });
+    expect(state.caret).toEqual(token([1], 2));
+    expect(state.log).toBe(before.log); // movement never logs
+    legal(state);
+    const moved = applyOp(state, { op: 'move', dir: 'left' });
+    expect(moved.caret).toEqual(token([1], 1));
+    // exit at the end, then a no-op at the document edge returns the same object
+    let s2 = applyOp(moved, { op: 'move', dir: 'left' }); // token([1],0)
+    s2 = applyOp(s2, { op: 'move', dir: 'left' }); // exits to node([0])
+    expect(s2.caret).toEqual(node([0]));
+    const s3 = applyOp(at(num(5), token([], 0)), { op: 'move', dir: 'left' });
+    expect(s3.caret).toEqual(token([], 0));
+  });
+});
+
+describe('token caret interplay with the mechanical ops', () => {
+  it('row splices shift the token caret with its address; deleting the num falls back to the seam', () => {
+    let state = at({ v: 1, root: { type: 'op', op: 'add', args: [num(12), sym('b')] } }, token([0], 1));
+    state = applyOp(state, { op: 'insert', node: sym('z'), at: { at: 'row', path: [], index: 0 } });
+    expect(state.caret).toEqual(token([1], 1)); // shifted with the splice
+    legal(state);
+    state = applyOp(state, { op: 'deleteAt', at: { at: 'row', path: [], index: 1 } }); // delete the num cell
+    expect(state.caret).toEqual(row([], 1)); // fell back to the seam in the freed spot
+    legal(state);
+  });
+
+  it('replacing the num keeps the in-token offset; a longer replacement advances the caret one (merge), a shorter keeps it (peel)', () => {
+    // grow: 12 → 132 (caret at offset 1 advances to 2)
+    let state = at(num(12), token([], 1));
+    state = applyOp(state, { op: 'insert', node: num(132), at: { at: 'replaceRoot' } });
+    expect(state.caret).toEqual(token([], 2));
+    legal(state);
+    // shrink: 132 → 13 (caret at offset 2 keeps its offset, clamped to len 2)
+    state = applyOp(state, { op: 'insert', node: num(13), at: { at: 'replaceRoot' } });
+    expect(state.caret).toEqual(token([], 2));
+    // shrink below the offset clamps
+    state = at(num(132), token([], 3));
+    state = applyOp(state, { op: 'insert', node: num(1), at: { at: 'replaceRoot' } });
+    expect(state.caret).toEqual(token([], 1));
+    legal(state);
+    // a non-num replacement dives (the token position does not survive a structural replace)
+    state = applyOp(at(num(12), token([], 1)), {
+      op: 'insert',
+      node: { type: 'op', op: 'add', args: [num(1), null] },
+      at: { at: 'replaceRoot' },
+    });
+    expect(state.caret).toEqual(row([], 1)); // dive to the wrapper's first empty cell
+    legal(state);
+  });
+});
+
+describe('typing at in-token positions (Task 5)', () => {
+  it('a digit merges into the number at the offset — one op, one log entry, caret advances in-token', () => {
+    // offset len (append): 12 + '3' → 123
+    let state = at(num(12), token([], 2));
+    state = typeToken(state, { t: 'leaf', node: num(3) });
+    expect(j(envelopeOf(state).root)).toBe(j(num(123)));
+    expect(state.caret).toEqual(token([], 3));
+    expect(state.log.length).toBe(1);
+    legal(state);
+    // interior: 123 + '9' at offset 1 → 1923, caret token offset 2
+    state = typeToken(at(num(123), token([], 1)), { t: 'leaf', node: num(9) });
+    expect(j(envelopeOf(state).root)).toBe(j(num(1923)));
+    expect(state.caret).toEqual(token([], 2));
+    legal(state);
+    // offset 0 (prepend): 12 + '3' → 312, caret offset 1
+    state = typeToken(at(num(12), token([], 0)), { t: 'leaf', node: num(3) });
+    expect(j(envelopeOf(state).root)).toBe(j(num(312)));
+    expect(state.caret).toEqual(token([], 1));
+    legal(state);
+    // inside a row cell
+    state = typeToken(at({ v: 1, root: { type: 'op', op: 'add', args: [sym('a'), num(12)] } }, token([1], 1)), {
+      t: 'leaf',
+      node: num(5),
+    });
+    expect(j(envelopeOf(state).root)).toBe(j({ type: 'op', op: 'add', args: [sym('a'), num(152)] }));
+    expect(state.caret).toEqual(token([1], 2));
+    expect(state.log.length).toBe(1);
+    legal(state);
+  });
+
+  it('a structure token at an interior offset splits the number: left half = attach context, right half after — one op', () => {
+    // 12|3 + '+' → 12+3
+    let state = typeToken(at(num(123), token([], 2)), { t: 'operator', fn: 'add' });
+    expect(j(envelopeOf(state).root)).toBe(j({ type: 'op', op: 'add', args: [num(12), num(3)] }));
+    expect(state.caret).toEqual(node([])); // natural-continue (the replace's dive; the wrapper is full)
+    expect(state.log.length).toBe(1);
+    legal(state);
+    // 1|23 + '/' → frac(1, 23)
+    state = typeToken(at(num(123), token([], 1)), { t: 'divide' });
+    expect(j(envelopeOf(state).root)).toBe(j({ type: 'frac', num: num(1), den: num(23) }));
+    legal(state);
+    // 12|3 + '^' → pow(12, 3)
+    state = typeToken(at(num(123), token([], 2)), { t: 'pow' });
+    expect(j(envelopeOf(state).root)).toBe(j({ type: 'pow', base: num(12), exp: num(3) }));
+    legal(state);
+    // split inside a row cell: a + 12|3 with '*' nests in the right operand: a + 12*3
+    state = typeToken(at({ v: 1, root: { type: 'op', op: 'add', args: [sym('a'), num(123)] } }, token([1], 2)), {
+      t: 'operator',
+      fn: 'multiply',
+    });
+    expect(j(envelopeOf(state).root)).toBe(
+      j({ type: 'op', op: 'add', args: [sym('a'), { type: 'op', op: 'multiply', args: [num(12), num(3)] }] }),
+    );
+    expect(state.log.length).toBe(1);
+    legal(state);
+    // same-op chain extends: a + 1|23 with '+' → a + 1 + 23 (one flat chain)
+    state = typeToken(at({ v: 1, root: { type: 'op', op: 'add', args: [sym('a'), num(123)] } }, token([1], 1)), {
+      t: 'operator',
+      fn: 'add',
+    });
+    expect(j(envelopeOf(state).root)).toBe(j({ type: 'op', op: 'add', args: [sym('a'), num(1), num(23)] }));
+    expect(state.log.length).toBe(1);
+    legal(state);
+  });
+
+  it('boundary offsets 0/len degenerate to the existing (node-caret) policy — no split', () => {
+    // offset len: '+' wraps the whole number
+    let state = typeToken(at(num(123), token([], 3)), { t: 'operator', fn: 'add' });
+    expect(j(envelopeOf(state).root)).toBe(j({ type: 'op', op: 'add', args: [num(123), null] }));
+    expect(state.caret).toEqual(row([], 1));
+    legal(state);
+    // offset 0: same existing behavior
+    state = typeToken(at(num(123), token([], 0)), { t: 'operator', fn: 'add' });
+    expect(j(envelopeOf(state).root)).toBe(j({ type: 'op', op: 'add', args: [num(123), null] }));
+    legal(state);
+  });
+
+  it('snap: letters / group tokens / swap-owned interior positions apply the existing policy unchanged', () => {
+    // a letter at an in-token position: snaps to the owning station → leaf at a hold → typed rejection
+    expect(() => typeToken(at(num(12), token([], 1)), { t: 'leaf', node: sym('x') })).toThrowError(EngineError);
+    expect(() => typeToken(at(num(12), token([], 1)), { t: 'leaf', node: sym('x') })).toThrowError(
+      /operand-expected position/,
+    );
+    // groupOpen at an interior offset: snaps → wraps the WHOLE number (no split)
+    const g = typeToken(at(num(123), token([], 1)), { t: 'groupOpen' });
+    expect(j(envelopeOf(g).root)).toBe(j({ type: 'group', parens: 'always', child: num(123) }));
+    legal(g);
+    // mid-row num (a swap position): interior '*' snaps → the swap re-folds the whole num, no split
+    const env = { v: 1, root: { type: 'op', op: 'add', args: [num(123), sym('b')] } };
+    expect(decideSwap(envelopeOf(at(env, node([0]))), node([0]), { t: 'operator', fn: 'multiply' })).not.toBeNull();
+    const s = typeToken(at(env, token([0], 1)), { t: 'operator', fn: 'multiply' });
+    expect(j(envelopeOf(s).root)).toBe(j({ type: 'op', op: 'multiply', args: [num(123), sym('b')] }));
+    expect(s.log.length).toBe(1);
+    legal(s);
+  });
+
+  it('typing sequences through in-token positions stay legal and undo byte-exactly', () => {
+    let state = at(num(1), token([], 1));
+    state = typeToken(state, { t: 'leaf', node: num(2) }); // 12
+    legal(state);
+    state = typeToken(state, { t: 'leaf', node: num(3) }); // 123
+    legal(state);
+    expect(j(envelopeOf(state).root)).toBe(j(num(123)));
+    expect(state.caret).toEqual(token([], 3));
+    const undone = undo(state);
+    expect(j(envelopeOf(undone).root)).toBe(j(num(12)));
+    expect(undone.caret).toEqual(token([], 2));
+    legal(undone);
+  });
+});

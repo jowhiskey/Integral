@@ -1,7 +1,8 @@
 // Caret overlay — browser-only. The caret is NEVER inside the MathML: an
 // absolutely-positioned blinking div over the editor container, anchored from
-// getBoundingClientRect() of the UID-mapped elements (Range rects are reserved for
-// in-token positions, a later session).
+// getBoundingClientRect() of the UID-mapped elements. In-token positions
+// interpolate linearly over the number's extent rect (per-glyph Range rects
+// remain a possible refinement).
 //
 // Anchor per caret kind (all coordinates in the same space as the rects, i.e.
 // page/client coordinates; updateCaretOverlay re-bases them onto the container):
@@ -11,10 +12,12 @@
 // - row, index < n → left edge of cell index's extent (or its □ placeholder).
 // - row, index = n → right edge of the last cell's extent (row owner's left edge
 //                    when the row is empty).
+// - token, index  → the character boundary inside the number's extent
+//                    (left edge + index/len of the width).
 
 import type { Envelope } from '../ast/json.js';
 
-import { isRowNode, nodeAt, rowArgs, type Caret, type Path } from '../engine/caret.js';
+import { isRowNode, nodeAt, rowArgs, tokenText, type Caret, type Path } from '../engine/caret.js';
 
 import { caretKey, pathKey, type RenderedMath } from './mathml-dom.js';
 
@@ -90,6 +93,19 @@ export function caretAnchor(env: Envelope, caret: Caret, rendered: RenderedMath)
       }
       const r = extentRect(rendered, [...caret.path, args.length - 1]);
       return r === null ? null : { x: r.right, y: r.top, height: r.height };
+    }
+    case 'token': {
+      // in-token: the character boundary within the number's extent, linearly
+      // interpolated over the token rect (glyph metrics are reserved for a
+      // later session; the extent is the stubbed-rect-testable anchor)
+      const node = nodeAt(env, caret.path);
+      if (node === null || node.type !== 'num') return null;
+      const len = tokenText(node).length;
+      if (!Number.isInteger(caret.index) || caret.index < 0 || caret.index > len) return null;
+      const r = extentRect(rendered, caret.path);
+      if (r === null) return null;
+      const x = len === 0 ? r.left : r.left + (caret.index / len) * (r.right - r.left);
+      return { x, y: r.top, height: r.height };
     }
   }
 }

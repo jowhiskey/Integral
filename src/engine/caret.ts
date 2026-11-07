@@ -44,12 +44,23 @@ const SLOTS: Readonly<Record<NodeJson['type'], readonly SlotName[]>> = {
  *               (args.length = after the last arg). A null entry in a row is
  *               not addressed by this — it is an empty slot like any other,
  *               addressed structurally by index when an op targets it.
+ * - `token`   — inside a number token only: on the num node at `path`, at
+ *               character offset `index` (0..len of the rendered text
+ *               String(value)). Identifiers, units, and function names stay
+ *               atomic — no in-token positions for them.
  */
 export type Caret =
   | { readonly kind: 'empty' }
   | { readonly kind: 'node'; readonly path: Path }
   | { readonly kind: 'slot'; readonly path: Path; readonly slot: SlotName }
-  | { readonly kind: 'row'; readonly path: Path; readonly index: number };
+  | { readonly kind: 'row'; readonly path: Path; readonly index: number }
+  | { readonly kind: 'token'; readonly path: Path; readonly index: number };
+
+/** The rendered text of a number token (what the editor shows and what the
+ *  in-token offset addresses). */
+export function tokenText(node: NodeJson): string {
+  return node.type === 'num' ? String(node.value) : '';
+}
 
 // ——— Refs: where content sits or will land (the envelope-level analog of a
 // caret, used by the policy layers to address insertion/swap targets) ———
@@ -162,6 +173,11 @@ export function caretResolvesIn(env: Envelope, caret: Caret): boolean {
       if (!Array.isArray(args)) return false;
       return caret.index >= 0 && caret.index <= args.length;
     }
+    case 'token': {
+      const node = nodeAt(env, caret.path);
+      if (node === null || node.type !== 'num') return false;
+      return Number.isInteger(caret.index) && caret.index >= 0 && caret.index <= tokenText(node).length;
+    }
   }
 }
 
@@ -189,6 +205,7 @@ export function entryPath(caret: Caret): Path {
     case 'node':
     case 'slot':
     case 'row':
+    case 'token':
       return caret.path;
   }
 }
@@ -208,7 +225,8 @@ function withStep(caret: Caret, depth: number, step: number): Caret {
       throw new Error('engine: empty caret cannot pass through a row');
     case 'node':
     case 'slot':
-    case 'row': {
+    case 'row':
+    case 'token': {
       const path = [...caret.path];
       path[depth] = step;
       return { ...caret, path };

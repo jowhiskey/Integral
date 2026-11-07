@@ -3,7 +3,8 @@
   // envelopes through fromJSON, including incomplete trees) so every caret
   // situation is reachable by clicking. Dev-only — not part of the published
   // package. Click a formula to focus it, then type / use arrow keys (vertical
-  // memory included) / Ctrl+Z / Ctrl+Y.
+  // memory included) / Backspace (peel, placeholders, structure death; Ctrl for
+  // whole-node) / Ctrl+Z / Ctrl+Y.
   import { onMount } from 'svelte';
   import { EditorController, IntegralEditor } from '../src/editor/index.js';
   import type { Caret, Envelope, NodeJson } from '../src/engine/index.js';
@@ -98,6 +99,21 @@
           type: 'frac',
           num: { type: 'op', op: 'add', args: [sym('x'), sym('y')] },
           den: { type: 'op', op: 'add', args: [sym('c'), sym('d')] },
+        },
+      },
+    },
+    {
+      label: '12/3 — backspace peel live check (Backspace peels digits → □ placeholders → structure death; Ctrl+Backspace deletes whole nodes)',
+      envelope: { v: 1, root: { type: 'frac', num: num(12), den: num(3) } },
+    },
+    {
+      label: '12+x over 3+y — vertical ping-pong with in-token carets (click into 12 or 3, Down/Up retraces the in-token index)',
+      envelope: {
+        v: 1,
+        root: {
+          type: 'frac',
+          num: { type: 'op', op: 'add', args: [num(12), sym('x')] },
+          den: { type: 'op', op: 'add', args: [num(3), sym('y')] },
         },
       },
     },

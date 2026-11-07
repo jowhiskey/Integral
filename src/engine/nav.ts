@@ -26,6 +26,7 @@ import {
   nodeAt,
   rowArgs,
   slotValue,
+  tokenText,
   type Caret,
   type Path,
   type SlotName,
@@ -262,6 +263,19 @@ function climb(env: Envelope, path: Path, dir: NavDir, registry: NavRegistry): C
 //            empty the caret sits IN it and moves past it); up/down climbs
 //            the row as a whole.
 
+/** The station directly OUTSIDE the node at `path` on side `dir` — the climb
+ *  the node's own station hands the direction to (the click-to-exit target:
+ *  e.g. just right of a group's closing paren = the station after the group).
+ *  Null at the document edge. */
+export function exitStation(
+  env: Envelope,
+  path: Path,
+  dir: NavDir,
+  registry: NavRegistry = NAV_PROFILES,
+): Caret | null {
+  return climb(env, path, dir, registry);
+}
+
 /**
  * Resolve one relative movement against an envelope. Returns the target
  * caret, or null when the movement has no target (a defined no-op). Pure:
@@ -321,6 +335,28 @@ export function resolveMove(
       return args[prev] === null
         ? { kind: 'row', path: caret.path, index: prev }
         : deepest(env, [...caret.path, prev], registry, 'right');
+    }
+
+    case 'token': {
+      // Inside a number token (numbers only — every other leaf stays atomic).
+      // Left/Right step one character; at the ends they exit to the adjacent
+      // structural stations (the climb the node caret would do). Vertical keys
+      // behave like the number's owning structural station for the move itself.
+      const node = nodeAt(env, caret.path);
+      if (node === null || node.type !== 'num') return null;
+      const len = tokenText(node).length;
+      if (!Number.isInteger(caret.index) || caret.index < 0 || caret.index > len) return null;
+      if (dir === 'left') {
+        return caret.index > 0
+          ? { kind: 'token', path: caret.path, index: caret.index - 1 }
+          : climb(env, caret.path, 'left', registry);
+      }
+      if (dir === 'right') {
+        return caret.index < len
+          ? { kind: 'token', path: caret.path, index: caret.index + 1 }
+          : climb(env, caret.path, 'right', registry);
+      }
+      return climb(env, caret.path, dir, registry);
     }
   }
 }

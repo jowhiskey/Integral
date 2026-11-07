@@ -1,88 +1,110 @@
-// Vertical positional memory (editor-layer state, pure, never logged) — the
-// keyboard-layer replacement for pixel x-conservation. At most one entry per
-// AST node: entry[node the caret resolves in] = { originCaret, pressed
-// direction }. Recorded when a vertical key press structurally LEAVES a node
-// (overwritten on each leaving); it FIRES when a vertical key press would
-// structurally ENTER a node holding an opposite-direction entry — the caret
-// jumps to the recorded origin instead of applying the structural move
-// (jump-back wins). Entries persist after firing (idempotent retrace) until
-// overwritten or cleared. ArrowLeft/Right delete only the entry of the node
-// the caret is currently in; typed ops, undo, redo and click placement clear
-// the whole map (the controller does that — this module stays pure).
+// Vertical positional memory V2 (editor-layer state, pure, never logged) —
+// the keyboard-layer replacement for pixel x-conservation. Supersedes the
+// session-2 model entirely: no directions, no jump-back firing, no fire rules,
+// and NO clearing of any kind — typed ops, undo, redo, clicks, backspace never
+// clear anything.
 //
-// The map is keyed by AST nodes of the session's current envelope — never DOM
-// elements — so it is immune to full rebuilds by construction; tree-changing
-// actions clear it wholesale anyway, so keys can never go stale across trees.
+// For every parent with vertically aligned children (per the nav profiles'
+// vertical edges — frac num/den, pow base/exp, root radicand/index, …) the
+// memory keeps ONE stored caret position per child region, keyed by
+// (parent path, slot) — path-keyed, never DOM, so it is immune to the
+// controller's full rebuilds:
+//   - WRITE: a vertical keypress that is about to move the caret OUT of a
+//     region stores the current position (in-token index included) in that
+//     region's entry. A vertical press that no-ops writes nothing.
+//   - READ: a vertical keypress ARRIVING in a region uses the stored position
+//     when it still resolves in the current tree (caretResolvesIn-validated);
+//     stored wins over the structural default whenever it resolves. A stored
+//     position that no longer resolves is discarded and the structural
+//     default is used — nothing is ever proactively cleared.
+// Ping-pong is symmetric by construction (the return trip leaves the other
+// region, storing its spot); horizontal movement never disturbs any store;
+// deep origins fire (the store is region-level, so a leaf deep inside a
+// numerator region retraces to itself). Clicks write no entries.
 
 import type { Envelope, NodeJson } from '../ast/json.js';
 
-import { caretResolvesIn, nodeAt, resolveMove, type Caret, type NavDir } from '../engine/index.js';
+import {
+  NAV_PROFILES,
+  caretResolvesIn,
+  nodeAt,
+  resolveMove,
+  type Caret,
+  type NavDir,
+  type NavRegistry,
+  type Path,
+  type SlotName,
+} from '../engine/index.js';
 
-export interface VerticalMemoryEntry {
-  readonly originCaret: Caret;
-  readonly direction: NavDir;
+/** One child region of a vertically aligned parent: the parent's path + slot. */
+export interface MemoryRegion {
+  readonly parentPath: Path;
+  readonly slot: SlotName;
 }
 
-/** The memory map (owned by the controller; the helpers here are pure and
- *  return fresh maps). */
-export type VerticalMemory = Map<NodeJson, VerticalMemoryEntry>;
+/** Stable map key for a region (paths are JSON arrays; rebuild-immune). */
+export const regionKey = (region: MemoryRegion): string => `${JSON.stringify(region.parentPath)}/${region.slot}`;
 
-/** The node a caret resolves in: a row caret — and a node caret sitting on a
- *  row cell — resolves in the row; a slot caret resolves in its owner; any
- *  other node caret resolves in the node itself. Null for the empty-formula
- *  caret. */
-export function memoryNode(env: Envelope, caret: Caret): NodeJson | null {
+/** The memory map (owned by the controller; the helpers here are pure and
+ *  return fresh maps): region key → stored caret position. */
+export type VerticalMemory = Map<string, Caret>;
+
+/** True iff the owner's nav profile has a vertical edge FROM `slot` (the
+ *  slot is one of the parent's vertically aligned regions). */
+function hasVerticalEdge(registry: NavRegistry, owner: NodeJson, slot: SlotName): boolean {
+  const profile = registry[owner.type];
+  return (profile?.vertical ?? []).some((edge) => edge.from === slot);
+}
+
+/** The region the caret sits in: the deepest slot-entry on the caret's path
+ *  whose parent has a vertical edge from that slot. Slot carets address their
+ *  region directly; row/node/token carets scan their path from the end.
+ *  Null for the empty-formula caret and for positions outside any vertically
+ *  aligned region (group children, unit values, row seams, the root itself). */
+export function regionOf(env: Envelope, caret: Caret, registry: NavRegistry = NAV_PROFILES): MemoryRegion | null {
   if (caret.kind === 'empty') return null;
-  const p = caret.path;
-  if (caret.kind === 'node' && p.length > 0 && typeof p[p.length - 1] === 'number') {
-    return nodeAt(env, p.slice(0, -1));
+  const path: readonly (number | SlotName)[] =
+    caret.kind === 'slot' ? [...caret.path, caret.slot] : caret.path;
+  for (let k = path.length - 1; k >= 0; k--) {
+    const step = path[k];
+    if (typeof step !== 'string') continue;
+    const parent = nodeAt(env, path.slice(0, k) as Path);
+    if (parent !== null && hasVerticalEdge(registry, parent, step)) {
+      return { parentPath: path.slice(0, k) as Path, slot: step };
+    }
   }
-  return nodeAt(env, p);
+  return null;
 }
 
 const sameCaret = (a: Caret, b: Caret): boolean => JSON.stringify(a) === JSON.stringify(b);
 
-const isOpposite = (a: NavDir, b: NavDir): boolean => (a === 'up' && b === 'down') || (a === 'down' && b === 'up');
-
 export interface VerticalKeyResult {
   readonly caret: Caret;
   readonly mem: VerticalMemory;
+  /** True when the arrival region's stored position won over the structural target. */
   readonly fired: boolean;
 }
 
 /** One vertical key press, resolved purely (nothing applied, nothing logged):
- *  the structural move target is computed first; if the target's node holds
- *  an opposite-direction entry whose origin caret still resolves, the
- *  jump-back wins (`fired`: the origin caret is returned, the entry persists,
- *  nothing is recorded). A dangling entry (origin no longer resolves) is
- *  discarded and the structural move is used. Otherwise the structural target
- *  is returned and the before-node's entry is set/overwritten with
- *  { originCaret: the caret before the move, pressed direction }. A press with
- *  no move target changes nothing. */
+ *  the structural move target is computed first; a press with no target (or
+ *  a target equal to the caret) is a no-op and writes nothing. Otherwise the
+ *  region being left stores the current caret, and the arrival region's stored
+ *  caret wins when it still resolves in this tree (a dangling store is
+ *  discarded and the structural target is used). */
 export function applyVerticalKey(env: Envelope, caret: Caret, dir: NavDir, mem: VerticalMemory): VerticalKeyResult {
   const target = resolveMove(env, caret, dir);
   if (target === null || sameCaret(target, caret)) return { caret, mem, fired: false };
   const next: VerticalMemory = new Map(mem);
-  const tKey = memoryNode(env, target);
-  if (tKey !== null) {
-    const entry = next.get(tKey);
-    if (entry !== undefined && isOpposite(dir, entry.direction)) {
-      if (caretResolvesIn(env, entry.originCaret)) {
-        return { caret: entry.originCaret, mem: next, fired: true };
-      }
-      next.delete(tKey); // dangling entry: discard, use the structural move
+  const from = regionOf(env, caret);
+  if (from !== null) next.set(regionKey(from), caret);
+  const to = regionOf(env, target);
+  if (to !== null && (from === null || regionKey(to) !== regionKey(from))) {
+    const key = regionKey(to);
+    const entry = next.get(key);
+    if (entry !== undefined) {
+      if (caretResolvesIn(env, entry)) return { caret: entry, mem: next, fired: true };
+      next.delete(key); // dangling store: discard, structural default wins
     }
   }
-  const bKey = memoryNode(env, caret);
-  if (bKey !== null) next.set(bKey, { originCaret: caret, direction: dir });
   return { caret: target, mem: next, fired: false };
-}
-
-/** A horizontal key press deletes ONLY the entry for the node the caret is
- *  currently in (pure: returns a fresh map; all other entries survive). */
-export function clearCurrentNode(env: Envelope, caret: Caret, mem: VerticalMemory): VerticalMemory {
-  const next: VerticalMemory = new Map(mem);
-  const key = memoryNode(env, caret);
-  if (key !== null) next.delete(key);
-  return next;
 }

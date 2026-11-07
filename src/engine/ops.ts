@@ -28,6 +28,7 @@ import {
   setSlot,
   slotValue,
   slotsOf,
+  tokenText,
   type Caret,
   type Path,
   type SlotName,
@@ -271,7 +272,7 @@ function applyMutating<T extends InsertOp | DeleteAtOp | SwapOp>(
   const env = cloneEnvelope(before);
   transform(env, op);
   const root = fromJSON(env, state.vocabulary);
-  const caret = relocateCaret(state.caret, op, env);
+  const caret = relocateCaret(state.caret, op, env, before);
   if (!caretResolvesIn(env, caret)) {
     // unreachable: the relocation rules cover every removal/shift case
     throw new Error('engine invariant: caret normalization failed');
@@ -483,6 +484,29 @@ function diveCaret(inserted: NodeJson, path: Path): Caret {
     : { kind: 'row', path, index: empty.index };
 }
 
+/** A token caret sitting exactly on a replaced number keeps its in-token
+ *  offset, clamped to the new length — a shrink (backspace peel) keeps the
+ *  offset, a grow (digit merge) advances the caret one position past the
+ *  inserted text. Returns null when the rule does not apply (the replace
+ *  relocates by the dive rule instead). */
+function preservedTokenCaret(
+  caretBefore: Caret,
+  replacedPath: Path,
+  op: InsertOp,
+  before: Envelope,
+): Caret | null {
+  if (caretBefore.kind !== 'token' || !samePath(caretBefore.path, replacedPath)) return null;
+  if (op.node.type !== 'num') return null;
+  const beforeNode = nodeAt(before, caretBefore.path);
+  if (beforeNode === null || beforeNode.type !== 'num') return null;
+  const newLen = tokenText(op.node).length;
+  const index =
+    newLen > tokenText(beforeNode).length
+      ? Math.min(caretBefore.index + 1, newLen)
+      : Math.min(caretBefore.index, newLen);
+  return { kind: 'token', path: replacedPath, index };
+}
+
 /**
  * After an op the caret is always in a defined state. Rules:
  * - insert at root          → the new node (root path).
@@ -520,7 +544,12 @@ function diveCaret(inserted: NodeJson, path: Path): Caret {
  * The final validity check happens in applyMutating — a relocation rule that
  * produced an unresolvable caret is an engine bug, not an accepted state.
  */
-function relocateCaret(caretBefore: Caret, op: InsertOp | DeleteAtOp | SwapOp, env: Envelope): Caret {
+function relocateCaret(
+  caretBefore: Caret,
+  op: InsertOp | DeleteAtOp | SwapOp,
+  env: Envelope,
+  before: Envelope,
+): Caret {
   if (op.op === 'swap') {
     // The swap's own relocation: the junction caret the policy derived from
     // the re-folded shape (row seam on the changed operator, or the natural
@@ -558,21 +587,27 @@ function relocateCaret(caretBefore: Caret, op: InsertOp | DeleteAtOp | SwapOp, e
       if (op.op !== 'insert') {
         throw new EngineError('unknown-op', `deleteAt: position '${at.at}' is insert-only`);
       }
-      return diveCaret(op.node, []);
+      return preservedTokenCaret(caretBefore, [], op, before) ?? diveCaret(op.node, []);
     }
     case 'replaceSlot':
       if (op.op !== 'insert') {
         throw new EngineError('unknown-op', `deleteAt: position '${at.at}' is insert-only`);
       }
-      return enteredThrough(caretBefore, at.path, at.slot)
-        ? diveCaret(op.node, [...at.path, at.slot])
-        : caretBefore;
+      return (
+        preservedTokenCaret(caretBefore, [...at.path, at.slot], op, before) ??
+        (enteredThrough(caretBefore, at.path, at.slot)
+          ? diveCaret(op.node, [...at.path, at.slot])
+          : caretBefore)
+      );
     case 'replaceCell':
       if (op.op !== 'insert') {
         throw new EngineError('unknown-op', `deleteAt: position '${at.at}' is insert-only`);
       }
-      return enteredThroughCell(caretBefore, at.path, at.index)
-        ? diveCaret(op.node, [...at.path, at.index])
-        : caretBefore;
+      return (
+        preservedTokenCaret(caretBefore, [...at.path, at.index], op, before) ??
+        (enteredThroughCell(caretBefore, at.path, at.index)
+          ? diveCaret(op.node, [...at.path, at.index])
+          : caretBefore)
+      );
   }
 }

@@ -14,9 +14,7 @@ import { EditorController } from '../src/editor/controller.js';
 import { classifyKey, KEYMAP } from '../src/editor/keys.js';
 import {
   applyVerticalKey,
-  clearCurrentNode,
-  memoryNode,
-  type VerticalMemory,
+  regionKey,
 } from '../src/editor/vertical-memory.js';
 
 afterEach(() => vi.restoreAllMocks());
@@ -205,120 +203,125 @@ describe('arrows', () => {
   });
 });
 
-describe('vertical positional memory', () => {
-  it('(a) owner scenario: pinned leaf in a frac num — Down, Left, Left, Up jumps back byte-equal (not the structural up)', () => {
+describe('vertical positional memory V2 (session 3 rewrite)', () => {
+  it('(a) owner scenario: pinned leaf in a frac num — Down stores the num spot, Left/Left don’t touch the memory, Up arrives at the stored num spot', () => {
     const { controller, container } = make(FRAC_ROWS);
     const start = node(['num', 0]);
     controller.placeCaret(start);
     container.focus();
 
     press(container, 'ArrowDown');
-    expect(j(controller.getState().caret)).toBe(j(node(['den']))); // moved into the den
-    expect(controller.getVerticalMemory().size).toBe(1); // recorded on the num row
+    expect(j(controller.getState().caret)).toBe(j(node(['den']))); // structural first arrival (no den store yet)
+    expect(controller.getVerticalMemory().size).toBe(1); // the num region stored the origin
     press(container, 'ArrowLeft');
     expect(j(controller.getState().caret)).toBe(j(node(['den', 1])));
     press(container, 'ArrowLeft');
     expect(j(controller.getState().caret)).toBe(j(node(['den', 0])));
-    expect(controller.getVerticalMemory().size).toBe(1); // the horizontal keys cleared only den-side entries
-    press(container, 'ArrowUp');
-    // jump-back: byte-equal to the original num position — the structural up would have been node(["num"])
+    expect(controller.getVerticalMemory().size).toBe(1); // horizontal keys never disturb any store
+    press(container, 'ArrowUp'); // arriving in the num region: the stored spot wins
     expect(j(controller.getState().caret)).toBe(j(start));
-    expect(j(controller.getState().caret)).not.toBe(j(node(['num'])));
     expect(controller.getState().log.length).toBe(0); // movement never logs
   });
 
-  it('(b) nested retrace: Down through two vertical levels, Up, Up returns through both recorded origins', () => {
+  it('(b) symmetric ping-pong: the return trip leaves the den and stores the den spot, so Down again retraces to it', () => {
+    const { controller, container } = make(FRAC_ROWS);
+    controller.placeCaret(node(['num', 0]));
+    container.focus();
+    press(container, 'ArrowDown'); // → den (structural), stores num spot
+    press(container, 'ArrowLeft');
+    press(container, 'ArrowLeft'); // → node(['den',0])
+    press(container, 'ArrowUp'); // → stored num spot node(['num',0])
+    expect(j(controller.getState().caret)).toBe(j(node(['num', 0])));
+    press(container, 'ArrowDown'); // leaves num (re-stores it), arrives den → stored den spot fires
+    expect(j(controller.getState().caret)).toBe(j(node(['den', 0])));
+    expect(controller.getState().log.length).toBe(0);
+  });
+
+  it('(c) nested regions store independently: inner-level retrace and outer-level ping-pong both fire', () => {
     const env = {
       v: 1,
-      root: { type: 'frac', num: { type: 'frac', num: sym('a'), den: null }, den: sym('b') },
+      root: {
+        type: 'frac',
+        num: { type: 'frac', num: sym('a'), den: sym('b') },
+        den: sym('c'),
+      },
     };
     const { controller, container } = make(env);
     const start = node(['num', 'num']);
     controller.placeCaret(start);
     container.focus();
 
-    press(container, 'ArrowDown'); // num → den (empty): slot caret in the inner den
-    expect(j(controller.getState().caret)).toBe(j({ kind: 'slot', path: ['num'], slot: 'den' }));
-    press(container, 'ArrowDown'); // inner den → outer den
-    expect(j(controller.getState().caret)).toBe(j(node(['den'])));
-    expect(controller.getVerticalMemory().size).toBe(2); // two recorded origins, two distinct nodes
-    press(container, 'ArrowUp'); // fires: back to the inner-den origin
-    expect(j(controller.getState().caret)).toBe(j({ kind: 'slot', path: ['num'], slot: 'den' }));
-    press(container, 'ArrowUp'); // fires again: back to the exact start
+    press(container, 'ArrowDown'); // inner num → inner den (structural first arrival); stores inner-num
+    expect(j(controller.getState().caret)).toBe(j(node(['num', 'den'])));
+    press(container, 'ArrowUp'); // arrives inner-num region → its store fires
     expect(j(controller.getState().caret)).toBe(j(start));
+    press(container, 'ArrowDown'); // again into the inner den
+    expect(j(controller.getState().caret)).toBe(j(node(['num', 'den'])));
+    press(container, 'ArrowDown'); // inner den → outer den (stores inner-den)
+    expect(j(controller.getState().caret)).toBe(j(node(['den'])));
+    press(container, 'ArrowUp'); // outer num region has no store yet → structural; stores outer-den
+    expect(j(controller.getState().caret)).toBe(j(node(['num'])));
+    press(container, 'ArrowDown'); // arrives outer-den region → its store fires
+    expect(j(controller.getState().caret)).toBe(j(node(['den'])));
+    press(container, 'ArrowUp'); // arrives outer-num region → stored on the way down → fires
+    expect(j(controller.getState().caret)).toBe(j(node(['num'])));
     expect(controller.getState().log.length).toBe(0);
   });
 
-  it('(c) a horizontal key inside the origin node clears only that entry (pure) — and the integration flow shows it', () => {
-    // pure: clearCurrentNode deletes ONLY the current node's entry
-    const env = toJSON(initSession(FRAC_ROWS).root);
-    const numRowKey = memoryNode(env, node(['num', 0]));
-    const denRowKey = memoryNode(env, node(['den', 0]));
-    expect(numRowKey).not.toBeNull();
-    expect(denRowKey).not.toBeNull();
-    expect(numRowKey).not.toBe(denRowKey);
-    const mem: VerticalMemory = new Map([
-      [numRowKey!, { originCaret: node(['num', 0]), direction: 'down' }],
-      [denRowKey!, { originCaret: node(['den', 0]), direction: 'up' }],
-    ]);
-    const cleared = clearCurrentNode(env, node(['num', 0]), mem);
-    expect(cleared.has(numRowKey!)).toBe(false);
-    expect(cleared.has(denRowKey!)).toBe(true); // everything else survives
-    expect(mem.has(numRowKey!)).toBe(true); // original map untouched (pure)
-
-    // integration: after the jump-back, a Left inside the origin node empties the map
-    const { controller, container } = make(FRAC_ROWS);
-    controller.placeCaret(row(['num'], 1));
+  it('(d) in-token indexes are recorded: a vertical round trip retraces the exact in-token caret', () => {
+    const env = {
+      v: 1,
+      root: {
+        type: 'frac',
+        num: { type: 'op', op: 'add', args: [num(12), sym('x')] },
+        den: { type: 'op', op: 'add', args: [num(3), sym('y')] },
+      },
+    };
+    const { controller, container } = make(env);
+    const start: Caret = { kind: 'token', path: ['num', 0], index: 1 };
+    controller.placeCaret(start);
     container.focus();
-    press(container, 'ArrowDown'); // record on the num row
-    expect(controller.getVerticalMemory().size).toBe(1);
-    press(container, 'ArrowUp'); // fires: jump-back to the seam pin
-    expect(j(controller.getState().caret)).toBe(j(row(['num'], 1)));
-    expect(controller.getVerticalMemory().size).toBe(1); // entries persist after firing
-    press(container, 'ArrowLeft'); // horizontal key inside the origin node
-    expect(controller.getVerticalMemory().size).toBe(0); // its entry is cleared
-    expect(j(controller.getState().caret)).toBe(j(node(['num', 0])));
-    press(container, 'ArrowDown'); // structural again (no den-side entry), re-records the new origin
-    expect(controller.getVerticalMemory().size).toBe(1);
-    press(container, 'ArrowUp'); // fires to the re-recorded origin, not the old pin
-    expect(j(controller.getState().caret)).toBe(j(node(['num', 0])));
+    press(container, 'ArrowDown');
+    expect(j(controller.getState().caret)).toBe(j(node(['den']))); // structural arrival into the den row
+    press(container, 'ArrowUp');
+    expect(j(controller.getState().caret)).toBe(j(start)); // stored in-token caret wins
+    expect(controller.getState().log.length).toBe(0);
   });
 
-  it('(d) typed op / undo / redo / click each clear the whole map', () => {
-    // typed op clears: fill the empty den cell after recording
+  it('(e) nothing is ever cleared: typed op / undo / redo / click / backspace leave the map intact', () => {
+    const env = {
+      v: 1,
+      root: {
+        type: 'frac',
+        num: { type: 'op', op: 'add', args: [sym('x'), sym('y')] },
+        den: { type: 'op', op: 'add', args: [sym('c'), null] },
+      },
+    };
+    // typed op
     {
-      const env = {
-        v: 1,
-        root: {
-          type: 'frac',
-          num: { type: 'op', op: 'add', args: [sym('x'), sym('y')] },
-          den: { type: 'op', op: 'add', args: [sym('c'), null] },
-        },
-      };
       const { controller, container } = make(env);
       controller.placeCaret(node(['num', 0]));
       container.focus();
       press(container, 'ArrowDown');
       expect(controller.getVerticalMemory().size).toBe(1);
       press(container, 'ArrowLeft'); // into the empty den cell
-      expect(j(controller.getState().caret)).toBe(j(row(['den'], 1)));
-      press(container, '5'); // typed op: tree change → whole map cleared
-      expect(controller.getVerticalMemory().size).toBe(0);
+      press(container, '5'); // typed op: tree change — V2 does NOT clear
+      expect(controller.getVerticalMemory().size).toBe(1);
       expect(controller.getState().log.length).toBe(1);
-      press(container, 'ArrowUp'); // no entry → structural move, not a jump-back to node(["num",0])
-      expect(j(controller.getState().caret)).toBe(j(node(['num'])));
+      press(container, 'ArrowUp'); // the num store still resolves → fires to the stored spot
+      expect(j(controller.getState().caret)).toBe(j(node(['num', 0])));
     }
-    // click placement clears
+    // click placement
     {
       const { controller, container } = make(FRAC_ROWS);
       controller.placeCaret(node(['num', 0]));
       container.focus();
       press(container, 'ArrowDown');
       expect(controller.getVerticalMemory().size).toBe(1);
-      controller.placeCaret(node(['den', 0])); // click path
-      expect(controller.getVerticalMemory().size).toBe(0);
+      controller.placeCaret(node(['den', 0])); // click path writes no entry, clears nothing
+      expect(controller.getVerticalMemory().size).toBe(1);
     }
-    // undo clears
+    // undo / redo / backspace
     {
       const { controller, container } = make(FRAC_ROWS);
       controller.apply({ op: 'moveCaret', to: node(['num', 0]) }); // one log entry
@@ -327,33 +330,25 @@ describe('vertical positional memory', () => {
       expect(controller.getVerticalMemory().size).toBe(1);
       press(container, 'z', { ctrl: true });
       expect(controller.getState().log.length).toBe(0);
-      expect(controller.getVerticalMemory().size).toBe(0);
-    }
-    // redo clears (map was already cleared by the undo; redo must not resurrect entries)
-    {
-      const { controller, container } = make(FRAC_ROWS);
-      controller.apply({ op: 'moveCaret', to: node(['num', 0]) });
-      container.focus();
-      press(container, 'ArrowDown');
-      expect(controller.getVerticalMemory().size).toBe(1);
-      press(container, 'z', { ctrl: true });
-      expect(controller.getVerticalMemory().size).toBe(0);
+      expect(controller.getVerticalMemory().size).toBe(1); // undo does not clear
       press(container, 'y', { ctrl: true });
-      expect(controller.getState().log.length).toBe(1);
-      expect(controller.getVerticalMemory().size).toBe(0);
+      expect(controller.getVerticalMemory().size).toBe(1); // redo does not clear either
+      press(container, 'ArrowDown');
+      press(container, 'Backspace'); // a tree-changing key — no clearing
+      expect(controller.getVerticalMemory().size).toBe(1);
     }
   });
 
-  it('(e) fire validation: an entry whose origin caret no longer resolves is discarded and the structural move is used', () => {
+  it('(f) fire validation: a store whose caret no longer resolves is discarded and the structural target is used', () => {
     const env = toJSON(initSession({ v: 1, root: { type: 'frac', num: sym('a'), den: sym('b') } }).root);
-    const targetKey = memoryNode(env, node(['num'])); // the node an Up from the den lands in
-    expect(targetKey).not.toBeNull();
-    const dangling: Caret = { kind: 'node', path: ['gone'] };
-    const mem: VerticalMemory = new Map([[targetKey!, { originCaret: dangling, direction: 'down' }]]);
-    const res = applyVerticalKey(env, node(['den']), 'up', mem);
+    const res = applyVerticalKey(env, node(['den']), 'up', new Map([[regionKey({ parentPath: [], slot: 'num' }), { kind: 'node', path: ['gone'] }]]));
     expect(res.fired).toBe(false);
     expect(j(res.caret)).toBe(j(node(['num']))); // structural target
-    expect(res.mem.has(targetKey!)).toBe(false); // dangling entry discarded
+    expect(res.mem.has(regionKey({ parentPath: [], slot: 'num' }))).toBe(false); // dangling store discarded
+    // a vertical press with no target writes nothing
+    const res2 = applyVerticalKey(env, node(['num']), 'up', new Map());
+    expect(res2.fired).toBe(false);
+    expect(res2.mem.size).toBe(0);
   });
 });
 

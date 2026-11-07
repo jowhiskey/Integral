@@ -24,6 +24,8 @@ import {
   pathOfRef,
   refOfPath,
   rowArgs,
+  setSlot,
+  tokenText,
   type Caret,
   type Path,
   type Ref,
@@ -112,31 +114,40 @@ function typingPoint(env: Envelope, caret: Caret): TypingPoint {
       }
       return { kind: 'operand', ref: { at: 'cell', path: caret.path, index: caret.index } };
     }
-    case 'node': {
-      const node = nodeAt(env, caret.path) as NodeJson;
-      const empty = firstEmpty(node);
-      if (empty !== null) {
-        return {
-          kind: 'operand',
-          ref:
-            'slot' in empty
-              ? { at: 'slot', path: caret.path, slot: empty.slot }
-              : { at: 'cell', path: caret.path, index: empty.index },
-        };
-      }
-      const ref = refOfPath(caret.path);
-      if (ref.at === 'cell') {
-        const parent = nodeAt(env, ref.path) as NodeJson;
-        if (isRowNode(parent) && ref.index !== rowArgs(parent).length - 1) {
-          throw new EngineError(
-            'not-a-typing-point',
-            `args[${ref.index}] is not the rightmost content of its row — mid-row values are not typing points`,
-          );
-        }
-      }
-      return { kind: 'hold', node, ref, path: caret.path };
+    case 'node':
+      return typingPointAtNode(env, caret.path);
+    case 'token':
+      // An in-token position degenerates to the number's owning structural
+      // station for typing decisions (the split/merge rules live in
+      // typeAtToken, which intercepts token carets before this point).
+      return typingPointAtNode(env, caret.path);
+  }
+}
+
+/** The node-caret typing point at `path` (shared by `node` and `token` carets). */
+function typingPointAtNode(env: Envelope, path: Path): TypingPoint {
+  const node = nodeAt(env, path) as NodeJson;
+  const empty = firstEmpty(node);
+  if (empty !== null) {
+    return {
+      kind: 'operand',
+      ref:
+        'slot' in empty
+          ? { at: 'slot', path, slot: empty.slot }
+          : { at: 'cell', path, index: empty.index },
+    };
+  }
+  const ref = refOfPath(path);
+  if (ref.at === 'cell') {
+    const parent = nodeAt(env, ref.path) as NodeJson;
+    if (isRowNode(parent) && ref.index !== rowArgs(parent).length - 1) {
+      throw new EngineError(
+        'not-a-typing-point',
+        `args[${ref.index}] is not the rightmost content of its row — mid-row values are not typing points`,
+      );
     }
   }
+  return { kind: 'hold', node, ref, path };
 }
 
 // ——— The spine: comparable right-region ancestor contexts ———
@@ -366,6 +377,85 @@ function enclosingGroup(env: Envelope, caret: Caret): Path | null {
   return null;
 }
 
+// ——— Typing at in-token positions (DOM-arc session 3) ———
+
+/** The envelope `env` with the node at `path` replaced by `node` (working copy). */
+function withNodeAt(env: Envelope, path: Path, node: NodeJson): Envelope {
+  const clone: Envelope = JSON.parse(JSON.stringify(env)) as Envelope;
+  const ref = refOfPath(path);
+  if (ref.at === 'root') {
+    clone.root = node;
+    return clone;
+  }
+  const parent = nodeAt(clone, ref.path);
+  if (parent === null) throw new Error('policy invariant: withNodeAt on an unresolvable path');
+  if (ref.at === 'slot') setSlot(parent, ref.slot, node);
+  else rowArgs(parent)[ref.index] = node;
+  return clone;
+}
+
+/** A copy of `node` with its first empty child (the natural-continue slot)
+ *  filled by `value` — a split's right half lands in the wrapper's pending
+ *  cell inside the ONE emitted replace op. */
+function fillFirstEmpty(node: NodeJson, value: NodeJson): NodeJson {
+  const clone: NodeJson = JSON.parse(JSON.stringify(node)) as NodeJson;
+  const empty = firstEmpty(clone);
+  if (empty === null) return clone;
+  if ('slot' in empty) setSlot(clone, empty.slot, value);
+  else rowArgs(clone)[empty.index] = value;
+  return clone;
+}
+
+/** Type one token while the caret is inside a number token (offset 0..len):
+ *  - a digit (leaf num) merges into the number at the offset — one replace op
+ *    = one log entry; the replace relocation advances the in-token caret by one;
+ *  - a binary structure token (operator / ÷ / ^) at a strict interior offset
+ *    SPLITS the number there: the left half is the attach context (the
+ *    existing insertion policy runs on it unchanged), the right half fills
+ *    the wrapper's pending cell — one replace op = one log entry, caret at the
+ *    natural-continue spot (the replace's dive);
+ *  - anything else (letters, group tokens, the boundary offsets 0/len, and
+ *    interior offsets whose owning station is a swap position) snaps to the
+ *    token's owning structural station and applies the existing policy
+ *    unchanged. */
+function typeAtToken(
+  state: EditingState,
+  env: Envelope,
+  caret: Extract<Caret, { kind: 'token' }>,
+  token: TypedToken,
+): EditingState {
+  const node = nodeAt(env, caret.path) as NodeJson;
+  const text = tokenText(node);
+  const i = caret.index;
+  if (token.t === 'leaf' && token.node.type === 'num') {
+    const value = Number(text.slice(0, i) + String(token.node.value) + text.slice(i));
+    if (Number.isFinite(value)) {
+      return applyOp(state, replaceAt(refOfPath(caret.path), { type: 'num', value }));
+    }
+  } else if (token.t === 'operator' || token.t === 'divide' || token.t === 'pow') {
+    if (i > 0 && i < text.length) {
+      const leftValue = Number(text.slice(0, i));
+      const rightValue = Number(text.slice(i));
+      if (Number.isFinite(leftValue) && Number.isFinite(rightValue)) {
+        const splitEnv = withNodeAt(env, caret.path, { type: 'num', value: leftValue });
+        const station: Caret = { kind: 'node', path: caret.path };
+        // A mid-row number's owning station is a swap position — the swap owns
+        // it there (no split); otherwise the attach policy runs on the left half.
+        if (decideSwap(splitEnv, station, token) === null) {
+          const base = decideAttach(splitEnv, station, token).ops;
+          const op = base.length === 1 && base[0].op === 'insert' ? (base[0] as InsertOp) : null;
+          if (op !== null) {
+            const filled = fillFirstEmpty(op.node, { type: 'num', value: rightValue });
+            return applyOp(state, { op: 'insert', node: filled, at: op.at });
+          }
+        }
+      }
+    }
+  }
+  // snap: the owning structural station applies the existing policy unchanged
+  return typeToken({ ...state, caret: { kind: 'node', path: caret.path } }, token);
+}
+
 // ——— The typing surface ———
 
 /** Type one token into the session: leaves fill the operand-expected
@@ -378,6 +468,15 @@ function enclosingGroup(env: Envelope, caret: Caret): Path | null {
  *  given state — throws the policy/mechanical errors on out-of-model input. */
 export function typeToken(state: EditingState, token: TypedToken): EditingState {
   const env = envelopeOf(state);
+  if (state.caret.kind === 'token') {
+    if (!caretResolvesIn(env, state.caret)) {
+      throw new EngineError(
+        'not-a-typing-point',
+        `caret does not resolve in this envelope (${JSON.stringify(state.caret)})`,
+      );
+    }
+    return typeAtToken(state, env, state.caret, token);
+  }
   if (token.t === 'leaf') {
     const tp = typingPoint(env, state.caret);
     if (tp.kind !== 'operand') {

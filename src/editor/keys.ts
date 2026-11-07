@@ -33,6 +33,7 @@ export const KEYMAP: Readonly<Record<string, TypedToken>> = (() => {
 export type KeyAction =
   | { readonly kind: 'type'; readonly token: TypedToken | undefined }
   | { readonly kind: 'move'; readonly dir: NavDir }
+  | { readonly kind: 'backspace'; readonly ctrl: boolean }
   | { readonly kind: 'undo' }
   | { readonly kind: 'redo' }
   | { readonly kind: 'ignore' };
@@ -40,9 +41,10 @@ export type KeyAction =
 /** Classify one keydown event (structural type — no DOM dependency, so the
  *  classifier is unit-testable without jsdom):
  *  - Ctrl/Meta + Z            → undo;  Ctrl/Meta + Y or Ctrl/Meta + Shift + Z → redo
- *    (both `z` and `Z` with shift are handled); any other modified key passes
- *    through.
+ *    (both `z` and `Z` with shift are handled); Ctrl/Meta + Backspace →
+ *    whole-node backspace; any other modified key passes through.
  *  - Arrow keys               → move.
+ *  - Backspace                → backspace (atomic delete / structure death).
  *  - a printable single character (key.length === 1, no Ctrl/Meta/Alt) → a
  *    typing key; `token` is undefined when the char is outside the pinned
  *    keymap (unknown token — still a handled key).
@@ -60,10 +62,13 @@ export function classifyKey(event: {
     const k = key.toLowerCase();
     if (k === 'z' && !event.shiftKey) return { kind: 'undo' };
     if (k === 'y' || (k === 'z' && event.shiftKey)) return { kind: 'redo' };
+    if (k === 'backspace') return { kind: 'backspace', ctrl: true }; // whole-node delete
     return { kind: 'ignore' };
   }
   if (event.altKey) return { kind: 'ignore' };
   switch (key) {
+    case 'Backspace':
+      return { kind: 'backspace', ctrl: false };
     case 'ArrowLeft':
       return { kind: 'move', dir: 'left' };
     case 'ArrowRight':
