@@ -7,8 +7,8 @@
 ```
 src/ast/        # node classes, JSON envelope (versioned, additive-only), toMathNode fold, vocabulary
 src/engine/     # editing engine (since 2026-11-06): ops as values, pure reducer, caret + nav profiles + insertion policy + operator swap, undo/redo, backspace — runtime-agnostic, no DOM
-src/editor/     # DOM layer (since 2026-11-07: rendering + caret overlay + click placement + keyboard + backspace wiring landed; bug-fix arc in progress — end-of-node caret reachability landed; the behavior rework is spec-first: earlier behavior rulings are void as intent, expected behavior comes from the owner-authored interaction spec via session briefs; the dev demo page is the 83-case visual-test catalog case browser) — caret movement lives in src/engine — NOT plain-text input
-docs/context/   # editor-spec.md — the frozen AST spec (read before touching node types)
+src/editor/     # DOM layer (since 2026-11-07: rendering + caret overlay + click placement + keyboard + backspace wiring landed; bug-fix arc in progress — end-of-node caret reachability landed; the behavior rework is spec-first: earlier behavior rulings are void as intent, expected behavior comes from the owner-authored interaction spec — complete 2026-11-07, mirrored at docs/context/interaction.md (the binding contract); the dev demo page is the 83-case visual-test catalog case browser) — caret movement lives in src/engine — NOT plain-text input
+docs/context/   # editor-spec.md — the frozen AST spec (read before touching node types); interaction.md — the binding interaction contract (read before touching editing behavior)
 ```
 
 ## Hard rules
@@ -34,6 +34,7 @@ CI exists since 2026-11-06: `.github/workflows/ci.yml`, PR-triggered plus a nigh
 | Anything AST-related (nodes, JSON, vocabulary, walker) | `docs/context/editor-spec.md` |
 | Editing engine (ops, caret, movement, insertion policy, operator swap, undo/redo, backspace) | `docs/context/editor-spec.md` |
 | Editor DOM layer (MathML rendering, caret overlay, click placement, keyboard incl. backspace) | `docs/context/editor-spec.md` |
+| Editing behavior contract (typing, navigation, clicks, deletion, undo/redo, special keys) | `docs/context/interaction.md` |
 
 ## History & docs feedback
 - **Recent history:** `git log` — docs commits carry structured session records (what landed, why, impact, friction). Your session brief carries the current state; this file and `docs/context/*` carry the stable reference.
