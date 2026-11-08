@@ -97,7 +97,10 @@
   {/if}
   <div class="readout">caret {readout.caret}\nenv   {readout.env}</div>
   {#if activeCase}
-    <div class="note"><strong>{activeCase.id}</strong> — {activeCase.stress}</div>
+    <div class="note">
+      <strong>{activeCase.id}</strong> — {activeCase.stress}
+      <span class="rules">rules: {activeCase.rules.join(', ')}</span>
+    </div>
   {/if}
 </div>
 

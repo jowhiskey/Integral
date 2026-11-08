@@ -132,7 +132,7 @@ function stationsOf(root: NodeJson | null): Caret[] {
 // ——— Criterion 1: registry completeness ———
 
 describe('nav profile registry', () => {
-  const TYPES = ['num', 'sym', 'sub', 'op', 'fn', 'group', 'frac', 'pow', 'root', 'unit'] as const;
+  const TYPES = ['num', 'sym', 'sub', 'op', 'fn', 'group', 'frac', 'pow', 'root', 'unit', 'fence'] as const;
 
   it('has exactly one profile per node type', () => {
     expect(Object.keys(NAV_PROFILES).sort()).toEqual([...TYPES].sort());
@@ -150,6 +150,7 @@ describe('nav profile registry', () => {
       pow: 'slots',
       root: 'slots',
       unit: 'slots',
+      fence: 'leaf',
     };
     for (const type of TYPES) expect(NAV_PROFILES[type].children).toBe(expectChildren[type]);
   });

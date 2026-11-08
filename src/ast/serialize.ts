@@ -9,8 +9,9 @@
 // the process with a stack overflow, and the emitted tree is guaranteed to
 // stay inside budgets its own evaluation engine can handle.
 
-import type { Envelope, NodeJson } from './json.js';
+import type { Envelope, FencePath, NodeJson } from './json.js';
 import {
+  FenceNode,
   FractionNode,
   FunctionNode,
   GroupNode,
@@ -90,6 +91,7 @@ export function fromJSON(envelope: unknown, vocabulary?: StaticVocabulary): Math
   }
   const allowedUnits = allowedUnitsFor(vocabulary);
   validateBudgets(root);
+  validateFencePairs(root);
   return parseNode(root, 'root', allowedUnits) as MathNode;
 }
 
@@ -202,7 +204,7 @@ function validateBudgets(root: unknown): void {
 }
 
 const NODE_TAGS = new Set<NodeJson['type']>([
-  'num', 'sym', 'op', 'fn', 'group', 'frac', 'pow', 'root', 'sub', 'unit',
+  'num', 'sym', 'op', 'fn', 'group', 'frac', 'pow', 'root', 'sub', 'unit', 'fence',
 ]);
 
 function parseNode(value: unknown, path: string, allowedUnits: ReadonlySet<string>): MathNode | null {
@@ -228,6 +230,14 @@ function parseNode(value: unknown, path: string, allowedUnits: ReadonlySet<strin
     case 'op': {
       const op = optString(node.op, `${path}.op`);
       const args = parseArgs(node.args, `${path}.args`, allowedUnits);
+      // The implicit marker (glyph-less juxtaposition) is a multiply-row-only
+      // representation: rendering/storability only, never evaluation semantics.
+      const implicit = optBoolean(node.implicit, `${path}.implicit`, false);
+      if (implicit && op !== 'multiply') {
+        throw new ValidationError(
+          `fromJSON: ${path}.implicit is legal only on multiply rows (got '${op}')`,
+        );
+      }
       // Unary operators take exactly one arg — no user-typed state produces
       // any other arity, and the evaluation fold would throw.
       if (UNARY_OPS.has(op) && args.length !== 1) {
@@ -244,22 +254,46 @@ function parseNode(value: unknown, path: string, allowedUnits: ReadonlySet<strin
           `fromJSON: ${path} pow chains longer than two args have no unambiguous association (got ${args.length})`,
         );
       }
-      return new OperatorNode(op, args);
+      return new OperatorNode(op, args, implicit);
     }
-    case 'fn':
-      return new FunctionNode(optString(node.name, `${path}.name`), parseArgs(node.args, `${path}.args`, allowedUnits));
+    case 'fn': {
+      const close = optBoolean(node.close, `${path}.close`, true);
+      // A false close is only meaningful while the closing fence could be
+      // absent; `true` normalizes away (balanced states stay byte-unchanged).
+      return new FunctionNode(
+        optString(node.name, `${path}.name`),
+        parseArgs(node.args, `${path}.args`, allowedUnits),
+        close,
+      );
+    }
     case 'group': {
       if (node.parens !== 'always') {
         throw new ValidationError(`fromJSON: ${path}.parens must be 'always' in v1 (got ${JSON.stringify(node.parens)})`);
       }
-      return new GroupNode(parseNode(node.child, `${path}.child`, allowedUnits));
+      const close = optBoolean(node.close, `${path}.close`, true);
+      return new GroupNode(parseNode(node.child, `${path}.child`, allowedUnits), close);
+    }
+    case 'fence': {
+      if (node.side !== 'close') {
+        throw new ValidationError(`fromJSON: ${path}.side must be 'close' in v1 (got ${JSON.stringify(node.side)})`);
+      }
+      const open = parseFencePath(node.open, `${path}.open`);
+      return new FenceNode(open);
     }
     case 'frac':
       return new FractionNode(parseNode(node.num, `${path}.num`, allowedUnits), parseNode(node.den, `${path}.den`, allowedUnits));
     case 'pow':
       return new PowerNode(parseNode(node.base, `${path}.base`, allowedUnits), parseNode(node.exp, `${path}.exp`, allowedUnits));
-    case 'root':
-      return new RootNode(parseNode(node.radicand, `${path}.radicand`, allowedUnits), parseNode(node.index, `${path}.index`, allowedUnits));
+    case 'root': {
+      const mroot = optBoolean(node.mroot, `${path}.mroot`, false);
+      const index = parseNode(node.index, `${path}.index`, allowedUnits);
+      if (mroot && index !== null) {
+        throw new ValidationError(
+          `fromJSON: ${path}.mroot marks an EMPTY index slot — it cannot combine with a filled index (drop mroot)`,
+        );
+      }
+      return new RootNode(parseNode(node.radicand, `${path}.radicand`, allowedUnits), index, mroot);
+    }
     case 'sub': {
       const base = optString(node.base, `${path}.base`);
       const sub = optString(node.sub, `${path}.sub`);
@@ -273,6 +307,77 @@ function parseNode(value: unknown, path: string, allowedUnits: ReadonlySet<strin
         throw new ValidationError(`fromJSON: ${path}.unit is not a unit in the vocabulary (got ${JSON.stringify(unit)})`);
       }
       return new UnitNode(parseNode(node.value, `${path}.value`, allowedUnits), unit);
+    }
+  }
+}
+
+// ——— Movable-fence pairing (session 1, additive) ———
+//
+// A close-fence token's `open` field is a path from the root to the group/fn
+// it pairs with. The boundary validates every pairing: the path must resolve
+// and must land on an unbalanced container (a group/fn carrying consent via
+// close === false). Dangling closes (no open field) stand as-is — storable and
+// rendering, refused by the structural gate.
+
+const isFenceRecord = (value: unknown): value is { type: 'fence'; side: 'close'; open?: unknown } =>
+  typeof value === 'object' && value !== null && (value as Record<string, unknown>).type === 'fence';
+
+/** Resolve a fence path against a raw envelope node (same step grammar as the
+ * engine's caret paths; implemented locally — src/ast never imports src/engine). */
+function fenceTarget(root: unknown, path: FencePath): Record<string, unknown> | null {
+  let current: unknown = root;
+  for (const step of path) {
+    if (current === null || typeof current !== 'object') return null;
+    const rec = current as Record<string, unknown>;
+    if (typeof step === 'number') {
+      if (rec.type !== 'op' && rec.type !== 'fn') return null;
+      const args = rec.args;
+      if (!Array.isArray(args) || step < 0 || step >= args.length) return null;
+      current = args[step];
+    } else {
+      const slots: Record<string, boolean> = { child: true, num: true, den: true, base: true, exp: true, radicand: true, index: true, value: true };
+      if (!slots[step]) return null;
+      current = rec[step];
+    }
+  }
+  return current === null || typeof current !== 'object' ? null : (current as Record<string, unknown>);
+}
+
+function validateFencePairs(root: unknown): void {
+  const stack: unknown[] = [root];
+  while (stack.length > 0) {
+    const value = stack.pop();
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) continue;
+    const rec = value as Record<string, unknown>;
+    if (isFenceRecord(value)) {
+      const open = rec.open;
+      if (open === undefined || open === null) continue; // dangling close
+      if (!Array.isArray(open)) {
+        throw new ValidationError(
+          `fromJSON: fence.open must be an array of path steps (got ${JSON.stringify(open)})`,
+        );
+      }
+      const target = fenceTarget(root, open as unknown as FencePath);
+      const balanced = target === null || target.close !== false;
+      if (balanced || (target?.type !== 'group' && target?.type !== 'fn')) {
+        throw new ValidationError(
+          `fromJSON: fence.open must address a group/fn missing its own closing fence (got ${JSON.stringify(open)})`,
+        );
+      }
+      continue;
+    }
+    const tag = rec.type;
+    if (typeof tag !== 'string') continue; // parseNode rejects with the exact shape error
+    switch (tag) {
+      case 'op':
+      case 'fn':
+        if (Array.isArray(rec.args)) stack.push(...rec.args);
+        break;
+      default:
+        for (const key of ['child', 'num', 'den', 'base', 'exp', 'radicand', 'index', 'value']) {
+          if (rec[key] !== undefined) stack.push(rec[key]);
+        }
+        break;
     }
   }
 }
@@ -321,4 +426,33 @@ function optString(value: unknown, path: string): string {
     throw new ValidationError(`fromJSON: ${path} must be a string (got ${JSON.stringify(value)})`);
   }
   return value;
+}
+
+/** Optional boolean with a default (omitted/type-wrong are distinct: the
+ * latter rejects — the additive state fields are validated, not ignored). */
+function optBoolean(value: unknown, path: string, defaultValue: boolean): boolean {
+  if (value === undefined) {
+    return defaultValue;
+  }
+  if (typeof value !== 'boolean') {
+    throw new ValidationError(`fromJSON: ${path} must be a boolean (got ${JSON.stringify(value)})`);
+  }
+  return value;
+}
+
+/** A fence pairing path: an array of args-row indices (numbers) and slot
+ * names (strings) from the root; the target validation is validateFencePairs'. */
+function parseFencePath(value: unknown, path: string): FencePath | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (!Array.isArray(value)) {
+    throw new ValidationError(`fromJSON: ${path} must be an array of path steps (got ${JSON.stringify(value)})`);
+  }
+  for (const step of value) {
+    if (typeof step !== 'number' && typeof step !== 'string') {
+      throw new ValidationError(`fromJSON: ${path} contains a non-step entry ${JSON.stringify(step)}`);
+    }
+  }
+  return value as FencePath;
 }

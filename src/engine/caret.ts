@@ -32,6 +32,7 @@ const SLOTS: Readonly<Record<NodeJson['type'], readonly SlotName[]>> = {
   root: ['radicand', 'index'],
   sub: [],
   unit: ['value'],
+  fence: [], // a close-fence glyph token is a leaf (session 1, additive)
 };
 
 /**

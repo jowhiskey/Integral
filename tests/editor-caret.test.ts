@@ -42,8 +42,10 @@ describe('caretAnchor per caret kind (stubbed rects)', () => {
     expect(caretAnchor(emptyEnv, { kind: 'empty' }, emptyRendered)).toEqual({ x: 100, y: 50, height: 30 });
   });
 
-  it('row caret → left edge of the addressed cell, right edge after the last cell, placeholder cell, empty row', () => {
-    // add(a, □, b)
+  it('row caret → left edge of the addressed cell, right edge after the last cell, bare cell at the flanking glyph, empty row', () => {
+    // add(a, □, b) — re-pinned (T7 split): the op row's null cell has NO
+    // placeholder element; the caret anchors at the PRECEDING separator
+    // glyph's right edge (the anchor fallback for bare cells).
     const env: Envelope = { v: 1, root: { type: 'op', op: 'add', args: [sym('a'), null, sym('b')] } };
     const rendered = buildMathML(fromJSON(env), document);
     const stub = stubRects();
@@ -52,12 +54,13 @@ describe('caretAnchor per caret kind (stubbed rects)', () => {
       '[0]': { left: 0, top: 0, width: 10, height: 10 },
       '[2]': { left: 25, top: 0, width: 10, height: 10 },
     });
-    stub.syncCaret(rendered, {
-      [caretKey({ kind: 'row', path: [], index: 1 })]: { left: 12, top: 0, width: 6, height: 10 },
-    });
+    const sep1 = [...rendered.separators.entries()].find(([, s]) => s.index === 1)![0];
+    const sep2 = [...rendered.separators.entries()].find(([, s]) => s.index === 2)![0];
+    stub.set(sep1, { left: 10, top: 0, width: 5, height: 10 });
+    stub.set(sep2, { left: 20, top: 0, width: 5, height: 10 });
 
     expect(caretAnchor(env, { kind: 'row', path: [], index: 0 }, rendered)).toEqual({ x: 0, y: 0, height: 10 });
-    expect(caretAnchor(env, { kind: 'row', path: [], index: 1 }, rendered)).toEqual({ x: 12, y: 0, height: 10 });
+    expect(caretAnchor(env, { kind: 'row', path: [], index: 1 }, rendered)).toEqual({ x: 15, y: 0, height: 10 });
     expect(caretAnchor(env, { kind: 'row', path: [], index: 2 }, rendered)).toEqual({ x: 25, y: 0, height: 10 });
     expect(caretAnchor(env, { kind: 'row', path: [], index: 3 }, rendered)).toEqual({ x: 35, y: 0, height: 10 });
 

@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { fromJSON, toMathML } from '../src/ast/index.js';
-import { buildMathML, pathKey } from '../src/editor/mathml-dom.js';
+import { buildMathML, caretKey, pathKey } from '../src/editor/mathml-dom.js';
 import { countNodes, shape } from './editor-support.js';
 
 const num = (value: number) => ({ type: 'num', value }) as const;
@@ -59,6 +59,24 @@ const CORPUS: Record<string, unknown> = {
   unitEmptyName: { v: 1, root: { type: 'unit', value: num(50), unit: '' } },
   unitNullValue: { v: 1, root: { type: 'unit', value: null, unit: 'mm' } },
   unitInRow: { v: 1, root: { type: 'op', op: 'add', args: [{ type: 'unit', value: num(50), unit: 'mm' }, sym('a')] } },
+  implicitRow: { v: 1, root: { type: 'op', op: 'multiply', args: [num(5), sym('x')], implicit: true } },
+  implicitSeam: { v: 1, root: { type: 'op', op: 'multiply', args: [num(5), num(3)], implicit: true } },
+  leadingNull: { v: 1, root: { type: 'op', op: 'subtract', args: [null, sym('x')] } },
+  bareInterior: { v: 1, root: { type: 'op', op: 'add', args: [sym('a'), null, sym('b')] } },
+  allNullRow: { v: 1, root: { type: 'op', op: 'add', args: [null, null] } },
+  groupNoClose: { v: 1, root: { type: 'group', parens: 'always', child: { type: 'op', op: 'add', args: [sym('a'), sym('b')] }, close: false } },
+  fnNoClose: { v: 1, root: { type: 'fn', name: 'sin', args: [sym('x')], close: false } },
+  danglingFence: { v: 1, root: { type: 'op', op: 'add', args: [sym('x'), { type: 'fence', side: 'close' }] } },
+  displacedFence: {
+    v: 1,
+    root: {
+      type: 'frac',
+      num: { type: 'group', parens: 'always', child: { type: 'op', op: 'add', args: [sym('a'), sym('b')] }, close: false },
+      den: { type: 'op', op: 'add', args: [num(2), { type: 'fence', side: 'close', open: ['num'] }] },
+    },
+  },
+  mrootNullIndex: { v: 1, root: { type: 'root', radicand: num(2), mroot: true } },
+  plainRootNullIndex: { v: 1, root: { type: 'root', radicand: num(2), index: null } },
   allTypes: {
     v: 1,
     root: {
@@ -111,17 +129,26 @@ describe('editor renderer: per-type pinned structure', () => {
     expect(r.separators.size).toBe(2);
   });
 
-  it('null row cell → <mi>□</mi> placeholder registered with a row caret', () => {
+  it('null op-row cell renders BARE (no placeholder) and registers a bare-cell anchor', () => {
+    // Re-pinned (contract T7 split): row-level missing operands show NO □ —
+    // □ is 2D-slot territory (frac/pow/root slots, fn args, group content).
     const r = built('opWithNullCell');
-    expect(shape(r.math)).toBe('<math><mrow><mn>#5</mn><mo>#+</mo><mi>#□</mi></mrow></math>');
-    const ph = [...r.placeholders.entries()].find(([, c]) => c.kind === 'row');
-    expect(ph).toBeDefined();
-    expect(ph![1]).toEqual({ kind: 'row', path: [], index: 1 });
+    expect(shape(r.math)).toBe('<math><mrow><mn>#5</mn><mo>#+</mo></mrow></math>');
+    expect([...r.placeholders.values()].some((c) => c.kind === 'row' && c.path.length === 0)).toBe(false);
+    const bare = r.bareAnchors.get(caretKey({ kind: 'row', path: [], index: 1 }));
+    expect(bare).toBeDefined();
+    expect(bare!.side).toBe('right'); // the preceding separator glyph's right edge
   });
 
   it('unary minus → mrow with leading mo and operand', () => {
     expect(shape(built('unary').math)).toBe('<math><mrow><mo>#−</mo><mi>#x</mi></mrow></math>');
-    expect(shape(built('unaryEmpty').math)).toBe('<math><mrow><mo>#−</mo><mi>#□</mi></mrow></math>');
+    // Re-pinned (T7 split): the null cell of a unary row renders BARE — the
+    // glyph stands alone; the caret anchors at its right edge.
+    expect(shape(built('unaryEmpty').math)).toBe('<math><mrow><mo>#−</mo></mrow></math>');
+    const r = built('unaryEmpty');
+    const bare = r.bareAnchors.get(caretKey({ kind: 'row', path: [], index: 0 }));
+    expect(bare).toBeDefined();
+    expect(bare!.side).toBe('right');
   });
 
   it('2-arg pow op → msup like PowerNode', () => {
@@ -186,6 +213,37 @@ describe('editor renderer: per-type pinned structure', () => {
     expect(shape(built('unitInRow').math)).toBe(
       '<math><mrow><mn>#50</mn><mspace></mspace><mi>#mm</mi><mo>#+</mo><mi>#a</mi></mrow></math>',
     );
+  });
+
+  it('contract state shapes (rework session 1): implicit rows, bare cells, fences, empty mroot index', () => {
+    // Implicit multiply: NO separator glyphs; the row's own mrow only.
+    const i5x = built('implicitRow');
+    expect(shape(i5x.math)).toBe('<math><mrow><mn>#5</mn><mi>#x</mi></mrow></math>');
+    expect(i5x.separators.size).toBe(0);
+    // S-098 seam: the classed mspace renders between the two numbers.
+    const seam = built('implicitSeam');
+    expect(shape(seam.math)).toBe('<math><mrow><mn>#5</mn><mspace></mspace><mn>#3</mn></mrow></math>');
+    const seamEl = seam.math.querySelector('mspace')!;
+    expect(seamEl.getAttribute('class')).toBe('integral-seam');
+    expect(seamEl.getAttribute('width')).toBe('0.1667em');
+    // Bare rows: null cells emit NO placeholder element, but get caret anchors.
+    expect(shape(built('leadingNull').math)).toBe('<math><mrow><mo>#−</mo><mi>#x</mi></mrow></math>');
+    expect(built('leadingNull').placeholders.size).toBe(0);
+    expect(built('leadingNull').bareAnchors.get(caretKey({ kind: 'row', path: [], index: 0 }))).toBeDefined();
+    expect(shape(built('bareInterior').math)).toBe('<math><mrow><mi>#a</mi><mo>#+</mo><mo>#+</mo><mi>#b</mi></mrow></math>');
+    expect(shape(built('allNullRow').math)).toBe('<math><mrow><mo>#+</mo></mrow></math>');
+    expect(built('allNullRow').bareAnchors.size).toBe(2);
+    // Movable fences: open rows stand open; close tokens are fenced mo's.
+    expect(shape(built('groupNoClose').math)).toBe('<math><mrow><mo>#(</mo><mi>#a</mi><mo>#+</mo><mi>#b</mi></mrow></math>');
+    expect(shape(built('fnNoClose').math)).toBe('<math><mrow><mi>#sin</mi><mo>#(</mo><mi>#x</mi></mrow></math>');
+    expect(shape(built('danglingFence').math)).toBe('<math><mrow><mi>#x</mi><mo>#+</mo><mo>#)</mo></mrow></math>');
+    expect(shape(built('displacedFence').math)).toBe(
+      '<math><mfrac><mrow><mo>#(</mo><mi>#a</mi><mo>#+</mo><mi>#b</mi></mrow><mrow><mn>#2</mn><mo>#+</mo><mo>#)</mo></mrow></mfrac></math>',
+    );
+    // mroot keeps its index slot (with placeholder) when the index is empty.
+    expect(shape(built('mrootNullIndex').math)).toBe('<math><mroot><mn>#2</mn><mi>#□</mi></mroot></math>');
+    // ... while a null index WITHOUT the flag stays the v1 square root.
+    expect(shape(built('plainRootNullIndex').math)).toBe('<math><msqrt><mn>#2</mn></msqrt></math>');
   });
 });
 

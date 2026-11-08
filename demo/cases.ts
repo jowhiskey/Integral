@@ -34,6 +34,14 @@ export interface CatalogCase {
   readonly label: string;
   /** One line: what this case stresses + the action to perform (no outcomes). */
   readonly stress: string;
+  /**
+   * Contract rule-ID REFERENCES (rework session 1): the ruled entries this case
+   * exercises — T/N/C/D/U/K family IDs, S-scenario IDs, and OA-* for the
+   * owner amendments (digit-glue, juxtaposition, projection, fence). References
+   * only, NEVER behavior predictions — expected behavior lives in the contract
+   * (docs/context/interaction.md), not here.
+   */
+  readonly rules: readonly string[];
   /** Seed AST (envelope v1). */
   readonly envelope: Envelope;
   /** Seed caret — must resolve in the seed envelope. */
@@ -48,7 +56,14 @@ const num = (value: number): NodeJson => ({ type: 'num', value });
 const sym = (name: string): NodeJson => ({ type: 'sym', name });
 const op = (name: string, ...args: (NodeJson | null)[]): NodeJson => ({ type: 'op', op: name, args });
 const fn = (name: string, ...args: (NodeJson | null)[]): NodeJson => ({ type: 'fn', name, args });
-const group = (child: NodeJson | null): NodeJson => ({ type: 'group', parens: 'always', child });
+const group = (child: NodeJson | null, close = true): NodeJson =>
+  close ? { type: 'group', parens: 'always', child } : { type: 'group', parens: 'always', child, close: false };
+/** Glyph-less juxtaposition (Owner amendment): a multiply row carrying the
+ *  additive implicit marker — renders without × glyphs. */
+const jmp = (...args: (NodeJson | null)[]): NodeJson => ({ type: 'op', op: 'multiply', args, implicit: true });
+/** A movable close-fence glyph token (dangling, or paired via the open path). */
+const fence = (open?: (number | string)[]): NodeJson =>
+  open === undefined ? { type: 'fence', side: 'close' } : { type: 'fence', side: 'close', open };
 const frac = (n: NodeJson | null, d: NodeJson | null): NodeJson => ({ type: 'frac', num: n, den: d });
 const pow = (b: NodeJson | null, e: NodeJson | null): NodeJson => ({ type: 'pow', base: b, exp: e });
 const root = (radicand: NodeJson | null, index?: NodeJson | null): NodeJson =>
@@ -83,6 +98,7 @@ export const CATEGORIES: readonly CatalogCategory[] = [
   { key: 'U', title: 'Undo/redo walk-backs' },
   { key: 'R', title: 'Real-world formulas (typed + prebuilt to edit)' },
   { key: 'P', title: 'Known-suspect probes' },
+  { key: 'V', title: 'Contract rendering states (rework session 1: bare rows, implicit juxtaposition, movable fences)' },
 ];
 
 // ——— the catalog ———
@@ -91,6 +107,7 @@ export const CASES: readonly CatalogCase[] = [
   // ——— E: entry states ———
   {
     id: 'E-01',
+    rules: ['T1', 'T4', 'D4', 'C5'],
     category: 'E',
     label: 'empty formula',
     stress: 'The empty starting point — type `5+3`, arrows, Backspace, click the background.',
@@ -99,6 +116,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'E-02',
+    rules: ['T4', 'D1', 'N1'],
     category: 'E',
     label: '5 (freshly typed single digit)',
     stress: 'Single number leaf at root — type `7`, Backspace, Left/Right.',
@@ -109,6 +127,7 @@ export const CASES: readonly CatalogCase[] = [
   // ——— N: node types alone + stressed variants ———
   {
     id: 'N-01',
+    rules: ['T4', 'D1', 'D3', 'N1'],
     category: 'N',
     label: '42 (number alone)',
     stress: 'Number leaf with an in-token caret at offset 1 — Left/Right inside the token, type `+` at the offset, Ctrl+Backspace.',
@@ -117,6 +136,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'N-02',
+    rules: ['T3', 'D1', 'C1', 'OA-digit-glue'],
     category: 'N',
     label: 'x (symbol alone)',
     stress: 'Symbol leaf at root — type `a`, click the glyph, Backspace.',
@@ -125,6 +145,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'N-03',
+    rules: ['T1', 'N2', 'C1'],
     category: 'N',
     label: 'a + b (binary op row)',
     stress: 'Op row, caret on the interior seam (the `+` glyph position) — type `*`, arrows across, click the `+` separator mo.',
@@ -133,6 +154,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'N-04',
+    rules: ['T1', 'D2', 'S-001'],
     category: 'N',
     label: 'a + b + c (n-ary chain)',
     stress: 'Flat n-ary row, caret on the last interior seam — type `+`, Backspace at the seam.',
@@ -141,6 +163,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'N-05',
+    rules: ['OA-projection', 'S-004'],
     category: 'N',
     label: '−x (unary op row)',
     stress: 'Unary op row, caret after the operand — type `+`, Backspace twice.',
@@ -149,6 +172,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'N-06',
+    rules: ['T5', 'N7', 'C4', 'D7'],
     category: 'N',
     label: 'sin(x, 0.5) (two-arg function)',
     stress: 'Function row with a comma separator, caret on the seam — click the comma mo, type `+` at the seam, Left/Right through the cells.',
@@ -157,6 +181,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'N-07',
+    rules: ['T6', 'C4', 'D8'],
     category: 'N',
     label: '(a + b) (group alone)',
     stress: 'Group with a flat row child, caret on the group — type `)`, Left/Right, click the right edge zone of the group.',
@@ -165,6 +190,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'N-08',
+    rules: ['T7', 'N4', 'N5', 'C3'],
     category: 'N',
     label: 'a/b (fraction alone)',
     stress: 'Fraction, caret in the numerator — Down, Up, Left/Right, click the mfrac halves.',
@@ -173,6 +199,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'N-09',
+    rules: ['T7', 'S-018', 'N5', 'D6'],
     category: 'N',
     label: 'x² (power alone)',
     stress: 'Power, caret in the base — Right, Left, Up, Down.',
@@ -181,6 +208,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'N-10',
+    rules: ['T7', 'N8', 'D6'],
     category: 'N',
     label: '√x (square root alone)',
     stress: 'Square root (no index in the tree), caret in the radicand — Up, Right, Backspace.',
@@ -189,6 +217,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'N-11',
+    rules: ['T9', 'N6', 'D6', 'S-101'],
     category: 'N',
     label: '³√x (indexed root)',
     stress: 'Root with an index, caret in the index — Down, Up, Left/Right, click the index.',
@@ -197,6 +226,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'N-12',
+    rules: ['T9'],
     category: 'N',
     label: 'x_max (subscript alone)',
     stress: 'Subscript leaf at root — arrows, Backspace, click the msub.',
@@ -205,6 +235,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'N-13',
+    rules: ['S-051', 'S-104', 'C1', 'D1'],
     category: 'N',
     label: '50 mm (unit alone)',
     stress: 'Unit, caret in the value — click the upright mm symbol, Right, Backspace on the value.',
@@ -213,6 +244,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'N-14',
+    rules: ['S-051', 'N6', 'C1'],
     category: 'N',
     label: '(a/b) m (unit on a complex operand)',
     stress: 'Unit wrapping a fraction, caret in the value’s numerator — Down, click the upright unit symbol.',
@@ -221,8 +253,9 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'N-15',
+    rules: ['T7', 'OA-projection', 'D2'],
     category: 'N',
-    label: 'a + □ (row with a pending empty cell)',
+    label: 'a + (row with a trailing empty cell — renders BARE, no □)',
     stress: 'Op row with a null cell, caret in the cell — type `b`, Backspace, Ctrl+Backspace.',
     envelope: env(op('add', sym('a'), null)),
     caret: rw([], 1),
@@ -231,6 +264,7 @@ export const CASES: readonly CatalogCase[] = [
   // ——— X: nesting combinations ———
   {
     id: 'X-01',
+    rules: ['T7', 'N4', 'N6'],
     category: 'X',
     label: '(a/b)/c (fraction inside fraction)',
     stress: 'Two stacked fraction levels, caret on the inner fraction — Down ×2, Up ×2, click the inner mfrac edge zone.',
@@ -239,6 +273,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'X-02',
+    rules: ['T6', 'T7', 'N2'],
     category: 'X',
     label: '((a+b) + x)/y (group in a row inside a fraction)',
     stress: 'Group as a row operand inside a numerator, caret on the seam — type `*` at the seam, Left, Down.',
@@ -247,6 +282,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'X-03',
+    rules: ['T5', 'N4', 'T7'],
     category: 'X',
     label: 'sin(x)² (function inside a power)',
     stress: 'Function row as a power base, caret on the base — Right, Up, Left into the fn args.',
@@ -255,6 +291,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'X-04',
+    rules: ['T7', 'S-018', 'N6'],
     category: 'X',
     label: 'x^(2^3) (power inside power)',
     stress: 'Nested power in the exponent, caret on the inner power — Down, click the exp msup.',
@@ -265,6 +302,7 @@ export const CASES: readonly CatalogCase[] = [
   // ——— C: caret-reachability classes ———
   {
     id: 'C-01',
+    rules: ['T1', 'S-003', 'N2', 'C1'],
     category: 'C',
     label: 'a + b, row start seam (index 0)',
     stress: 'Row start seam — Left, Backspace, Right.',
@@ -273,6 +311,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'C-02',
+    rules: ['T1', 'N2', 'S-006'],
     category: 'C',
     label: 'a + b + c, interior seam (index 1)',
     stress: 'Interior seam over the first `+` glyph — arrows, type `−` at the seam.',
@@ -281,6 +320,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'C-03',
+    rules: ['T1', 'S-005', 'T7'],
     category: 'C',
     label: 'a + b, row end seam (index 2)',
     stress: 'Filled end seam after the last operand — Right, type `^`, type `+`.',
@@ -289,6 +329,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'C-04',
+    rules: ['T4', 'N1', 'D1'],
     category: 'C',
     label: '123 + b, in-token caret at offset 2',
     stress: 'In-token caret mid-number — Left, type `+` (structure token at an interior offset), type `7`.',
@@ -297,6 +338,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'C-05',
+    rules: ['T7', 'S-026', 'C2', 'N8', 'S-027'],
     category: 'C',
     label: 'a/□, slot placeholder caret in the denominator',
     stress: 'Empty slot (□) caret — type `5`, Backspace, click the □.',
@@ -305,8 +347,9 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'C-06',
+    rules: ['T7', 'OA-projection'],
     category: 'C',
-    label: 'a + □, caret on the row container itself',
+    label: 'a + (bare empty cell), caret on the row container itself',
     stress: 'Self-on-container caret on a row with a pending cell — type `+`, Left/Right.',
     envelope: env(op('add', sym('a'), null)),
     caret: nd([]),
@@ -315,6 +358,7 @@ export const CASES: readonly CatalogCase[] = [
   // ——— T: typing from empty (instruction cases; seed = empty formula) ———
   {
     id: 'T-01',
+    rules: ['T1', 'T4', 'S-002'],
     category: 'T',
     label: 'type `5+3*2` from empty',
     stress: 'Typed-from-empty sequence: digit, `+`, digit, `*` (higher-precedence operator last), digit.',
@@ -324,6 +368,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'T-02',
+    rules: ['T3', 'T7', 'S-018'],
     category: 'T',
     label: 'type `a/b^c` from empty',
     stress: 'Typed-from-empty sequence: `/` then `^` (structure tokens in a row).',
@@ -333,6 +378,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'T-03',
+    rules: ['T6', 'T1', 'S-002'],
     category: 'T',
     label: 'type `(a+b)*c` from empty',
     stress: 'Typed-from-empty sequence: group open, row inside, group close, `*`, operand.',
@@ -342,6 +388,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'T-04',
+    rules: ['T1', 'S-004', 'T3', 'OA-projection'],
     category: 'T',
     label: 'type `-x+2` from empty',
     stress: 'Typed-from-empty sequence: `-` as the very first token, then letter, `+`, digit.',
@@ -351,6 +398,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'T-05',
+    rules: ['T7', 'S-018'],
     category: 'T',
     label: 'type `x^2^3` from empty',
     stress: 'Typed-from-empty sequence: `^` typed twice in a row.',
@@ -360,6 +408,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'T-06',
+    rules: ['T1', 'S-002', 'T4'],
     category: 'T',
     label: 'type `2*3+4` from empty',
     stress: 'Typed-from-empty sequence: `*` first, then `+` (lower-precedence operator last).',
@@ -371,6 +420,7 @@ export const CASES: readonly CatalogCase[] = [
   // ——— I: insertion at position classes ———
   {
     id: 'I-01',
+    rules: ['T7', 'C2'],
     category: 'I',
     label: '□/b, caret in the empty numerator slot',
     stress: 'Empty fixed slot — type `5`.',
@@ -379,14 +429,16 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'I-02',
+    rules: ['T1', 'T3', 'OA-projection'],
     category: 'I',
-    label: 'a + □, caret in the null row cell',
+    label: 'a + (bare empty cell — renders `a+`), caret in the null row cell',
     stress: 'Null args cell — type `b`.',
     envelope: env(op('add', sym('a'), null)),
     caret: rw([], 1),
   },
   {
     id: 'I-03',
+    rules: ['T4', 'T1'],
     category: 'I',
     label: 'x + 5, end seam after the trailing number',
     stress: 'Filled end seam after a number operand — type `6`.',
@@ -395,14 +447,16 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'I-04',
+    rules: ['T1', 'OA-projection'],
     category: 'I',
-    label: 'a + □, caret in the null row cell (operators)',
+    label: 'a + (bare empty cell — renders `a+`), caret in the null row cell (operators)',
     stress: 'Operand-expected cell — type `*`, then `-`.',
     envelope: env(op('add', sym('a'), null)),
     caret: rw([], 1),
   },
   {
     id: 'I-05',
+    rules: ['T6', 'S-097', 'T5'],
     category: 'I',
     label: 'a + b, caret on b (last operand)',
     stress: 'Held last operand — type `(`, then `)`.',
@@ -411,6 +465,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'I-06',
+    rules: ['T7', 'S-019'],
     category: 'I',
     label: 'a/b, caret on the numerator',
     stress: 'Left side of a fraction (numerator slot) — type `/`.',
@@ -421,6 +476,7 @@ export const CASES: readonly CatalogCase[] = [
   // ——— S: operator token at mid-row positions ———
   {
     id: 'S-01',
+    rules: ['T2', 'T1', 'S-006'],
     category: 'S',
     label: 'a + b×c, seam on the +',
     stress: 'Mid-row seam in a mixed-precedence row — type `*` at the seam.',
@@ -429,6 +485,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'S-02',
+    rules: ['T2', 'T1'],
     category: 'S',
     label: 'a×(b + c), seam on the ×',
     stress: 'Mid-row seam with a nested row as the right operand — type `+` at the seam.',
@@ -437,6 +494,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'S-03',
+    rules: ['T2', 'T1', 'S-001'],
     category: 'S',
     label: 'a + b + c, seam on the first + (same operator retyped)',
     stress: 'Mid-row seam — type `+` at the seam (the same operator), then Ctrl+Z.',
@@ -445,6 +503,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'S-04',
+    rules: ['T2', 'T1', 'S-005'],
     category: 'S',
     label: 'a + b + c, seam on the second +',
     stress: 'Second seam of a 3-operand row — type `*` at seam 2.',
@@ -453,6 +512,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'S-05',
+    rules: ['T2', 'T1'],
     category: 'S',
     label: 'a + b + c, caret on b (mid-row operand)',
     stress: 'Node caret on a mid-row operand — type `-` while standing on b.',
@@ -461,6 +521,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'S-06',
+    rules: ['T2', 'T7', 'T1'],
     category: 'S',
     label: 'a + b, seam on the + (structure token)',
     stress: 'Mid-row seam — type `/` at the seam.',
@@ -469,6 +530,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'S-07',
+    rules: ['T2', 'T7', 'S-018'],
     category: 'S',
     label: 'a×b, caret on a (first operand, structure token)',
     stress: 'Node caret on the first operand — type `^` while standing on a.',
@@ -479,6 +541,7 @@ export const CASES: readonly CatalogCase[] = [
   // ——— B: backspace ———
   {
     id: 'B-01',
+    rules: ['D1', 'S-063'],
     category: 'B',
     label: '123 alone, caret on the number',
     stress: 'Number at root — Backspace ×3.',
@@ -487,6 +550,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'B-02',
+    rules: ['D1', 'N1'],
     category: 'B',
     label: '123 + b, in-token caret at offset 2',
     stress: 'In-token caret — Backspace at offset 2.',
@@ -495,6 +559,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'B-03',
+    rules: ['D2', 'S-066'],
     category: 'B',
     label: 'x + y, end seam',
     stress: 'End seam with a node left of it — Backspace.',
@@ -503,6 +568,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'B-04',
+    rules: ['D6', 'S-073', 'C2'],
     category: 'B',
     label: 'a/□, caret in the denominator placeholder',
     stress: 'Fraction with one empty slot — Backspace at the placeholder, then on the numerator, then again.',
@@ -511,14 +577,16 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'B-05',
+    rules: ['T7', 'OA-projection', 'D2'],
     category: 'B',
-    label: '+□ (all-empty op row), caret in the cell',
+    label: 'all-empty op row with ONE cell (renders nothing — degenerate, flagged), caret in the cell',
     stress: 'Op row whose only cell is empty — Backspace in the cell.',
     envelope: env(op('add', null)),
     caret: rw([], 0),
   },
   {
     id: 'B-06',
+    rules: ['D3', 'S-067'],
     category: 'B',
     label: '123 + b, in-token caret at offset 1',
     stress: 'Ctrl+Backspace inside a number token.',
@@ -527,6 +595,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'B-07',
+    rules: ['D6', 'S-074', 'D3'],
     category: 'B',
     label: 'x², caret on the base',
     stress: 'Slot content node — Ctrl+Backspace, then Backspace at the base slot.',
@@ -537,6 +606,7 @@ export const CASES: readonly CatalogCase[] = [
   // ——— M: navigation (horizontal + vertical) ———
   {
     id: 'M-01',
+    rules: ['N4', 'N2', 'N1'],
     category: 'M',
     label: 'a + b×c + d, caret on a',
     stress: 'Horizontal walk across a row containing a nested row — Right ×4, then Left ×4.',
@@ -545,6 +615,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'M-02',
+    rules: ['N6', 'S-040', 'N4'],
     category: 'M',
     label: '(x+y)/(c+d), caret on x',
     stress: 'Vertical move between fraction slots with horizontal moves in between — Down, Left, Left, Up.',
@@ -553,6 +624,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'M-03',
+    rules: ['N6', 'N1'],
     category: 'M',
     label: '(12+x)/(3+y), in-token caret at offset 1 in the numerator number',
     stress: 'Vertical move with an in-token origin — Down, Left, Left, Up.',
@@ -561,6 +633,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'M-04',
+    rules: ['N5', 'S-043', 'S-044'],
     category: 'M',
     label: '(x+y)², caret after y in the base row',
     stress: 'Power with a row base — Right, Left, Up, Down around the base/exp edge.',
@@ -569,6 +642,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'M-05',
+    rules: ['N6', 'S-045', 'N5'],
     category: 'M',
     label: '³√(a+b), caret after b in the radicand row',
     stress: 'Indexed root — Up, Down between the radicand and index regions.',
@@ -577,6 +651,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'M-06',
+    rules: ['N6', 'N4'],
     category: 'M',
     label: '(x²)/y, caret on the exponent',
     stress: 'Vertical move out of a power nested in a fraction numerator — Down, Down.',
@@ -587,6 +662,7 @@ export const CASES: readonly CatalogCase[] = [
   // ——— K: click placement (seed + precise click target in `stress`) ———
   {
     id: 'K-01',
+    rules: ['C5', 'C1'],
     category: 'K',
     label: 'a + b — background clicks',
     stress: 'Click the math background at fractions 0.04 / 0.4 / 0.6 / 0.96 of the math extent.',
@@ -595,6 +671,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'K-02',
+    rules: ['C1'],
     category: 'K',
     label: '(a+b) + c — group container clicks',
     stress: 'Click the group mrow at fractions 0.9 / 0.1 / 0.5 of its extent.',
@@ -603,6 +680,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'K-03',
+    rules: ['C1', 'S-058'],
     category: 'K',
     label: '1234 + b — number glyph click',
     stress: 'Click the number glyph (mn) at fraction 0.3 of its extent.',
@@ -611,6 +689,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'K-04',
+    rules: ['C1', 'S-053', 'N2'],
     category: 'K',
     label: 'a + b + c — separator glyph click',
     stress: 'Click the second `+` separator mo.',
@@ -619,6 +698,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'K-05',
+    rules: ['C2', 'S-057'],
     category: 'K',
     label: '□/b — placeholder click',
     stress: 'Click the □ placeholder mi.',
@@ -627,6 +707,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'K-06',
+    rules: ['C1', 'S-104'],
     category: 'K',
     label: '50 mm + x — unit symbol click',
     stress: 'Click the upright mm symbol mi at middle fractions of its extent.',
@@ -637,6 +718,7 @@ export const CASES: readonly CatalogCase[] = [
   // ——— U: undo/redo walk-backs ———
   {
     id: 'U-01',
+    rules: ['U1', 'U3', 'T1'],
     category: 'U',
     label: 'type `a+b*c`, then undo/redo',
     stress: 'Multi-step typed sequence, then Ctrl+Z ×3 and Ctrl+Y ×3.',
@@ -646,6 +728,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'U-02',
+    rules: ['U1', 'U2', 'T1'],
     category: 'U',
     label: 'a + b, seam on the + — type then undo',
     stress: 'Type `*` at the seam, then Ctrl+Z.',
@@ -654,6 +737,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'U-03',
+    rules: ['U3', 'U1'],
     category: 'U',
     label: 'type `a+b`, undo ×2, type `x`, redo',
     stress: 'Ctrl+Z ×2, type `x`, then Ctrl+Y.',
@@ -665,6 +749,7 @@ export const CASES: readonly CatalogCase[] = [
   // ——— R: real-world formulas ———
   {
     id: 'R-01',
+    rules: ['T1', 'OA-projection', 'T7', 'D2'],
     category: 'R',
     label: '(−b+√(b²−4ac))/(2a) — quadratic formula, caret on the discriminant’s − seam',
     stress: 'Prebuilt quadratic formula — type `+` at the radicand seam, Backspace, arrows, Ctrl+Z.',
@@ -678,6 +763,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'R-02',
+    rules: ['T7', 'T1', 'T3'],
     category: 'R',
     label: 'type `b^2-4*a*c` (discriminant) from empty',
     stress: 'Typed-from-empty instruction `b^2-4*a*c`.',
@@ -687,6 +773,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'R-03',
+    rules: ['T9', 'S-002', 'D6'],
     category: 'R',
     label: '√(a²+b²) — Pythagorean root, caret on the + seam',
     stress: 'Type `×` at the radicand seam, Backspace on an exponent, Down/Up.',
@@ -695,6 +782,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'R-04',
+    rules: ['T7', 'T1'],
     category: 'R',
     label: 'type `a^2+b^2` from empty',
     stress: 'Typed-from-empty instruction `a^2+b^2`.',
@@ -704,6 +792,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'R-05',
+    rules: ['S-002', 'T7'],
     category: 'R',
     label: 'π·r² — area of a circle, caret on the × seam',
     stress: 'Type `/` at the seam, Right.',
@@ -712,6 +801,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'R-06',
+    rules: ['T7', 'D6', 'N5'],
     category: 'R',
     label: 'V/R — Ohm’s law, caret in the denominator',
     stress: 'Type `2` in the den; arrows to V; Ctrl+Backspace; Backspace at the num slot.',
@@ -720,6 +810,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'R-07',
+    rules: ['T7'],
     category: 'R',
     label: 'type `V/R` from empty',
     stress: 'Typed-from-empty instruction `V/R`.',
@@ -731,6 +822,7 @@ export const CASES: readonly CatalogCase[] = [
   // ——— P: known-suspect probes ———
   {
     id: 'P-01',
+    rules: ['T7', 'S-019', 'N4'],
     category: 'P',
     label: 'x + a/b, end seam after the fraction',
     stress: 'Probe: end seam after a non-row operand — Right, type `^`; reset; type `+`.',
@@ -739,6 +831,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'P-02',
+    rules: ['N3', 'N4'],
     category: 'P',
     label: 'a + b at root, caret on b',
     stress: 'Probe: Right out of the root row’s last cell.',
@@ -747,6 +840,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'P-03',
+    rules: ['N4', 'S-044'],
     category: 'P',
     label: '(a+b)², caret after b in the base row',
     stress: 'Probe: Right out of the base row’s last cell (the row is nested in a power).',
@@ -755,6 +849,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'P-04',
+    rules: ['C1'],
     category: 'P',
     label: '(a+b) + c — group edge-zone clicks',
     stress: 'Probe: click the group mrow at fractions 0.74 / 0.76 / 0.9 of its extent (edge-zone boundary).',
@@ -763,6 +858,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'P-05',
+    rules: ['C1', 'S-058', 'S-060'],
     category: 'P',
     label: '1234 + 56/78 — row-cell number vs slot number clicks',
     stress: 'Probe: click the row-cell 1234 vs the numerator 56.',
@@ -771,6 +867,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'P-06',
+    rules: ['C2', 'S-025', 'N8'],
     category: 'P',
     label: '□/□, caret on the fraction itself',
     stress: 'Probe: self-on-container caret on a fraction with both slots empty — Down, Up, Left, Right.',
@@ -779,6 +876,7 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'P-07',
+    rules: ['N2', 'C1'],
     category: 'P',
     label: 'a + b + c, caret on the first + seam',
     stress: 'Probe: watch the overlay caret div’s pixel position at the seam.',
@@ -787,10 +885,144 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'P-08',
+    rules: ['C3', 'S-056'],
     category: 'P',
     label: '(a+b)/(c+d) — stacked-layout click',
     stress: 'Probe: click the outer mfrac’s left half at denominator height.',
     envelope: env(frac(op('add', sym('a'), sym('b')), op('add', sym('c'), sym('d')))),
     caret: nd(['num', 0]),
+  },
+
+  // ——— V: contract rendering states (rework session 1) ———
+  {
+    id: 'V-01',
+    rules: ['T7', 'OA-projection', 'S-004'],
+    category: 'V',
+    label: '−x (bare leading minus — the empty cell sits LEFT of the glyph)',
+    stress: 'Renders bare (no placeholder): leading − with the empty cell before it — probe the caret anchor at the glyph edge, arrows, typing.',
+    envelope: env(op('subtract', null, sym('x'))),
+    caret: rw([], 0),
+  },
+  {
+    id: 'V-02',
+    rules: ['T1', 'OA-projection', 'S-006'],
+    category: 'V',
+    label: '−x+ (leading minus OPERATES, trailing plus is bare and empty)',
+    stress: 'Nested glyphs: the inner row carries the leading −, the outer row carries the trailing bare + — probe arrows and the seam/caret anchors.',
+    envelope: env(op('add', op('subtract', null, sym('x')), null)),
+    caret: rw([], 1),
+  },
+  {
+    id: 'V-03',
+    rules: ['T1', 'OA-projection'],
+    category: 'V',
+    label: '2−−3 (interior empty cell — the doubled − reads unary on what follows)',
+    stress: 'Renders as two adjacent minus glyphs; the empty cell has no glyph of its own — probe the caret anchor between the two −.',
+    envelope: env(op('subtract', num(2), null, num(3))),
+    caret: rw([], 1),
+  },
+  {
+    id: 'V-04',
+    rules: ['T1', 'OA-projection', 'S-001'],
+    category: 'V',
+    label: 'a+b++c (doubled + at an interior seam)',
+    stress: 'The ladder-operator row: bare empty cell between two + glyphs — probe seams, arrows, Backspace expectations.',
+    envelope: env(op('add', sym('a'), sym('b'), null, sym('c'))),
+    caret: rw([], 2),
+  },
+  {
+    id: 'V-05',
+    rules: ['T1', 'OA-projection'],
+    category: 'V',
+    label: '+ (all-null row — glyph between two empty cells)',
+    stress: 'Both cells empty, the single + glyph carries the state — probe the caret anchors on both sides of the glyph.',
+    envelope: env(op('add', null, null)),
+    caret: rw([], 0),
+  },
+  {
+    id: 'V-06',
+    rules: ['OA-juxtaposition', 'S-098'],
+    category: 'V',
+    label: '5x (glyph-less juxtaposition — implicit multiply, no × glyph)',
+    stress: 'Renders with NO operator glyph between the nodes — probe the seam caret, arrows, evaluation reading.',
+    envelope: env(jmp(num(5), sym('x'))),
+    caret: rw([], 1),
+  },
+  {
+    id: 'V-07',
+    rules: ['OA-juxtaposition'],
+    category: 'V',
+    label: '5(a+b) (implicit multiply of a group — evaluates per contract)',
+    stress: 'Number before group, glyph-less — same probing shape as 5x one level up.',
+    envelope: env(jmp(num(5), group(op('add', sym('a'), sym('b'))))),
+    caret: nd([1]),
+  },
+  {
+    id: 'V-08',
+    rules: ['OA-juxtaposition'],
+    category: 'V',
+    label: 'x3 (symbol before number — glyph-less REFUSAL state)',
+    stress: 'The annotation target: ambiguous with the name x3 — evaluation refuses; rendering stays glyph-less.',
+    envelope: env(jmp(sym('x'), num(3))),
+    caret: rw([], 1),
+  },
+  {
+    id: 'V-09',
+    rules: ['OA-juxtaposition', 'S-098'],
+    category: 'V',
+    label: '5 next to 3 (number-number — forbidden adjacency with the S-098 seam)',
+    stress: 'A subtle seam/background marker renders between the two nodes — probe its visibility/styling (live-check item).',
+    envelope: env(jmp(num(5), num(3))),
+    caret: rw([], 1),
+  },
+  {
+    id: 'V-10',
+    rules: ['OA-fence', 'S-097', 'C4'],
+    category: 'V',
+    label: '(a+b (group missing its close fence — unbalanced, storable, refused)',
+    stress: 'The movable-paren deletion state: open fence stands, no closing glyph — probe rendering, evaluation refusal annotation.',
+    envelope: env(group(op('add', sym('a'), sym('b')), false)),
+    caret: nd([]),
+  },
+  {
+    id: 'V-11',
+    rules: ['OA-fence', 'S-097', 'T10'],
+    category: 'V',
+    label: 'sin(x (function missing its close fence)',
+    stress: 'The atomic head + open fence stand alone — probe rendering, arrow out at the end, refusal annotation.',
+    envelope: env({ type: 'fn', name: 'sin', args: [sym('x')], close: false }),
+    caret: nd([0]),
+  },
+  {
+    id: 'V-12',
+    rules: ['OA-fence', 'S-097', 'C4'],
+    category: 'V',
+    label: 'x+) (dangling close in a row — nothing unclosed to its left)',
+    stress: 'A standalone ) glyph token with no open fence — error-annotated per the contract, storable and rendering.',
+    envelope: env(op('add', sym('x'), fence())),
+    caret: nd([1]),
+  },
+  {
+    id: 'V-13',
+    rules: ['OA-fence', 'S-097'],
+    category: 'V',
+    label: '(a+b over 2+) (displaced paired close — the ) completes the numerator’s open fence from the denominator row)',
+    stress: 'The movable-paren displaced state: the ) sits in the denominator row and PAIRS with the numerator’s open fence (stored via its path) — probe rendering + refusal.',
+    envelope: env(
+      frac(
+        group(op('add', sym('a'), sym('b')), false),
+        op('add', num(2), fence(['num'])),
+      ),
+    ),
+    caret: nd(['den', 1]),
+  },
+  {
+    id: 'V-14',
+    rules: ['T7', 'T9'],
+    category: 'V',
+    label: 'mroot with an EMPTY index slot (renders □ — not the square-root form)',
+    stress: 'Additive mroot state: the index slot exists and shows its □ although index is null — probe rendering, clicks, refusal.',
+    envelope: env({ type: 'root', radicand: num(2), mroot: true }),
+    caret: sl([], 'index'),
   },
 ];

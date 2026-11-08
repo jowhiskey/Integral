@@ -24,6 +24,8 @@ import {
   SymbolNode,
   UNARY_OPS,
   UnitNode,
+  implicitPairLegal,
+  projectsUnaryRow,
 } from './nodes.js';
 
 export function isEvaluable(node: MathNode | null): boolean {
@@ -41,21 +43,55 @@ export function isEvaluable(node: MathNode | null): boolean {
       if (UNARY_OPS.has(op.op)) {
         return op.args.length === 1 && isEvaluable(op.args[0]);
       }
+      if (op.implicit) {
+        // Glyph-less adjacency (Owner amendment): every cell must be filled
+        // and every adjacent pair legal — a number before a non-number is
+        // implicit multiplication; a symbol (any non-number) before anything
+        // refuses; number next to number stays forbidden (S-098).
+        return (
+          op.args.length >= 2 &&
+          op.op === 'multiply' &&
+          op.args.every(isEvaluable) &&
+          op.args.slice(1).every((arg, i) => arg !== null && op.args[i] !== null && implicitPairLegal(op.args[i]!, arg))
+        );
+      }
+      if (op.op === 'add' || op.op === 'subtract') {
+        // Math-style projection of empty-slot operator rows (Owner amendment):
+        // leading `−` negates, leading `+` is identity, a doubled operator
+        // acts on what follows. Trailing null, all-null, and two consecutive
+        // null cells refuse (the projection pattern is exhaustive for the rest).
+        return (
+          projectsUnaryRow(op.args) &&
+          op.args.every((arg) => arg === null || isEvaluable(arg))
+        );
+      }
       return op.args.length >= 2 && op.args.every(isEvaluable);
     }
     case 'fn': {
       const fn = node as FunctionNode;
-      return fn.name !== '' && fn.args.every(isEvaluable);
+      // close === false: the movable closing fence is absent — unbalanced
+      // states stand structurally refused (the existing gate, no new rule).
+      return fn.close !== false && fn.name !== '' && fn.args.every(isEvaluable);
     }
     case 'group':
-      return isEvaluable((node as GroupNode).child);
+      // close === false: see the fn case.
+      return (node as GroupNode).close !== false && isEvaluable((node as GroupNode).child);
+    case 'fence':
+      // A close-fence glyph is never a value — dangling or paired, every
+      // state that contains one is structurally incomplete for evaluation.
+      return false;
     case 'frac':
       return isEvaluable((node as FractionNode).num) && isEvaluable((node as FractionNode).den);
     case 'pow':
       return isEvaluable((node as PowerNode).base) && isEvaluable((node as PowerNode).exp);
     case 'root': {
       const root = node as RootNode;
-      return isEvaluable(root.radicand) && (root.index === null || isEvaluable(root.index));
+      // mroot with a null index is the empty-index-slot state — incomplete.
+      return (
+        isEvaluable(root.radicand) &&
+        !(root.mroot && root.index === null) &&
+        (root.index === null || isEvaluable(root.index))
+      );
     }
     case 'sub':
       return (node as SubscriptNode).base !== '' && (node as SubscriptNode).sub !== '';

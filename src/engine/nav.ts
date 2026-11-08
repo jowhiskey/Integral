@@ -80,7 +80,7 @@ export type NavRegistry = Readonly<Record<NodeJson['type'], NavProfile>>;
 const LEAF_PROFILE: NavProfile = { children: 'leaf' };
 const ROW_PROFILE: NavProfile = { children: 'args' };
 
-/** The default registry: all 10 node types. */
+/** The default registry: all node types (incl. the additive fence token). */
 export const NAV_PROFILES: NavRegistry = {
   num: LEAF_PROFILE,
   sym: LEAF_PROFILE,
@@ -127,6 +127,9 @@ export const NAV_PROFILES: NavRegistry = {
   // The unit symbol is a string channel, not a slot: only the value is
   // traversable; the unit block as a whole is exit-only.
   unit: { children: 'slots', flow: ['value'] },
+  // A close-fence glyph token (movable-paren model) is a plain leaf in the
+  // row geography — full caret/nav treatment arrives with session 3's fence map.
+  fence: LEAF_PROFILE,
 };
 
 const profileFor = (registry: NavRegistry, node: NodeJson): NavProfile =>

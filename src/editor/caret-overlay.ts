@@ -9,7 +9,11 @@
 // - empty          → left edge of the <math> element (the empty formula's caret).
 // - node           → left edge of the node's rendered extent (first..last fragment).
 // - slot           → left edge of the <mi>□</mi> placeholder element.
-// - row, index < n → left edge of cell index's extent (or its □ placeholder).
+// - row, index < n → left edge of cell index's extent; a placeholder cell at its
+//                    □; a BARE op-row cell at the flanking separator glyph's edge
+//                    (preceding glyph's right edge, then the following glyph's
+//                    left edge; glyph-less rows anchor at the row owner with the
+//                    <math> height — the caret is never invisible).
 // - row, index = n → right edge of the last cell's extent (row owner's left edge
 //                    when the row is empty).
 // - token, index  → the character boundary inside the number's extent
@@ -76,10 +80,27 @@ export function caretAnchor(env: Envelope, caret: Caret, rendered: RenderedMath)
       const args = rowArgs(row);
       if (caret.index < args.length) {
         if (args[caret.index] === null) {
+          // Placeholder cells (fn args, power-op slots) anchor at the □;
+          // BARE op-row cells have no element — anchor at the flanking
+          // separator glyph's edge (the anchor fallback, S-023/T7 split).
           const ph = rendered.placeholderByCaret.get(caretKey({ kind: 'row', path: caret.path, index: caret.index }));
-          if (!ph) return null;
-          const r = rectOf(ph);
-          return { x: r.left, y: r.top, height: r.height };
+          if (ph) {
+            const r = rectOf(ph);
+            return { x: r.left, y: r.top, height: r.height };
+          }
+          const bare = rendered.bareAnchors.get(caretKey({ kind: 'row', path: caret.path, index: caret.index }));
+          if (bare) {
+            if (bare.glyphEl !== null) {
+              const r = rectOf(bare.glyphEl);
+              return { x: bare.side === 'right' ? r.right : r.left, y: r.top, height: r.height };
+            }
+            // Glyph-less row (all-null/operand-less): the row owner's left
+            // edge; the <math> rect supplies a visible height.
+            const rowR = rectOf(bare.rowEl);
+            const mathR = rectOf(rendered.math);
+            return { x: rowR.left, y: mathR.top, height: mathR.height };
+          }
+          return null;
         }
         const r = extentRect(rendered, [...caret.path, caret.index]);
         return r === null ? null : { x: r.left, y: r.top, height: r.height };

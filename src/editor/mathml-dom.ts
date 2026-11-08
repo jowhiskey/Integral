@@ -51,6 +51,23 @@ const OP_DISPLAY: Readonly<Record<string, string>> = {
 /** Thin space between a unit's value and its symbol (~0.167em). */
 const UNIT_SPACE_WIDTH = '0.1667em';
 
+/** S-098 seam marker (styling-level): the classed mspace between two adjacent
+ * number cells of an implicit-multiply row; the seam/index CSS paints it. */
+const SEAM_CLASS = 'integral-seam';
+const SEAM_WIDTH = '0.1667em';
+
+/**
+ * A bare-cell caret anchor (an op-row null cell renders NO element — T7 split:
+ * row-level missing operands are bare): the flanking separator glyph (which
+ * edge) or, for glyph-less rows (all-null/operand-less), the row owner element
+ * whose rect supplies x (a visible height comes from the <math> element).
+ */
+export interface BareAnchor {
+  readonly glyphEl: Element | null;
+  readonly side: 'left' | 'right';
+  readonly rowEl: Element;
+}
+
 /** Stable map key for a path / caret (JSON of the step list / tagged union). */
 export const pathKey = (path: Path): string => JSON.stringify(path);
 export const caretKey = (caret: Caret): string => JSON.stringify(caret);
@@ -75,6 +92,8 @@ export interface RenderedMath {
   readonly placeholderByCaret: ReadonlyMap<string, Element>;
   /** row separator <mo> element (operator glyphs, fn commas) → the seam it sits on. */
   readonly separators: ReadonlyMap<Element, { readonly path: Path; readonly index: number }>;
+  /** caret key → the bare-cell anchor (op-row null cells — no placeholder element). */
+  readonly bareAnchors: ReadonlyMap<string, BareAnchor>;
 }
 
 /** Module-level UID counter: ids stay unique across rebuilds and across trees
@@ -94,6 +113,7 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
   const placeholders = new Map<Element, Caret>();
   const placeholderByCaret = new Map<string, Element>();
   const separators = new Map<Element, { path: Path; index: number }>();
+  const bareAnchors = new Map<string, BareAnchor>();
 
   const el = (tag: string): Element => doc.createElementNS(MATHML_NS, tag);
   const mo = (text: string, fence: boolean): Element => {
@@ -125,7 +145,8 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
   // A node's loose fragment: the elements its mathmlContent() would produce,
   // without any contextual wrapper. Slots/rows/root add the wrappers.
 
-  /** childMathml: loose child in a row (null → placeholder with a ROW caret). */
+  /** childMathml: loose child in a fn args row (null → placeholder with a ROW
+   *  caret — function arguments are placeholder territory, T7/S-023). */
   const rowChild = (path: Path, index: number, child: MathNode | null): Element[] =>
     child === null
       ? [placeholder({ kind: 'row', path, index })]
@@ -136,20 +157,55 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
   const slotChild = (path: Path, slot: SlotName, child: MathNode | null): Element =>
     child === null ? placeholder({ kind: 'slot', path, slot }) : wrapSlot(fragment(child, [...path, slot]));
 
-  /** The op row tokens as loose elements: args joined by separator mo's.
-   *  Mirrors OperatorNode.rowTokens (an empty args row shows one placeholder). */
-  const rowTokens = (node: OperatorNode, path: Path): Element[] => {
+  /** Anchor a bare op-row null cell after the row is fully built: the glyph
+   *  before the cell wins (caret right after it), then the glyph after it
+   *  (caret at its left edge), then the glyph-less fallback (the row owner's
+   *  left edge; the <math> rect supplies a visible height). */
+  const anchorBareCells = (
+    path: Path,
+    rowEl: Element,
+    bareCells: number[],
+    sepEls: (Element | undefined)[],
+  ): void => {
+    for (const i of bareCells) {
+      const left = sepEls[i];
+      const right = i + 1 < sepEls.length ? sepEls[i + 1] : undefined;
+      bareAnchors.set(caretKey({ kind: 'row', path, index: i }), {
+        glyphEl: left ?? right ?? null,
+        side: left !== undefined ? 'right' : 'left',
+        rowEl,
+      });
+    }
+  };
+
+  /** The op row tokens as loose elements — mirrors OperatorNode.rowTokens (the
+   *  T7 split, live): a null cell renders BARE (no placeholder element); the
+   *  separator glyphs disappear entirely on implicit multiply rows; the S-098
+   *  forbidden number-number adjacency renders the classed seam mspace. */
+  const rowTokens = (node: OperatorNode, path: Path, rowEl: Element): Element[] => {
     const display = OP_DISPLAY[node.op] ?? node.op;
-    const args: (MathNode | null)[] = node.args.length === 0 ? [null] : node.args;
+    const args: (MathNode | null)[] = node.args;
+    const sepEls: (Element | undefined)[] = [];
+    const bareCells: number[] = [];
     const out: Element[] = [];
     args.forEach((arg, i) => {
-      if (i > 0) {
+      const prev = i > 0 ? args[i - 1] : null;
+      if (node.implicit && i > 0 && prev !== null && arg !== null && prev.type === 'num' && arg.type === 'num') {
+        const seam = el('mspace');
+        seam.setAttribute('class', SEAM_CLASS);
+        seam.setAttribute('width', SEAM_WIDTH);
+        out.push(seam);
+      }
+      if (i > 0 && !node.implicit) {
         const sep = mo(display, false);
         separators.set(sep, { path, index: i });
+        sepEls[i] = sep;
         out.push(sep);
       }
-      out.push(...rowChild(path, i, arg));
+      if (arg === null) bareCells.push(i);
+      else out.push(...fragment(arg, [...path, i]));
     });
+    anchorBareCells(path, rowEl, bareCells, sepEls);
     return out;
   };
 
@@ -161,7 +217,7 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
   const hostedChild = (path: Path, child: MathNode | null, openFence: Element): Element[] => {
     if (child === null) return [placeholder({ kind: 'slot', path, slot: 'child' })];
     if (child instanceof OperatorNode && !UNARY_OPS.has(child.op) && !(child.op === 'pow' && child.args.length <= 2)) {
-      const frag = rowTokens(child, [...path, 'child']);
+      const frag = rowTokens(child, [...path, 'child'], openFence);
       own([...path, 'child'], frag, openFence);
       return frag;
     }
@@ -185,22 +241,28 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
         const op = node as OperatorNode;
         const display = OP_DISPLAY[op.op] ?? op.op;
         if (UNARY_OPS.has(op.op)) {
+          // The unary glyph leads; a null cell renders BARE (T7 split) and
+          // anchors at the lead glyph's right edge (never invisible).
           const mrow = el('mrow');
           const lead = mo(display, false);
           separators.set(lead, { path, index: 0 });
           mrow.appendChild(lead);
-          if (op.args.length === 0) {
-            mrow.appendChild(placeholder({ kind: 'row', path, index: 0 }));
-          } else {
-            op.args.forEach((arg, i) => {
-              for (const f of rowChild(path, i, arg)) mrow.appendChild(f);
-            });
-          }
+          const sepEls: (Element | undefined)[] = [lead];
+          const bareCells: number[] = [];
+          op.args.forEach((arg, i) => {
+            if (arg === null) {
+              bareCells.push(i);
+              return;
+            }
+            for (const f of fragment(arg, [...path, i])) mrow.appendChild(f);
+          });
+          anchorBareCells(path, mrow, bareCells, sepEls);
           return own(path, [mrow], mrow);
         }
         if (op.op === 'pow' && op.args.length <= 2) {
           // ≤2-arg pow op renders like PowerNode (msup); null args are row cells
           // (an op has no named slots), wrapped like slotMathml when multi-element.
+          // Power slots are placeholder territory (T7 — □ in the exponent).
           const msup = el('msup');
           const args: (MathNode | null)[] = [op.args[0] ?? null, op.args[1] ?? null];
           args.forEach((arg, i) => {
@@ -211,7 +273,7 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
           return own(path, [msup], msup);
         }
         const mrow = el('mrow');
-        for (const f of rowTokens(op, path)) mrow.appendChild(f);
+        for (const f of rowTokens(op, path, mrow)) mrow.appendChild(f);
         return own(path, [mrow], mrow);
       }
       case 'fn': {
@@ -229,8 +291,16 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
           }
           for (const f of rowChild(path, i, arg)) mrow.appendChild(f);
         });
-        mrow.appendChild(mo(')', true));
+        // close = false: the movable closing fence is absent — the row stands open.
+        if (fn.close) mrow.appendChild(mo(')', true));
         return own(path, [mrow], mrow);
+      }
+      case 'fence': {
+        // A movable close-fence glyph token (dangling or paired): one fenced mo.
+        const f = el('mo');
+        f.setAttribute('fence', 'true');
+        f.textContent = ')';
+        return own(path, [f], f);
       }
       case 'group': {
         const group = node as GroupNode;
@@ -238,7 +308,8 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
         const openFence = mo('(', true);
         mrow.appendChild(openFence);
         for (const f of hostedChild(path, group.child, openFence)) mrow.appendChild(f);
-        mrow.appendChild(mo(')', true));
+        // close = false: see the fn case.
+        if (group.close) mrow.appendChild(mo(')', true));
         return own(path, [mrow], mrow);
       }
       case 'frac': {
@@ -257,7 +328,10 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
       }
       case 'root': {
         const root = node as RootNode;
-        if (root.index === null) {
+        // mroot keeps the mroot form with a placeholder index even when the
+        // index slot is empty (T7 □-territory); without it a null index is
+        // the complete v1 square root.
+        if (root.index === null && !root.mroot) {
           const msqrt = el('msqrt');
           msqrt.appendChild(slotChild(path, 'radicand', root.radicand));
           return own(path, [msqrt], msqrt);
@@ -326,5 +400,5 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
     }
   }
 
-  return { math, uidByPath, pathByUid, elementByPath, extents, placeholders, placeholderByCaret, separators };
+  return { math, uidByPath, pathByUid, elementByPath, extents, placeholders, placeholderByCaret, separators, bareAnchors };
 }

@@ -69,6 +69,18 @@
         margin-top: 0.25em;
         max-width: 70em;
       }
+      .example .note .rules {
+        display: block;
+        color: #357;
+        font-family: ui-monospace, monospace;
+      }
+      /* S-098 seam marker: the subtle background between two adjacent numbers of
+         a glyph-less multiply row (the forbidden number-number adjacency).
+         Visible but quieter than an error — restyle to taste in the live check. */
+      math .integral-seam {
+        background: #e8b4b4;
+        border-radius: 2px;
+      }
     </style>
   </head>
   <body>

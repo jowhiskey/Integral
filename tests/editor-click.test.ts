@@ -147,14 +147,28 @@ describe('click mapping: fraction with null num, filled den', () => {
 });
 
 describe('click mapping: empty row cell, empty formula, unit, group nesting', () => {
-  it('null args cell placeholder → row caret in the empty cell', () => {
-    const env = { v: 1, root: { type: 'op', op: 'add', args: [sym('a'), null] } };
+  it('null fn-arg cell placeholder → row caret in the empty arg (fn args keep □)', () => {
+    // Re-pinned (T7 split): op-row null cells render BARE and have no □ to
+    // click — placeholder-click coverage moves to a fn args row; a bare op-row
+    // null cell is still reached by clicking the adjacent separator glyph.
+    const env = { v: 1, root: { type: 'fn', name: 'f', args: [sym('a'), null] } };
     const cellCaret: Caret = row(1);
     const f = fixture(env, { '[]': { left: 0, top: 0, width: 20, height: 10 }, '[0]': { left: 0, top: 0, width: 10, height: 10 } }, {
       [caretKey(cellCaret)]: { left: 12, top: 0, width: 6, height: 10 },
     });
     click(f.placeholder(cellCaret), 14);
     expect(f.controller.getState().caret).toEqual(cellCaret);
+  });
+
+  it('bare op-row null cell: clicking the flanking separator glyph reaches the empty cell', () => {
+    // add(a, null) renders `a+` — the trailing glyph is the empty cell's left
+    // neighbor; its click maps to the row seam at index 1 (the empty cell).
+    const env = { v: 1, root: { type: 'op', op: 'add', args: [sym('a'), null] } };
+    const f = fixture(env, { '[]': { left: 0, top: 0, width: 15, height: 10 }, '[0]': { left: 0, top: 0, width: 10, height: 10 } });
+    const sep = [...f.controller.getRendered()!.separators.keys()];
+    expect(sep.length).toBe(1);
+    click(sep[0], 12);
+    expect(f.controller.getState().caret).toEqual(row(1));
   });
 
   it('empty formula: any click → the empty caret, log stays empty', () => {

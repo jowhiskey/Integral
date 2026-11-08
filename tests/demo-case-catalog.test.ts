@@ -39,6 +39,19 @@ describe('demo case catalog — structure and hygiene', () => {
     }
   });
 
+  it('every case carries rule-ID reference labels pointing at the contract (rework session 1)', () => {
+    // References only, NEVER behavior predictions — expected behavior lives in
+    // docs/context/interaction.md. Legal refs: T/N/C/D/U/K family IDs,
+    // S-scenario IDs, OA-* owner-amendment labels.
+    const RULE_PATTERN = /^(T\d\d?|N\d|C\d|D\d|U\d|K\d|S-\d{3}|OA-(digit-glue|juxtaposition|projection|fence))$/;
+    for (const c of CASES) {
+      expect(c.rules.length > 0, `${c.id} carries at least one rule ref`).toBe(true);
+      for (const rule of c.rules) {
+        expect(rule, `${c.id} rule ${JSON.stringify(rule)}`).toMatch(RULE_PATTERN);
+      }
+    }
+  });
+
   it('the globally FIRST case is the empty starting point (empty formula, caret at start)', () => {
     expect(CASES[0].id).toBe('E-01');
     expect(CASES[0].envelope).toEqual({ v: 1, root: null });

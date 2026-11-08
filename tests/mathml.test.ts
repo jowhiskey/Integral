@@ -134,7 +134,9 @@ describe('toMathML: structural rendering per node type', () => {
   });
 
   it('TS-only edge shapes never throw: empty args, 1-arg pow op, 3-arg pow op', () => {
-    expect(new OperatorNode('add', []).toMathML()).toBe(M`<math><mrow><mi>□</mi></mrow></math>`);
+    // Re-pinned (contract T7 split): a row-level operand-less op row renders
+    // BARE — no placeholder glyph; an all-null row is refused, never shown as □.
+    expect(new OperatorNode('add', []).toMathML()).toBe(M`<math><mrow></mrow></math>`);
     expect(new OperatorNode('pow', [new SymbolNode('x')]).toMathML()).toBe(
       M`<math><msup><mi>x</mi><mi>□</mi></msup></math>`,
     );
@@ -160,8 +162,11 @@ describe('toMathML: incomplete trees render, never throw (display, not evaluatio
     expect(new RootNode(null, null).toMathML()).toBe(
       M`<math><msqrt>${SLOT}</msqrt></math>`,
     );
+    // Re-pinned (contract T7 split): a row-level missing operand (trailing
+    // null cell of an op row) renders BARE — □ is 2D-slot territory only
+    // (frac/pow/root slots, fn args, emptied group content).
     expect(new OperatorNode('add', [new NumberNode(5), null]).toMathML()).toBe(
-      M`<math><mrow><mn>5</mn><mo>+</mo>${SLOT}</mrow></math>`,
+      M`<math><mrow><mn>5</mn><mo>+</mo></mrow></math>`,
     );
     expect(new UnitNode(null, 'mm').toMathML()).toBe(
       M`<math><mrow>${SLOT}<mspace width="0.1667em"/><mi mathvariant="normal">mm</mi></mrow></math>`,
@@ -181,9 +186,9 @@ describe('toMathML: incomplete trees render, never throw (display, not evaluatio
   it('the legal-envelope corpus renders through fromJSON without throwing (pins)', () => {
     const cases: [string, unknown, string][] = [
       [
-        'dangling op 5+',
+        'dangling op 5+ (re-pinned: row-level missing operands render BARE)',
         { v: 1, root: { type: 'op', op: 'add', args: [{ type: 'num', value: 5 }, null] } },
-        M`<math><mrow><mn>5</mn><mo>+</mo><mi>□</mi></mrow></math>`,
+        M`<math><mrow><mn>5</mn><mo>+</mo></mrow></math>`,
       ],
       [
         'empty fraction',
