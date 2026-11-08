@@ -7,7 +7,7 @@
 ```
 src/ast/        # node classes, JSON envelope (versioned, additive-only), toMathNode fold, vocabulary
 src/engine/     # editing engine (since 2026-11-06): ops as values, pure reducer, caret + nav profiles + insertion policy + operator swap, undo/redo, backspace — runtime-agnostic, no DOM
-src/editor/     # DOM layer (since 2026-11-07: rendering + caret overlay + click placement + keyboard + backspace wiring landed; bug-fix arc in progress — end-of-node caret reachability landed; the behavior rework is spec-first: earlier behavior rulings are void as intent, expected behavior comes from the owner-authored interaction spec — complete 2026-11-07, mirrored at docs/context/interaction.md (the binding contract); the dev demo page is the 83-case visual-test catalog case browser) — caret movement lives in src/engine — NOT plain-text input
+src/editor/     # DOM layer (since 2026-11-07: rendering + caret overlay + click placement + keyboard + backspace wiring landed; superseded 2026-11-08 by the behavior rework: seven implementation sessions against the owner-authored interaction spec — complete 2026-11-07, mirrored at docs/context/interaction.md (the binding contract); session 1 states & rendering landed 2026-11-08, sessions 2a-5 pending; earlier behavior rulings are void as intent; the dev demo page is the 83-case visual-test catalog case browser) — caret movement lives in src/engine — NOT plain-text input
 docs/context/   # editor-spec.md — the frozen AST spec (read before touching node types); interaction.md — the binding interaction contract (read before touching editing behavior)
 ```
 
