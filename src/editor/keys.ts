@@ -40,6 +40,7 @@ export type KeyAction =
   | { readonly kind: 'backspace'; readonly ctrl: boolean }
   | { readonly kind: 'undo' }
   | { readonly kind: 'redo' }
+  | { readonly kind: 'deadPow' }
   | { readonly kind: 'ignore' };
 
 /** Classify one keydown event (structural type — no DOM dependency, so the
@@ -60,6 +61,7 @@ export function classifyKey(event: {
   readonly metaKey: boolean;
   readonly altKey: boolean;
   readonly shiftKey: boolean;
+  readonly code?: string;
 }): KeyAction {
   const key = event.key;
   if (event.ctrlKey || event.metaKey) {
@@ -81,9 +83,50 @@ export function classifyKey(event: {
       return { kind: 'move', dir: 'up' };
     case 'ArrowDown':
       return { kind: 'move', dir: 'down' };
+    case 'Dead':
+      // T8, as amended by the owner directive (2026-11-09, live check): ANY
+      // dead-key press arms the pending power — layout-independent, no
+      // event.code/shift identification. The positional ruling could not
+      // survive real keyboards (the dead ^ sits unshifted on some layouts,
+      // shifted or on other positions on others); a formula editor reads a
+      // dead key as ^ entry, and the composition remnants are swallowed
+      // (S-034/S-035).
+      return { kind: 'deadPow' };
     default:
       break;
   }
   if (key.length === 1) return { kind: 'type', token: KEYMAP[key] };
   return { kind: 'ignore' };
+}
+
+/**
+ * The keymap character a physical key code stands for, for keystrokes whose
+ * `key` value carried no character identity — Firefox on Windows reports the
+ * second keystroke of a dead-key composition as `'Process'` (the composed
+ * character is unavailable, the code is not). Digits and letters only; null
+ * when the code maps to nothing (the pending then falls back to the empty
+ * power: the composed character is lost and retyped by hand).
+ */
+export function charFromCode(code: string | undefined): string | null {
+  if (code === undefined) return null;
+  if (/^Digit\d$/.test(code)) return code.slice(5);
+  if (/^Numpad\d$/.test(code)) return code.slice(6);
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3).toLowerCase();
+  return null;
+}
+
+/**
+ * The character a completed dead-key composition stood for, for platforms whose
+ * compositions never reach keydown (Firefox on Windows: the composed character
+ * surfaces only in compositionend). Decomposed forms strip their combining
+ * marks ('2' + U+0302 → '2'); a spacing-circumflex prefix ('^2', the
+ * non-composable emission) yields what follows it; the bare circumflex ('^',
+ * dead-^ + SPACE) is S-035 B's empty-exponent answer and returns ''. Null only
+ * when the data carries no single-character reading at all.
+ */
+export function deadCompositionBase(data: string | undefined | null): string | null {
+  if (data === undefined || data === null || data.length === 0) return null;
+  const base = data.normalize('NFD').replace(/[\u0300-\u036F]/g, '');
+  const rest = base.startsWith('^') ? base.slice(1) : base;
+  return rest.length === 1 ? rest : null;
 }

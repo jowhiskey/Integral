@@ -33,7 +33,7 @@ import {
 
 import { updateCaretOverlay } from './caret-overlay.js';
 import { caretFromHit, hitFromMouseEvent } from './click.js';
-import { classifyKey } from './keys.js';
+import { charFromCode, classifyKey, deadCompositionBase, KEYMAP } from './keys.js';
 import { buildMathML, type RenderedMath } from './mathml-dom.js';
 import { applyVerticalKey, type VerticalMemory } from './vertical-memory.js';
 
@@ -91,6 +91,15 @@ export class EditorController {
    *  (stores are caretResolvesIn-validated on read and discarded only when
    *  dangling). */
   private vmem: VerticalMemory = new Map();
+  /** T8 dead-key pending (session 2b-1): controller-side and transient — a
+   *  dead-key press (any layout — the owner directive 2026-11-09 overruled the
+   *  positional event.code identification) gives no live feedback and the
+   *  power materializes with the NEXT key press. Never a tree change, never
+   *  serialized, never logged; one-shot (owner ruling 2026-11-09): it survives
+   *  until the very next key press of any kind — a typing key resolves it,
+   *  every other input (non-typing keys, clicks, blur) discards it and does
+   *  its ordinary job untouched. */
+  private pendingDeadPow = false;
 
   constructor(container: HTMLElement, options: EditorControllerOptions = {}) {
     this.container = container;
@@ -108,6 +117,9 @@ export class EditorController {
     this.onCaretChange = options.onCaretChange;
     container.addEventListener('click', this.handleClick);
     container.addEventListener('keydown', this.handleKeydown);
+    container.addEventListener('keyup', this.handleKeyup);
+    container.addEventListener('compositionend', this.handleCompositionEnd);
+    container.addEventListener('blur', this.handleBlur);
     this.render();
   }
 
@@ -155,7 +167,9 @@ export class EditorController {
 
   /**
    * Pure caret placement (the click path): validated against the tree, applied as
-   * state WITHOUT a log entry — movement never logs. Only the overlay is updated;
+   * state WITHOUT a log entry — movement never logs. Pending dead-^ (T8) does not
+   * survive a caret placement — the click discards it and places the caret
+   * (one-shot, owner ruling 2026-11-09). Only the overlay is updated;
    * the MathML is not rebuilt for a caret-only change.
    */
   placeCaret(caret: Caret): void {
@@ -163,6 +177,7 @@ export class EditorController {
     if (!caretResolvesIn(env, caret)) {
       throw new EngineError('caret-invalid', `placeCaret: caret does not resolve in this tree (${JSON.stringify(caret)})`);
     }
+    this.pendingDeadPow = false;
     this.state = { root: this.state.root, caret, log: this.state.log, redo: this.state.redo, vocabulary: this.state.vocabulary };
     // clicks write no memory entries (and V2 never clears anything)
     this.updateCaret();
@@ -204,9 +219,80 @@ export class EditorController {
   // acts only while the root is focused; handled keys are preventDefault'ed,
   // everything else passes through untouched. ———
 
+  private readonly handleBlur = (): void => {
+    // T8 one-shot rule: blur discards a pending dead-^ with no trace.
+    this.pendingDeadPow = false;
+  };
+
+  /** Resolve a pending dead-^ with (at most) one typed character: the power
+   *  materializes first (its own op — undo parity with a live layout's `^`
+   *  followed by this key), then the character lands at the fresh exponent
+   *  caret. Ch null/'' = the empty □ exponent (the character could not be
+   *  recovered — retyped by hand); KEYMAP-unknown characters are swallowed
+   *  (never re-dispatched). */
+  private resolvePendingPow(ch: string | null): void {
+    if (!this.pendingDeadPow) return;
+    this.pendingDeadPow = false;
+    this.typeKey({ t: 'pow' });
+    const token = ch === null || ch === '' ? undefined : KEYMAP[ch];
+    if (token !== undefined && token.t !== 'pow') this.typeKey(token);
+  }
+
+  private readonly handleCompositionEnd = (event: CompositionEvent): void => {
+    // Firefox/Windows: the character completing a dead-key composition never
+    // surfaces as a usable keydown (preventDefault does not cancel Firefox's
+    // composition, and the composed keystroke bypasses keydown) — the composed
+    // data in compositionend is the only character carrier left.
+    if (!this.pendingDeadPow) return;
+    this.resolvePendingPow(deadCompositionBase(event.data));
+  };
+
+  private readonly handleKeyup = (event: KeyboardEvent): void => {
+    // Last-resort resolution: some platforms deliver the dead-composition's
+    // character only on keyup. Guarded by the pending flag, so it can never
+    // double-fire after a keydown/compositionend resolution.
+    if (!this.pendingDeadPow) return;
+    const ch = event.key === 'Process' ? charFromCode(event.code) : event.key.length === 1 ? event.key : null;
+    if (ch === null) return;
+    this.resolvePendingPow(ch);
+  };
+
   private readonly handleKeydown = (event: KeyboardEvent): void => {
     if (this.container.ownerDocument.activeElement !== this.container) return; // only while focused
+    if (this.pendingDeadPow && event.key === 'Process') {
+      // Firefox on Windows may report the second keystroke of a dead-key
+      // composition as 'Process' (no character identity in `key` — the
+      // physical code carries it instead).
+      event.preventDefault();
+      this.resolvePendingPow(charFromCode(event.code));
+      return;
+    }
     const action = classifyKey(event);
+    if (action.kind === 'deadPow') {
+      // T8: no live feedback (S-034) — the OS composition is suppressed; the
+      // power materializes with the NEXT key press. A re-press re-arms
+      // (idempotent, nothing visible, nothing logged).
+      event.preventDefault();
+      this.pendingDeadPow = true;
+      return;
+    }
+    if (this.pendingDeadPow) {
+      this.pendingDeadPow = false;
+      if (action.kind === 'type') {
+        // The next typing key resolves the pending: the deferred `^` op runs
+        // first (its own log entry — undo parity with a non-dead layout's `^`
+        // followed by this key), then the key itself lands at the fresh
+        // exponent caret — the character lands in the exponent (S-034), SPACE
+        // resolves to the empty □ exponent (S-035 B). The OS-emitted literal
+        // `^` is the swallow case: its whole job was the creation.
+        event.preventDefault();
+        this.typeKey({ t: 'pow' });
+        if (action.token !== undefined && action.token.t !== 'pow') this.typeKey(action.token);
+        return;
+      }
+      // Any non-typing key press discards the pending — the key then does its
+      // ordinary job ("as if ^ had never been pressed"): fall through.
+    }
     switch (action.kind) {
       case 'ignore':
         return; // unhandled keys pass through untouched
@@ -303,5 +389,8 @@ export class EditorController {
   destroy(): void {
     this.container.removeEventListener('click', this.handleClick);
     this.container.removeEventListener('keydown', this.handleKeydown);
+    this.container.removeEventListener('keyup', this.handleKeyup);
+    this.container.removeEventListener('compositionend', this.handleCompositionEnd);
+    this.container.removeEventListener('blur', this.handleBlur);
   }
 }

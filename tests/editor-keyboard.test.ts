@@ -39,11 +39,14 @@ interface KeyOpts {
   meta?: boolean;
   shift?: boolean;
   alt?: boolean;
+  /** Physical key position (KeyboardEvent.code) — T8 dead-key identification. */
+  code?: string;
 }
 
 function press(container: HTMLElement, key: string, opts: KeyOpts = {}): KeyboardEvent {
   const ev = new KeyboardEvent('keydown', {
     key,
+    code: opts.code,
     bubbles: true,
     cancelable: true,
     ctrlKey: !!opts.ctrl,
@@ -411,5 +414,212 @@ describe('undo / redo via keyboard', () => {
     press(container, 'y', { ctrl: true });
     expect(controller.getState()).toBe(before);
     expect(controller.getState().log.length).toBe(0);
+  });
+});
+
+// ——— T8: dead keys (rework session 2b-1) ———
+// On dead-key layouts (German/Austrian QWERTZ) the `^` press gives no live
+// feedback; the power materializes with the NEXT key press (S-034/S-035 B).
+// The pending fires ONLY for the `^` key position, identified via event.code
+// (mechanical ruling); it is controller-side, transient, never serialized and
+// never logged, and one-shot (owner ruling 2026-11-09): it survives until the
+// very next key press of any kind — a typing key resolves it, everything else
+// (Backspace, arrows, Home/End, click, blur, any non-printable) discards it and
+// does its ordinary job.
+
+describe('T8 — dead-key pending for the `^` position', () => {
+  const classify = (key: string, opts: KeyOpts = {}) =>
+    classifyKey({ key, code: opts.code, ctrlKey: !!opts.ctrl, metaKey: !!opts.meta, altKey: !!opts.alt, shiftKey: !!opts.shift });
+
+  it('classification: key=Dead arms the pending — ANY dead key, any position (owner directive 2026-11-09)', () => {
+    // The positional event.code identification was overruled in the live
+    // check: layouts disagree about where (and shift-state) the dead ^ lives
+    // (the owner's own layout has it UNSHIFTED at Backquote). Every Dead
+    // press now arms the pending.
+    expect(classify('Dead', { shift: false, code: 'Backquote' })).toEqual({ kind: 'deadPow' });
+    expect(classify('Dead', { shift: true, code: 'Backquote' })).toEqual({ kind: 'deadPow' });
+    expect(classify('Dead', { shift: true, code: 'BracketLeft' })).toEqual({ kind: 'deadPow' });
+    expect(classify('Dead', { code: 'Quote' })).toEqual({ kind: 'deadPow' });
+    expect(classify('Dead', {})).toEqual({ kind: 'deadPow' }); // no code at all
+    // a non-dead layout keeps the live path: the printed ^ types directly
+    expect(classify('^', { code: 'Digit6' })).toEqual({ kind: 'type', token: { t: 'pow' } });
+  });
+
+  it('a Dead ^ press: pending, preventDefaulted (OS composition suppressed), state byte-identical, nothing logged', () => {
+    const { controller, container } = make({ v: 1, root: sym('a') });
+    container.focus();
+    const before = controller.getState();
+    const ev = press(container, 'Dead', { shift: true, code: 'Backquote' });
+    expect(ev.defaultPrevented).toBe(true);
+    expect(controller.getState()).toBe(before); // the exact state object — no trace
+    expect(controller.getEnvelope()).toEqual({ v: 1, root: sym('a') });
+  });
+
+  it('the next character materializes the power with the character in the exponent (S-034)', () => {
+    const { controller, container } = make({ v: 1, root: sym('a') });
+    container.focus();
+    press(container, 'Dead', { shift: true, code: 'Backquote' });
+    press(container, '2');
+    expect(j(controller.getEnvelope().root)).toBe(j({ type: 'pow', base: sym('a'), exp: num(2) }));
+    expect(controller.getState().caret).toEqual(node(['exp'])); // the fill op's landing: on the exponent content
+    // two ops for two keys — undo parity with a live layout's `^` then `2`;
+    // undo walks the character, then the power
+    expect(controller.getState().log.length).toBe(2);
+    controller.undo();
+    expect(j(controller.getEnvelope().root)).toBe(j({ type: 'pow', base: sym('a'), exp: null }));
+    controller.undo();
+    expect(j(controller.getEnvelope().root)).toBe(j(sym('a')));
+  });
+
+  it('a dead key on another position (e.g. a shifted one) arms too: Dead + `2` (live-check flow, 2026-11-09)', () => {
+    const { controller, container } = make({ v: 1, root: sym('a') });
+    container.focus();
+    press(container, 'Dead', { shift: true, code: 'BracketLeft' });
+    press(container, '2');
+    expect(j(controller.getEnvelope().root)).toBe(j({ type: 'pow', base: sym('a'), exp: num(2) }));
+  });
+
+  it('Firefox/Windows `Process` keystrokes resolve the pending: the physical code supplies the character (2026-11-09 live-check bug)', () => {
+    // Firefox on Windows: the composed second keystroke reports key='Process'
+    // (no character identity) — without the code fallback the digit was lost
+    // and no power ever materialized.
+    const digit = make({ v: 1, root: sym('a') });
+    digit.container.focus();
+    press(digit.container, 'Dead', { shift: true, code: 'BracketLeft' });
+    press(digit.container, 'Process', { code: 'Digit2' });
+    expect(j(digit.controller.getEnvelope().root)).toBe(j({ type: 'pow', base: sym('a'), exp: num(2) }));
+    // a letter arrives the same way
+    const letter = make({ v: 1, root: sym('a') });
+    letter.container.focus();
+    press(letter.container, 'Dead', { shift: true, code: 'Backquote' });
+    press(letter.container, 'Process', { code: 'KeyN' });
+    expect(j(letter.controller.getEnvelope().root)).toBe(j({ type: 'pow', base: sym('a'), exp: sym('n') }));
+    // an unmappable code (e.g. Space completing the composition): the power
+    // materializes with the empty □ exponent — the composed char is retyped
+    const bare = make({ v: 1, root: sym('a') });
+    bare.container.focus();
+    press(bare.container, 'Dead', { shift: true, code: 'Backquote' });
+    press(bare.container, 'Process', { code: 'Space' });
+    expect(j(bare.controller.getEnvelope().root)).toBe(j({ type: 'pow', base: sym('a'), exp: null }));
+  });
+
+  it('Firefox composition path (2026-11-09 live check): the composed character arrives via compositionend and resolves the pending', () => {
+    // normalized composition forms → the base character lands in the exponent
+    const compose = (data: string): { controller: EditorController } => {
+      const { controller, container } = make({ v: 1, root: sym('a') });
+      container.focus();
+      press(container, 'Dead', { code: 'Backquote' });
+      container.dispatchEvent(new CompositionEvent('compositionend', { data }));
+      return { controller };
+    };
+    expect(j(compose('2\u0302').controller.getEnvelope().root)).toBe(j({ type: 'pow', base: sym('a'), exp: num(2) })); // decomposed digit
+    expect(j(compose('^2').controller.getEnvelope().root)).toBe(j({ type: 'pow', base: sym('a'), exp: num(2) })); // spacing-circumflex prefix (non-composable emission)
+    expect(j(compose('e\u0302').controller.getEnvelope().root)).toBe(j({ type: 'pow', base: sym('a'), exp: sym('e') })); // decomposed letter
+    expect(j(compose('^').controller.getEnvelope().root)).toBe(j({ type: 'pow', base: sym('a'), exp: null })); // dead-^ + SPACE (S-035 B)
+    expect(j(compose('').controller.getEnvelope().root)).toBe(j({ type: 'pow', base: sym('a'), exp: null })); // unrecoverable data: at least the empty power
+  });
+
+  it('the keyup last resort resolves a pending that keydown/compositionend never delivered', () => {
+    const { controller, container } = make({ v: 1, root: sym('a') });
+    container.focus();
+    press(container, 'Dead', { code: 'Backquote' });
+    container.dispatchEvent(new KeyboardEvent('keyup', { key: '2', bubbles: true }));
+    expect(j(controller.getEnvelope().root)).toBe(j({ type: 'pow', base: sym('a'), exp: num(2) }));
+    // a second resolution attempt (however it arrives) never double-fires
+    container.dispatchEvent(new CompositionEvent('compositionend', { data: '^' }));
+    expect(controller.getState().log.length).toBe(2); // the pow op + the digit — one power total
+    // without a pending, keyup resolves nothing
+    const plain = make({ v: 1, root: sym('a') });
+    plain.container.focus();
+    plain.container.dispatchEvent(new KeyboardEvent('keyup', { key: '5', bubbles: true }));
+    expect(j(plain.controller.getEnvelope().root)).toBe(j(sym('a')));
+  });
+
+  it('the empty-formula dead-^ flow: `1` lands in the exponent of pow(□, 1)', () => {
+    const { controller, container } = make({ v: 1, root: null });
+    container.focus();
+    press(container, 'Dead', { shift: true, code: 'Backquote' });
+    press(container, '1');
+    expect(j(controller.getEnvelope().root)).toBe(j({ type: 'pow', base: null, exp: num(1) }));
+    expect(controller.getState().log.length).toBe(2); // the deferred ^ op + the digit
+  });
+
+  it('SPACE resolves the pending to the empty □ exponent (S-035 B); the OS-emitted literal ^ is swallowed as intent', () => {
+    const { controller, container } = make({ v: 1, root: sym('a') });
+    container.focus();
+    press(container, 'Dead', { shift: true, code: 'Backquote' });
+    press(container, ' ');
+    expect(j(controller.getEnvelope().root)).toBe(j({ type: 'pow', base: sym('a'), exp: null }));
+    expect(controller.getState().caret).toEqual({ kind: 'slot', path: [], slot: 'exp' });
+    expect(controller.getState().log.length).toBe(1); // the space re-dispatch no-ops in the exponent void
+    // the platform that emits the literal `^` after the dead press instead:
+    const other = make({ v: 1, root: sym('a') });
+    other.container.focus();
+    press(other.container, 'Dead', { shift: true, code: 'Backquote' });
+    press(other.container, '^', { code: 'Backquote' });
+    expect(j(other.controller.getEnvelope().root)).toBe(j({ type: 'pow', base: sym('a'), exp: null }));
+    expect(other.controller.getState().log.length).toBe(1); // one power only — the literal was the intent
+  });
+
+  it('a dead-^ re-press re-arms (idempotent): still nothing until the next key, then ONE power (owner ruling)', () => {
+    const { controller, container } = make({ v: 1, root: sym('a') });
+    container.focus();
+    press(container, 'Dead', { shift: true, code: 'Backquote' });
+    const mid = controller.getState();
+    press(container, 'Dead', { shift: true, code: 'Backquote' });
+    expect(controller.getState()).toBe(mid);
+    press(container, '2');
+    expect(j(controller.getEnvelope().root)).toBe(j({ type: 'pow', base: sym('a'), exp: num(2) }));
+    expect(controller.getState().log.length).toBe(2);
+  });
+
+  it('one-shot (owner ruling 2026-11-09): Backspace discards the pending and does its ordinary job — no power ever', () => {
+    const { controller, container } = make({ v: 1, root: sym('a') });
+    container.focus();
+    press(container, 'Dead', { shift: true, code: 'Backquote' });
+    press(container, 'Backspace');
+    expect(controller.getEnvelope().root).toBe(null); // the whole symbol deleted — as if ^ had never been pressed
+  });
+
+  it('one-shot: an arrow discards the pending; the following character types ordinarily (no power)', () => {
+    const { controller, container } = make({ v: 1, root: sym('a') });
+    container.focus();
+    press(container, 'Dead', { shift: true, code: 'Backquote' });
+    press(container, 'ArrowLeft');
+    press(container, 'b');
+    // no power — the pending was discarded; ← at the row start no-ops (N3)
+    // and `b` glues behind the symbol it never wrapped
+    expect(j(controller.getEnvelope().root)).toBe(j(sym('ab')));
+  });
+
+  it('one-shot: pure caret placement (the click path) discards the pending', () => {
+    const { controller, container } = make({ v: 1, root: sym('a') });
+    container.focus();
+    press(container, 'Dead', { shift: true, code: 'Backquote' });
+    controller.placeCaret({ kind: 'token', path: [], index: 0 });
+    press(container, 'b');
+    expect(j(controller.getEnvelope().root)).toBe(j(sym('ba')));
+  });
+
+  it('one-shot: blur discards the pending with no trace', () => {
+    const { controller, container } = make({ v: 1, root: null });
+    container.focus();
+    press(container, 'Dead', { shift: true, code: 'Backquote' });
+    container.dispatchEvent(new Event('blur'));
+    press(container, '1');
+    expect(j(controller.getEnvelope().root)).toBe(j(num(1))); // an ordinary lone number — no power
+  });
+
+  it('every dead key arms the pending (owner directive 2026-11-09): the character lands in the exponent', () => {
+    // Any Dead press — position, shift state, code presence all irrelevant.
+    // The character resolves the pending; composition remnants never reach
+    // the formula.
+    for (const opts of [{ code: 'Quote' }, { shift: false, code: 'Backquote' }, {}] as KeyOpts[]) {
+      const { controller, container } = make({ v: 1, root: sym('a') });
+      container.focus();
+      press(container, 'Dead', opts);
+      press(container, '2');
+      expect(j(controller.getEnvelope().root)).toBe(j({ type: 'pow', base: sym('a'), exp: num(2) }));
+    }
   });
 });

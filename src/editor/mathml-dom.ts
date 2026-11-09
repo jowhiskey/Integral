@@ -52,9 +52,14 @@ const OP_DISPLAY: Readonly<Record<string, string>> = {
 const UNIT_SPACE_WIDTH = '0.1667em';
 
 /** S-098 seam marker (styling-level): the classed mspace between two adjacent
- * number cells of an implicit-multiply row; the seam/index CSS paints it. */
+ * number cells of an implicit-multiply row; the host's CSS paints it. The
+ * carrier carries its own height/depth (mspace defaults to height 0 — a
+ * plain background tint must have a box to paint) — mirrors the string
+ * renderer's SEAM_MARKER bytes; the parity pin catches drift. */
 const SEAM_CLASS = 'integral-seam';
 const SEAM_WIDTH = '0.1667em';
+const SEAM_HEIGHT = '0.75em';
+const SEAM_DEPTH = '0.2em';
 
 /**
  * A bare-cell caret anchor (an op-row null cell renders NO element — T7 split:
@@ -194,6 +199,8 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
         const seam = el('mspace');
         seam.setAttribute('class', SEAM_CLASS);
         seam.setAttribute('width', SEAM_WIDTH);
+        seam.setAttribute('height', SEAM_HEIGHT);
+        seam.setAttribute('depth', SEAM_DEPTH);
         out.push(seam);
       }
       if (i > 0 && !node.implicit) {

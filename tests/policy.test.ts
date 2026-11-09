@@ -17,6 +17,7 @@ import {
   caretResolvesIn,
   envelopeOf,
   initSession,
+  redo,
   typeToken,
   undo,
   type Caret,
@@ -36,6 +37,7 @@ const group = (child: NodeJson | null, close = true): NodeJson =>
   close ? { type: 'group', parens: 'always', child } : { type: 'group', parens: 'always', child, close: false };
 const fence = (): NodeJson => ({ type: 'fence', side: 'close' });
 const frac = (n: NodeJson | null, d: NodeJson | null): NodeJson => ({ type: 'frac', num: n, den: d });
+const pow = (b: NodeJson | null, e: NodeJson | null): NodeJson => ({ type: 'pow', base: b, exp: e });
 
 const plus: TypedToken = { t: 'operator', fn: 'add' };
 const minus: TypedToken = { t: 'operator', fn: 'subtract' };
@@ -57,6 +59,7 @@ const expectTree = (state: EditingState, expected: NodeJson | null): void => {
 const node = (path: readonly (number | string)[]): Caret => ({ kind: 'node', path });
 const rowc = (path: readonly (number | string)[], index: number): Caret => ({ kind: 'row', path, index });
 const tokc = (path: readonly (number | string)[], index: number): Caret => ({ kind: 'token', path, index });
+const slotc = (path: readonly (number | string)[], slot: 'num' | 'den' | 'base' | 'exp' | 'child' | 'radicand' | 'index' | 'value'): Caret => ({ kind: 'slot', path, slot });
 
 /** A seeded session with the caret placed (unlogged, host-style). */
 const at = (root: NodeJson | null, caret: Caret): EditingState => ({ ...initSession({ v: 1, root }), caret });
@@ -516,6 +519,175 @@ describe('mixed multiply rows — juxtaposition never shares a row with explicit
     // the same cells WITHOUT the marker are a legal plain explicit row.
     const plain = op('multiply', num(5), sym('x'), num(3));
     expect(j(toJSON(fromJSON({ v: 1, root: plain })!))).toBe(j({ v: 1, root: plain }));
+  });
+});
+
+// ——— T7: structure keys (rework session 2b-1) ———
+
+describe('T7 — the fraction key `/` creates a fraction over the preceding node', () => {
+  it('`a+b|` grabs only b: add[a, frac(b, □)], caret at the denominator slot start (S-019)', () => {
+    const state = typeToken(at(op('add', sym('a'), sym('b')), rowc([], 2)), { t: 'divide' });
+    expectTree(state, op('add', sym('a'), frac(sym('b'), null)));
+    expect(state.caret).toEqual(slotc([1], 'den'));
+    expect(state.log.length).toBe(1);
+    legal(state);
+  });
+
+  it('`(a+b)|` grabs the whole group — the owner’s T7 example', () => {
+    const state = typeToken(at(group(op('add', sym('a'), sym('b'))), node([])), { t: 'divide' });
+    expectTree(state, frac(group(op('add', sym('a'), sym('b'))), null));
+    expect(state.caret).toEqual(slotc([], 'den'));
+    legal(state);
+  });
+
+  it('`a|` whole-token grab: frac(a, □), caret in the denominator (S-019); typing continues into the slot', () => {
+    let state = typeToken(at(sym('a'), node([])), { t: 'divide' });
+    expectTree(state, frac(sym('a'), null));
+    expect(state.caret).toEqual(slotc([], 'den'));
+    legal(state);
+    state = typeToken(state, s('b'));
+    expectTree(state, frac(sym('a'), sym('b')));
+    expect(state.caret).toEqual(node(['den']));
+    legal(state);
+  });
+
+  it('no preceding node — empty formula: the empty fraction, both slots □, caret in the numerator (S-025 A derived reading)', () => {
+    const state = typeToken(initSession(), { t: 'divide' });
+    expectTree(state, frac(null, null));
+    expect(state.caret).toEqual(slotc([], 'num'));
+    legal(state);
+  });
+
+  it('no preceding node — dangling operator `a+|`: the empty fraction fills the pending operand (S-025 A)', () => {
+    // both caret readings of the dangling plus: the void ON the null cell, the seam past it
+    const voidCell = typeToken(at(op('add', sym('a'), null), rowc([], 1)), { t: 'divide' });
+    expectTree(voidCell, op('add', sym('a'), frac(null, null)));
+    expect(voidCell.caret).toEqual(slotc([1], 'num'));
+    legal(voidCell);
+    const seam = typeToken(at(op('add', sym('a'), null), rowc([], 2)), { t: 'divide' });
+    expectTree(seam, op('add', sym('a'), frac(null, null)));
+    expect(seam.caret).toEqual(slotc([1], 'num'));
+    legal(seam);
+  });
+
+  it('row start `|a+b`: the empty fraction juxtaposes before the first cell, caret in its numerator', () => {
+    const state = typeToken(at(op('add', sym('a'), sym('b')), rowc([], 0)), { t: 'divide' });
+    expectTree(state, op('add', imp(frac(null, null), sym('a')), sym('b')));
+    expect(state.caret).toEqual(slotc([0, 0], 'num'));
+    legal(state);
+  });
+
+  it('mid-token split — the uniform reading (owner ruling 2026-11-09): `12|3` + `/` → frac(12, 3), caret before the 3 in the denominator (the after-the-slash position)', () => {
+    const state = typeToken(at(num(123), tokc([], 1)), { t: 'divide' });
+    expectTree(state, frac(num(1), num(23)));
+    expect(state.caret).toEqual(tokc(['den'], 0));
+    legal(state);
+  });
+
+  it('offset 0 — the uniform reading’s left edge: `|123` + `/` → frac(□, 123), caret before the content in the denominator', () => {
+    const state = typeToken(at(num(123), tokc([], 0)), { t: 'divide' });
+    expectTree(state, frac(null, num(123)));
+    expect(state.caret).toEqual(tokc(['den'], 0));
+    legal(state);
+  });
+
+  it('op rows are transparent at their flanks: `a+b·c|` + `/` grabs c (the immediately preceding node)', () => {
+    const state = typeToken(
+      at(op('add', sym('a'), op('multiply', sym('b'), sym('c'))), rowc([], 2)),
+      { t: 'divide' },
+    );
+    expectTree(state, op('add', sym('a'), op('multiply', sym('b'), frac(sym('c'), null))));
+    expect(state.caret).toEqual(slotc([1, 1], 'den'));
+    legal(state);
+  });
+});
+
+describe('T7 — the power key `^` creates a power over the preceding node', () => {
+  it('`a|` → pow(a, □), caret at the exponent slot start (S-018)', () => {
+    let state = typeToken(at(sym('a'), node([])), { t: 'pow' });
+    expectTree(state, pow(sym('a'), null));
+    expect(state.caret).toEqual(slotc([], 'exp'));
+    legal(state);
+    state = typeToken(state, d('2'));
+    expectTree(state, pow(sym('a'), num(2)));
+    // the insert-at-slot relocation: the landing caret is ON the exponent's
+    // content (its right-edge station — the fill op's pinned rule)
+    expect(state.caret).toEqual(node(['exp']));
+    legal(state);
+  });
+
+  it('`a+b|` grabs only b; `(a+b)|` grabs the whole group', () => {
+    const seam = typeToken(at(op('add', sym('a'), sym('b')), rowc([], 2)), { t: 'pow' });
+    expectTree(seam, op('add', sym('a'), pow(sym('b'), null)));
+    expect(seam.caret).toEqual(slotc([1], 'exp'));
+    legal(seam);
+    const whole = typeToken(at(group(op('add', sym('a'), sym('b'))), node([])), { t: 'pow' });
+    expectTree(whole, pow(group(op('add', sym('a'), sym('b'))), null));
+    expect(whole.caret).toEqual(slotc([], 'exp'));
+    legal(whole);
+  });
+
+  it('no preceding node — empty formula: pow(□, □), caret in the exponent (the 2b-1 derived reading)', () => {
+    const state = typeToken(initSession(), { t: 'pow' });
+    expectTree(state, pow(null, null));
+    expect(state.caret).toEqual(slotc([], 'exp'));
+    legal(state);
+  });
+
+  it('no preceding node — dangling operator `a+|`: pow(□, □) fills the pending operand, caret in the exponent', () => {
+    const voidCell = typeToken(at(op('add', sym('a'), null), rowc([], 1)), { t: 'pow' });
+    expectTree(voidCell, op('add', sym('a'), pow(null, null)));
+    expect(voidCell.caret).toEqual(slotc([1], 'exp'));
+    legal(voidCell);
+  });
+
+  it('mid-token split — the uniform reading: `a|bc` + `^` → pow(a, bc), caret at bc’s start in the exponent; `|bc` → pow(□, bc)', () => {
+    const mid = typeToken(at(sym('abc'), tokc([], 1)), { t: 'pow' });
+    expectTree(mid, pow(sym('a'), sym('bc')));
+    expect(mid.caret).toEqual(tokc(['exp'], 0));
+    legal(mid);
+    const leftEdge = typeToken(at(sym('bc'), tokc([], 0)), { t: 'pow' });
+    expectTree(leftEdge, pow(null, sym('bc')));
+    expect(leftEdge.caret).toEqual(tokc(['exp'], 0));
+    legal(leftEdge);
+  });
+});
+
+describe('T7 — undo: one structure key = one log entry (U2/S-083); redo mirrors', () => {
+  it('undo unwinds the whole creation including the grab — `b` back in the row, caret restored; redo re-applies', () => {
+    const seed = op('add', sym('a'), sym('b'));
+    const caret = rowc([], 2);
+    const state = typeToken(at(seed, caret), { t: 'divide' });
+    expect(state.log.length).toBe(1);
+    const back = undo(state);
+    expectTree(back, seed);
+    expect(back.caret).toEqual(caret);
+    legal(back);
+    const again = redo(back);
+    expectTree(again, op('add', sym('a'), frac(sym('b'), null)));
+    expect(again.caret).toEqual(slotc([1], 'den'));
+    legal(again);
+  });
+
+  it('undo unwinds a mid-token split: the unsplit token AND its in-token caret return byte-exactly (S-083 pattern)', () => {
+    const state = typeToken(at(num(123), tokc([], 1)), { t: 'divide' });
+    const back = undo(state);
+    expectTree(back, num(123));
+    expect(back.caret).toEqual(tokc([], 1));
+    legal(back);
+  });
+});
+
+describe('T7 render pins: every structure-key state renders its □ slots (S-018/S-019/S-025/S-027)', () => {
+  it('the string renderer paints □ for each created empty slot — the DOM parity pin covers the builder', () => {
+    const den = typeToken(at(sym('a'), node([])), { t: 'divide' });
+    expect(toMathML(fromJSON(envelopeOf(den))!)).toBe('<math><mfrac><mi>a</mi><mi>□</mi></mfrac></math>');
+    const exp = typeToken(at(sym('a'), node([])), { t: 'pow' });
+    expect(toMathML(fromJSON(envelopeOf(exp))!)).toBe('<math><msup><mi>a</mi><mi>□</mi></msup></math>');
+    const emptyFrac = typeToken(initSession(), { t: 'divide' });
+    expect(toMathML(fromJSON(envelopeOf(emptyFrac))!)).toBe('<math><mfrac><mi>□</mi><mi>□</mi></mfrac></math>');
+    const emptyPow = typeToken(at(op('add', sym('a'), null), rowc([], 1)), { t: 'pow' });
+    expect(toMathML(fromJSON(envelopeOf(emptyPow))!)).toContain('<msup><mi>□</mi><mi>□</mi></msup>');
   });
 });
 

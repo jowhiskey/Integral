@@ -220,12 +220,17 @@ describe('editor renderer: per-type pinned structure', () => {
     const i5x = built('implicitRow');
     expect(shape(i5x.math)).toBe('<math><mrow><mn>#5</mn><mi>#x</mi></mrow></math>');
     expect(i5x.separators.size).toBe(0);
-    // S-098 seam: the classed mspace renders between the two numbers.
+    // S-098 seam: the classed mspace renders between the two numbers. It
+    // carries explicit height/depth (rework 2b-1 — mspace defaults to height
+    // 0, which paints nothing for a background tint; the element itself is
+    // the visible box now, mirroring the string renderer's SEAM_MARKER bytes).
     const seam = built('implicitSeam');
     expect(shape(seam.math)).toBe('<math><mrow><mn>#5</mn><mspace></mspace><mn>#3</mn></mrow></math>');
     const seamEl = seam.math.querySelector('mspace')!;
     expect(seamEl.getAttribute('class')).toBe('integral-seam');
     expect(seamEl.getAttribute('width')).toBe('0.1667em');
+    expect(seamEl.getAttribute('height')).toBe('0.75em');
+    expect(seamEl.getAttribute('depth')).toBe('0.2em');
     // Bare rows: null cells emit NO placeholder element, but get caret anchors.
     expect(shape(built('leadingNull').math)).toBe('<math><mrow><mo>#−</mo><mi>#x</mi></mrow></math>');
     expect(built('leadingNull').placeholders.size).toBe(0);

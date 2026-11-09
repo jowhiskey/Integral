@@ -886,37 +886,65 @@ function spaceKey(ctx: Ctx, station: Station): EditingState {
   }
 }
 
-// ——— Structure keys: the minimal / and ^ path (the T7/T8 rework = 2b) ———
+// ——— Structure keys: the T7 fraction/power contract (rework session 2b) ———
 //
-// Standing behavior kept: / and ^ grab the immediately preceding NODE as the
-// numerator/base and leave the denominator/exponent pending with its □; at
-// operand-expected positions they insert both-blank templates (caret in the
-// numerator, S-025 A). A token's left edge wraps the node to the right.
+// T7 + the owner's uniform split ruling (2026-11-09): a structure key reads
+// the caret as a split point of the visual row — the content left of the
+// caret becomes the numerator/base, the content right fills or pends in the
+// denominator/exponent, and the caret lands at the START of the right slot
+// (S-018/S-019): before the □ when the right side is empty (a slot caret),
+// at the right half's first character when it exists (a token caret). The
+// station readings:
+//  TOKEN  — the token splits; `12|3` + `/` → frac(12, 3). Offset len is the
+//           ordinary whole-node grab + □, offset 0 the □ left slot with the
+//           token in the right slot — the same uniform reading's edges.
+//  AFTER  — a caret directly after a complete non-row node grabs it whole
+//           (`(a+b)|` grabs the group — the owner's example).
+//  SEAM   — the immediately preceding NODE (the left edge cell, op rows
+//           transparent at their flanks) is grabbed, the rest of the row
+//           untouched (`a+b|` grabs only b).
+//  VOID   — no node exists to grab (empty formula, empty fixed slot, a
+//           pending null): the empty template — a fraction with BOTH slots
+//           □ and the caret in the numerator (S-025 A), a power with the
+//           empty base □ and the caret in the exponent. The same template
+//           serves a seam without a left node: it fills the pending
+//           operand to its left (`a+|`) or juxtaposes before the right
+//           cell at a row start.
 
 function structureKey(ctx: Ctx, station: Station, kind: 'divide' | 'pow'): EditingState {
   const mk = (a: NodeJson | null, b: NodeJson | null): NodeJson =>
     kind === 'divide' ? ({ type: 'frac', num: a, den: b } as NodeJson) : ({ type: 'pow', base: a, exp: b } as NodeJson);
   const leftSlot: SlotName = kind === 'divide' ? 'num' : 'base';
   const rightSlot: SlotName = kind === 'divide' ? 'den' : 'exp';
+  /** The empty template's entry slot: the numerator (S-025 A) / the
+   *  exponent (the session-2b-1 derived reading). */
+  const entrySlot: SlotName = kind === 'divide' ? leftSlot : rightSlot;
   switch (station.kind) {
     case 'void':
       return place(ctx, mk(null, null), posOf(station.ref), {
-        kind: 'slot', path: pathOf(station.ref), slot: leftSlot,
+        kind: 'slot', path: pathOf(station.ref), slot: entrySlot,
       });
     case 'tok': {
       const { node, ref, offset } = station;
       const text = tokenText(node);
-      const at = replacePosOf(ref);
-      if (offset === 0) {
-        return place(ctx, mk(null, node), at, { kind: 'slot', path: pathOf(ref), slot: leftSlot });
+      let left: NodeJson | null = null;
+      if (offset > 0) {
+        left = node.type === 'sym' ? symFromText(text.slice(0, offset)) : numFromText(text.slice(0, offset));
+        if (left === null) return ctx.state; // unrepresentable half: silent no-op
       }
-      if (offset === text.length) {
-        return place(ctx, mk(node, null), at, { kind: 'slot', path: pathOf(ref), slot: rightSlot });
+      let right: NodeJson | null = null;
+      if (offset < text.length) {
+        right = node.type === 'sym' ? symFromText(text.slice(offset)) : numFromText(text.slice(offset));
+        if (right === null) return ctx.state; // unrepresentable half: silent no-op
       }
-      const left = node.type === 'sym' ? symFromText(text.slice(0, offset)) : numFromText(text.slice(0, offset));
-      const right = node.type === 'sym' ? symFromText(text.slice(offset)) : numFromText(text.slice(offset));
-      if (left === null || right === null) return ctx.state;
-      return place(ctx, mk(left, right), at, { kind: 'node', path: pathOf(ref) });
+      const structPath = pathOf(ref);
+      // Uniform split: caret at the START of the right slot — before the
+      // right half's content when it exists, before the □ otherwise.
+      const to: Caret =
+        right === null
+          ? { kind: 'slot', path: structPath, slot: rightSlot }
+          : { kind: 'token', path: [...structPath, rightSlot], index: 0 };
+      return place(ctx, mk(left, right), replacePosOf(ref), to);
     }
     case 'after':
       return place(ctx, mk(station.node, null), replacePosOf(station.ref), {
@@ -929,12 +957,31 @@ function structureKey(ctx: Ctx, station: Station, kind: 'divide' | 'pow'): Editi
           kind: 'slot', path: seam.left.path, slot: rightSlot,
         });
       }
-      if (seam.right !== null && seam.right.node !== null) {
-        return place(ctx, mk(null, seam.right.node), replacePosOf(refOfPath(seam.right.path)), {
-          kind: 'slot', path: seam.right.path, slot: leftSlot,
+      const empty = mk(null, null);
+      // No preceding node — the derived empty template. A pending null
+      // directly left of the seam takes it (the dangling operator's
+      // operand); so does the right edge's leading pending cell; at a row
+      // start the template juxtaposes before the right cell; with nothing
+      // adjacent at all it splices in as a fresh cell at the seam.
+      if (station.index > 0 && station.args[station.index - 1] === null) {
+        const idx = station.index - 1;
+        return place(ctx, empty, { at: 'fill', path: station.path, index: idx }, {
+          kind: 'slot', path: [...station.path, idx], slot: entrySlot,
         });
       }
-      return ctx.state;
+      if (seam.right !== null && seam.right.node === null) {
+        return place(ctx, empty, { at: 'fill', path: seam.right.path, index: 0 }, {
+          kind: 'slot', path: [...seam.right.path, 0], slot: entrySlot,
+        });
+      }
+      if (seam.right !== null && seam.right.node !== null) {
+        return place(ctx, implicitPair(empty, seam.right.node), replacePosOf(refOfPath(seam.right.path)), {
+          kind: 'slot', path: [...seam.right.path, 0], slot: entrySlot,
+        });
+      }
+      return place(ctx, empty, { at: 'row', path: station.path, index: station.index }, {
+        kind: 'slot', path: [...station.path, station.index], slot: entrySlot,
+      });
     }
   }
 }

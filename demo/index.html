@@ -219,24 +219,13 @@
 
       /* S-098 seam marker: the subtle styling hook rendered between two adjacent
          numbers of a glyph-less multiply row (the forbidden number-number
-         adjacency). Visible but quieter than an error. The marker is an mspace,
-         whose default height is 0 — a background alone paints a zero-height
-         strip, so the demo gives the marker an explicit box: a slim tinted strip
-         between the two numbers (box-shadow extends it to the digit height —
-         see the rule). Restyle to taste in the live check. */
+         adjacency). Visible but quieter than an error. The carrier is a classed
+         mspace that carries its own height/depth (MathML Core), so the host
+         paints a visible tint with a plain background — no layout workarounds.
+         Restyle to taste in the live check. */
       math .integral-seam {
-        display: inline-block;
-        width: 0.1667em;
-        height: 1em;
         background: rgba(198, 40, 40, 0.3);
         border-radius: 2px;
-        /* MathML layout does not baseline-align the mspace box — a plain
-           background paints low, off the digits. box-shadow copies extend
-           the tint above/below the box without affecting layout, so the strip
-           spans the digit height regardless of the box's exact placement. */
-        box-shadow:
-          0 -0.4em 0 0 rgba(198, 40, 40, 0.3),
-          0 0.2em 0 0 rgba(198, 40, 40, 0.3);
       }
     </style>
   </head>

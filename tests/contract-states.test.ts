@@ -29,7 +29,11 @@ import { buildMathML } from '../src/editor/mathml-dom.js';
 import type { Caret } from '../src/engine/index.js';
 import { stubRects } from './editor-support.js';
 
-const SEAM = '<mspace class="integral-seam" width="0.1667em"/>';
+// S-098 seam carrier (rework 2b-1): the mspace carries explicit MathML Core
+// height/depth — its default height is 0 and a background-only host tint
+// would paint an invisible zero-height strip (the demo CSS hack is deleted;
+// hosts paint a plain tint on the carrier's own box).
+const SEAM = '<mspace class="integral-seam" width="0.1667em" height="0.75em" depth="0.2em"/>';
 
 const num = (value: number): NodeJson => ({ type: 'num', value });
 const sym = (name: string): NodeJson => ({ type: 'sym', name });

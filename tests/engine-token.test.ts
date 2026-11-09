@@ -188,13 +188,18 @@ describe('typing at in-token positions (Task 5)', () => {
     expect(state.caret).toEqual(row([], 1)); // directly after the inserted glyph (literal insertion)
     expect(state.log.length).toBe(1);
     legal(state);
-    // 1|23 + '/' → frac(1, 23)
+    // 1|23 + '/' → frac(1, 23) — T7 re-pin (rework 2b-1): the owner's uniform
+    // split ruling (2026-11-09) now governs mid-token structure keys — left of
+    // the caret = numerator, right = denominator — so the 2a minimal-path
+    // envelope shape STANDS, and the caret pins to the ruled start-of-right-slot.
     state = typeToken(at(num(123), token([], 1)), { t: 'divide' });
     expect(j(envelopeOf(state).root)).toBe(j({ type: 'frac', num: num(1), den: num(23) }));
+    expect(state.caret).toEqual(token(['den'], 0)); // before the right half's content (T7 ruled caret)
     legal(state);
-    // 12|3 + '^' → pow(12, 3)
+    // 12|3 + '^' → pow(12, 3) — same T7 re-pin, on the power side.
     state = typeToken(at(num(123), token([], 2)), { t: 'pow' });
     expect(j(envelopeOf(state).root)).toBe(j({ type: 'pow', base: num(12), exp: num(3) }));
+    expect(state.caret).toEqual(token(['exp'], 0));
     legal(state);
     // split inside a row cell: a + 12|3 with '*' nests in the right operand: a + 12*3
     state = typeToken(at({ v: 1, root: { type: 'op', op: 'add', args: [sym('a'), num(123)] } }, token([1], 2)), {

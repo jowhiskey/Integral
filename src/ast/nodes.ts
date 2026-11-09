@@ -57,10 +57,13 @@ const EMPTY_SLOT = '<mi>□</mi>';
 /**
  * S-098 seam marker: the subtle styling hook rendered between two adjacent
  * NUMBER cells of an implicit-multiply row (the forbidden number-number
- * adjacency). The element itself is an inert spacer; host CSS paints the
- * quiet background highlight. Styling-level only.
+ * adjacency). The mspace carries explicit MathML Core height/depth (its
+ * default height is 0 — a background-only host tint would paint a
+ * zero-height strip), so host CSS paints the quiet highlight as a plain
+ * tint; the element itself stays an inert non-spacing carrier. Styling-level
+ * only.
  */
-const SEAM_MARKER = '<mspace class="integral-seam" width="0.1667em"/>';
+const SEAM_MARKER = '<mspace class="integral-seam" width="0.1667em" height="0.75em" depth="0.2em"/>';
 
 /** Thin space between a unit's value and its symbol (MathML Core mspace, ~0.167em). */
 const UNIT_SPACE = '<mspace width="0.1667em"/>';
