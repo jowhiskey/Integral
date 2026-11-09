@@ -38,6 +38,7 @@ export type KeyAction =
   | { readonly kind: 'type'; readonly token: TypedToken | undefined }
   | { readonly kind: 'move'; readonly dir: NavDir }
   | { readonly kind: 'backspace'; readonly ctrl: boolean }
+  | { readonly kind: 'delete'; readonly ctrl: boolean }
   | { readonly kind: 'undo' }
   | { readonly kind: 'redo' }
   | { readonly kind: 'deadPow' }
@@ -46,10 +47,12 @@ export type KeyAction =
 /** Classify one keydown event (structural type — no DOM dependency, so the
  *  classifier is unit-testable without jsdom):
  *  - Ctrl/Meta + Z            → undo;  Ctrl/Meta + Y or Ctrl/Meta + Shift + Z → redo
- *    (both `z` and `Z` with shift are handled); Ctrl/Meta + Backspace →
- *    whole-node backspace; any other modified key passes through.
+ *    (both `z` and `Z` with shift are handled); Ctrl/Meta + Backspace or
+ *    Ctrl/Meta + Delete → the split-semantics variants (D3); any other
+ *    modified key passes through.
  *  - Arrow keys               → move.
- *  - Backspace                → backspace (atomic delete / structure death).
+ *  - Backspace                → backspace (D1–D9); Delete → forward delete
+ *                              (the ruled D1/D3 mirrors + named no-op defaults).
  *  - a printable single character (key.length === 1, no Ctrl/Meta/Alt) → a
  *    typing key; `token` is undefined when the char is outside the pinned
  *    keymap (unknown token — still a handled key).
@@ -69,12 +72,15 @@ export function classifyKey(event: {
     if (k === 'z' && !event.shiftKey) return { kind: 'undo' };
     if (k === 'y' || (k === 'z' && event.shiftKey)) return { kind: 'redo' };
     if (k === 'backspace') return { kind: 'backspace', ctrl: true }; // whole-node delete
+    if (k === 'delete') return { kind: 'delete', ctrl: true }; // whole right-adjacent token
     return { kind: 'ignore' };
   }
   if (event.altKey) return { kind: 'ignore' };
   switch (key) {
     case 'Backspace':
       return { kind: 'backspace', ctrl: false };
+    case 'Delete':
+      return { kind: 'delete', ctrl: false };
     case 'ArrowLeft':
       return { kind: 'move', dir: 'left' };
     case 'ArrowRight':
@@ -129,4 +135,18 @@ export function deadCompositionBase(data: string | undefined | null): string | n
   const base = data.normalize('NFD').replace(/[\u0300-\u036F]/g, '');
   const rest = base.startsWith('^') ? base.slice(1) : base;
   return rest.length === 1 ? rest : null;
+}
+
+/**
+ * The composed base character of the two-character dead-key emission (the
+ * owner's Firefox/Windows live reading, rework session 3): when a T8 pending is
+ * armed and NO composition ever fires, the composed output rides the FOLLOW-UP
+ * keydown as a two-character key value (`key === "^2"`, keyCode 50). The
+ * character after the dead accent is the resolving character per S-034.
+ * Null for anything else (F-keys like "F1"… start with an uppercase letter;
+ * every other multi-char key value is not a composition this editor armed).
+ */
+export function deadComposedBase(key: string): string | null {
+  if (key.length === 2 && !/^[A-Z]/.test(key)) return key[1];
+  return null;
 }

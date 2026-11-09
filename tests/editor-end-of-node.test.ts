@@ -96,24 +96,39 @@ describe('keyboard: arrow overflow parks at the row-end seam', () => {
 });
 
 describe('keyboard: the delete-then-continue recovery flow', () => {
-  it('x+y, Backspace, +, z — the post-delete seam types again', () => {
+  it('x+y, Backspace (D1: y empties → the cell becomes the pending null), z — the dangling glyph chains on (rework session 3 re-pin of D1: a token that empties leaves the PENDING NULL, never splices the glyph away)', () => {
     const { controller, container } = make({
       v: 1,
       root: { type: 'op', op: 'add', args: [sym('x'), sym('y')] },
     });
     controller.placeCaret(node([1]));
     press(container, 'Backspace');
-    expect(j(controller.getState().caret)).toBe(j(rowc([], 1)));
-    press(container, '+');
+    // D1: the single-char y dies → the cell is the pending null (the + survives
+    // as the dangling glyph); the freed spot is the caret sitting in it.
     expect(j(controller.getEnvelope().root)).toBe(
       j({ type: 'op', op: 'add', args: [sym('x'), null] }),
     );
-    press(container, 'z');
+    expect(j(controller.getState().caret)).toBe(j(rowc([], 1)));
+    press(container, 'z'); // the dangling glyph's operand fills directly — no retype needed
     expect(j(controller.getEnvelope().root)).toBe(
       j({ type: 'op', op: 'add', args: [sym('x'), sym('z')] }),
     );
     expect(j(controller.getState().caret)).toBe(j(node([1])));
-    expect(controller.getState().log.length).toBe(3); // delete, extend, fill
+    expect(controller.getState().log.length).toBe(2); // delete, fill
+  });
+
+  it('typing + at the post-delete pending cell doubles the glyph (the same-op chain: x+, then + again → x++)', () => {
+    const { controller, container } = make({
+      v: 1,
+      root: { type: 'op', op: 'add', args: [sym('x'), sym('y')] },
+    });
+    controller.placeCaret(node([1]));
+    press(container, 'Backspace');
+    press(container, '+');
+    expect(j(controller.getEnvelope().root)).toBe(
+      j({ type: 'op', op: 'add', args: [sym('x'), null, null] }),
+    ); // T1 alongside: the dangling + keeps its pending cell, the typed + adds its own
+    expect(controller.getState().log.length).toBe(2); // delete, extend
   });
 });
 

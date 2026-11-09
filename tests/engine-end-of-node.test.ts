@@ -160,18 +160,15 @@ describe('the row-end seam is a reachable station (dead-end overflow rests there
 });
 
 describe('typing at the row-end seam (route to the last operand’s hold / trailing-number merge)', () => {
-  it('the post-backspace seam recovers: x+y, delete y, type + (extend) and z (fill)', () => {
+  it('the post-backspace seam recovers: x+y, delete y (D1: pending null), z fills the dangling glyph (rework session 3 re-pin)', () => {
     let s = at(seed({ type: 'op', op: 'add', args: [sym('x'), sym('y')] }), node([1]));
-    s = backspace(s); // atomic delete of y: caret lands at the end seam
-    expect(j(envelopeOf(s).root)).toBe(j({ type: 'op', op: 'add', args: [sym('x')] }));
-    expect(s.caret).toEqual(rowc([], 1));
-    s = typeToken(s, plus); // equal-precedence same-op: the chain extends
+    s = backspace(s); // D1: the emptied token leaves the PENDING NULL — the glyph survives
     expect(j(envelopeOf(s).root)).toBe(j({ type: 'op', op: 'add', args: [sym('x'), null] }));
-    expect(s.caret).toEqual(rowc([], 1)); // the natural continue: the pending cell
-    s = typeToken(s, letter('z'));
+    expect(s.caret).toEqual(rowc([], 1)); // the freed spot: the caret sits in the pending cell
+    s = typeToken(s, letter('z')); // the dangling + operand fills — no retype needed
     expect(j(envelopeOf(s).root)).toBe(j({ type: 'op', op: 'add', args: [sym('x'), sym('z')] }));
     expect(s.caret).toEqual(node([1]));
-    expect(s.log.length).toBe(4); // the moveCaret seed + backspace + extend + fill
+    expect(s.log.length).toBe(3); // the moveCaret seed + delete + fill
     legalEndState(s);
   });
 
@@ -232,14 +229,14 @@ describe('relocation carries the end-of-node stations', () => {
     legalEndState(s2);
   });
 
-  it('backspace at the end seam deletes the last cell and the seam follows (x+50| → x+5|)', () => {
+  it('backspace at the end seam deletes the last cell and the seam follows (x+50| → x+5|; the emptied number leaves the pending null — rework session 3 re-pin of D1)', () => {
     let s = at(seed({ type: 'op', op: 'add', args: [sym('x'), num(50)] }), rowc([], 2));
     s = backspace(s); // seam target: the last cell, digit-wise peel
     expect(j(envelopeOf(s).root)).toBe(j({ type: 'op', op: 'add', args: [sym('x'), num(5)] }));
     expect(s.caret).toEqual(rowc([], 2)); // the seam survives the shorten replace
-    s = backspace(s); // peel again: the number empties, whole-cell removal
-    expect(j(envelopeOf(s).root)).toBe(j({ type: 'op', op: 'add', args: [sym('x')] }));
-    expect(s.caret).toEqual(rowc([], 1)); // the freed spot at the removal position
+    s = backspace(s); // peel again: the number empties → the PENDING NULL (the + stays dangling)
+    expect(j(envelopeOf(s).root)).toBe(j({ type: 'op', op: 'add', args: [sym('x'), null] }));
+    expect(s.caret).toEqual(rowc([], 1)); // the freed spot: the caret sits in the pending cell
     legalEndState(s);
   });
 

@@ -102,6 +102,17 @@ export interface RenderedMath {
   /** path key → a sub node's two label <mi> elements (T9: label token carets
    *  anchor within their own label element, not the msub extent). */
   readonly subLabels: ReadonlyMap<string, { readonly base: Element; readonly script: Element }>;
+  /** THE FENCE ELEMENT MAP (rework session 3): every rendered fence glyph →
+   *  its owning node + side. Covers the group/fn OPEN parens, the container
+   *  CLOSE parens (rendered by the container itself — no uid of their own,
+   *  which is exactly why D7/D8 needed an addressable map), and the dangling
+   *  fence-node close tokens (C4, S-097). A `close: false` container renders
+   *  NO close element — those containers appear in `fencesMissingClose`
+   *  bound to their own container element (the missing-close state). */
+  readonly fenceGlyphs: ReadonlyMap<Element, { readonly path: Path; readonly side: 'open' | 'close' }>;
+  /** path key → the element of a group/fn whose close fence is absent
+   *  (close: false — the movable-paren model's missing-close state). */
+  readonly fencesMissingClose: ReadonlyMap<string, Element>;
 }
 
 /** Module-level UID counter: ids stay unique across rebuilds and across trees
@@ -123,6 +134,8 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
   const separators = new Map<Element, { path: Path; index: number }>();
   const bareAnchors = new Map<string, BareAnchor>();
   const subLabels = new Map<string, { base: Element; script: Element }>();
+  const fenceGlyphs = new Map<Element, { path: Path; side: 'open' | 'close' }>();
+  const fencesMissingClose = new Map<string, Element>();
 
   const el = (tag: string): Element => doc.createElementNS(MATHML_NS, tag);
   const mo = (text: string, fence: boolean): Element => {
@@ -293,7 +306,9 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
         const name = el('mi');
         name.textContent = fn.name;
         mrow.appendChild(name);
-        mrow.appendChild(mo('(', true));
+        const open = mo('(', true);
+        fenceGlyphs.set(open, { path, side: 'open' });
+        mrow.appendChild(open);
         fn.args.forEach((arg, i) => {
           if (i > 0) {
             const comma = mo(',', false);
@@ -302,8 +317,15 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
           }
           for (const f of rowChild(path, i, arg)) mrow.appendChild(f);
         });
-        // close = false: the movable closing fence is absent — the row stands open.
-        if (fn.close) mrow.appendChild(mo(')', true));
+        // close = false: the movable closing fence is absent — the row stands
+        // open (the missing-close state stays addressable through the map).
+        if (fn.close) {
+          const close = mo(')', true);
+          fenceGlyphs.set(close, { path, side: 'close' });
+          mrow.appendChild(close);
+        } else {
+          fencesMissingClose.set(pathKey(path), mrow);
+        }
         return own(path, [mrow], mrow);
       }
       case 'fence': {
@@ -311,16 +333,24 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
         const f = el('mo');
         f.setAttribute('fence', 'true');
         f.textContent = ')';
+        fenceGlyphs.set(f, { path, side: 'close' });
         return own(path, [f], f);
       }
       case 'group': {
         const group = node as GroupNode;
         const mrow = el('mrow');
         const openFence = mo('(', true);
+        fenceGlyphs.set(openFence, { path, side: 'open' });
         mrow.appendChild(openFence);
         for (const f of hostedChild(path, group.child, openFence)) mrow.appendChild(f);
         // close = false: see the fn case.
-        if (group.close) mrow.appendChild(mo(')', true));
+        if (group.close) {
+          const close = mo(')', true);
+          fenceGlyphs.set(close, { path, side: 'close' });
+          mrow.appendChild(close);
+        } else {
+          fencesMissingClose.set(pathKey(path), mrow);
+        }
         return own(path, [mrow], mrow);
       }
       case 'frac': {
@@ -412,5 +442,5 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
     }
   }
 
-  return { math, uidByPath, pathByUid, elementByPath, extents, placeholders, placeholderByCaret, separators, bareAnchors, subLabels };
+  return { math, uidByPath, pathByUid, elementByPath, extents, placeholders, placeholderByCaret, separators, bareAnchors, subLabels, fenceGlyphs, fencesMissingClose };
 }

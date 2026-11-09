@@ -16,10 +16,11 @@ import type { StaticVocabulary } from '../ast/vocabulary.js';
 
 import {
   applyOp,
-  backspace as engineBackspace,
   caretResolvesIn,
+  decideBackspace,
   EngineError,
   envelopeOf,
+  forwardDelete,
   initSession,
   insertRoot as engineInsertRoot,
   insertSubscript as engineInsertSubscript,
@@ -27,17 +28,20 @@ import {
   settleUnits,
   typeToken,
   undo,
+  unitSetOf,
+  type BackspaceDecision,
   type Caret,
   type EditingState,
   type NavDir,
   type Op,
+  type Path,
   type TypedToken,
 } from '../engine/index.js';
 
 import { updateCaretOverlay } from './caret-overlay.js';
 import { caretFromHit, hitFromMouseEvent } from './click.js';
-import { charFromCode, classifyKey, deadCompositionBase, KEYMAP } from './keys.js';
-import { buildMathML, type RenderedMath } from './mathml-dom.js';
+import { charFromCode, classifyKey, deadComposedBase, deadCompositionBase, KEYMAP } from './keys.js';
+import { buildMathML, pathKey, type RenderedMath } from './mathml-dom.js';
 import { applyVerticalKey, type VerticalMemory } from './vertical-memory.js';
 
 export interface EditorControllerOptions {
@@ -65,6 +69,10 @@ const CARET_CSS = `
   0% { opacity: 1; }
   50% { opacity: 0; }
   100% { opacity: 1; }
+}
+.integral-highlight {
+  background: rgba(255, 0, 0, 0.25);
+  border-radius: 2px;
 }
 `;
 
@@ -101,8 +109,18 @@ export class EditorController {
    *  serialized, never logged; one-shot (owner ruling 2026-11-09): it survives
    *  until the very next key press of any kind — a typing key resolves it,
    *  every other input (non-typing keys, clicks, blur) discards it and does
-   *  its ordinary job untouched. */
+   *  its ordinary job untouched, EXCEPT the two-character composed emission
+   *  (Firefox/Windows, rework session 3: `keydown key="^2"`, no composition
+   *  events at all) which resolves it with the character after the dead
+   *  accent. */
   private pendingDeadPow = false;
+  /** D5 highlight-then-delete (rework session 3): the armed target structure
+   *  path — a TRANSIENT controller/UI state derived from the engine's
+   *  highlight decision kind, never serialized, NEVER an undo-log entry
+   *  (U2). Any input that is not the confirming BS clears it and behaves as
+   *  if it never had happened; the confirming BS deletes the structure WITH
+   *  its content. Survives only caret movement (the visual-state roll). */
+  private highlighted: Path | null = null;
 
   constructor(container: HTMLElement, options: EditorControllerOptions = {}) {
     this.container = container;
@@ -149,6 +167,7 @@ export class EditorController {
 
   /** Step the op log back one entry and rebuild. */
   undo(): void {
+    this.takeHighlight(); // any input that is not the confirming BS clears it (D5)
     const next = undo(this.state);
     if (next !== this.state) this.state = next;
     this.render();
@@ -157,6 +176,7 @@ export class EditorController {
 
   /** Step the redo list forward one entry and rebuild. */
   redo(): void {
+    this.takeHighlight(); // any input that is not the confirming BS clears it (D5)
     const next = engineRedo(this.state);
     if (next !== this.state) this.state = next;
     this.render();
@@ -203,7 +223,85 @@ export class EditorController {
     return !(event.key.length === 1 && token !== undefined && token.t === 'leaf' && token.node.type === 'sym');
   };
 
+  private settleIfLeaving(event: KeyboardEvent): void {
+    if (this.keyLeavesRun(event)) this.settle();
+  }
 
+  // ——— D5 highlight-then-delete (transient, never logged) ———
+
+  /** The highlight element of an armed target path (null before the first render). */
+  private highlightElement(path: Path): Element | null {
+    const el = this.rendered?.elementByPath.get(pathKey(path));
+    return el ?? null;
+  }
+
+  private paintHighlight(path: Path, on: boolean): void {
+    const el = this.highlightElement(path);
+    if (el === null) return;
+    if (on) el.classList.add('integral-highlight');
+    else el.classList.remove('integral-highlight');
+  }
+
+  /** Clear the armed highlight (paint off, state gone); returns the armed
+   *  path for the one consumer that confirms (the BS key). */
+  private takeHighlight(): Path | null {
+    const armed = this.highlighted;
+    if (armed !== null) this.paintHighlight(armed, false);
+    this.highlighted = null;
+    return armed;
+  }
+
+  /** One Backspace key (D1–D9; Ctrl = the D3 variants): at most one engine
+   *  decision = at most one op = one log entry; the first-press D5 highlight
+   *  arms the transient UI state (nothing applied, nothing logged — U2) and
+   *  the confirming BS deletes the structure with its content. A defined
+   *  no-op changes nothing; a rejected decision (typed EngineError) is a
+   *  no-op, never thrown to the DOM. */
+  private backspaceKey(ctrl: boolean, confirm: Path | null): void {
+    let decision: BackspaceDecision;
+    try {
+      decision = decideBackspace(toJSON(this.state.root), this.state.caret, {
+        ctrl,
+        highlighted: confirm,
+        units: unitSetOf(this.state),
+      });
+    } catch (e) {
+      if (e instanceof EngineError) return;
+      throw e;
+    }
+    if (decision.kind === 'highlight' && decision.target !== undefined) {
+      this.highlighted = decision.target;
+      this.paintHighlight(this.highlighted, true);
+      return;
+    }
+    let next: EditingState = this.state;
+    try {
+      for (const op of decision.ops) next = applyOp(next, op);
+    } catch (e) {
+      if (e instanceof EngineError) return;
+      throw e;
+    }
+    if (next === this.state) return; // defined no-op
+    this.state = next;
+    this.render();
+    this.onStateChange?.(this.state);
+  }
+
+  /** One forward Delete key (the D1/D3 mirrors + the named no-op defaults):
+   *  at most one op = one log entry; a defined no-op changes nothing. */
+  private deleteKey(ctrl: boolean): void {
+    let next: EditingState;
+    try {
+      next = forwardDelete(this.state, { ctrl });
+    } catch (e) {
+      if (e instanceof EngineError) return;
+      throw e;
+    }
+    if (next === this.state) return; // defined no-op
+    this.state = next;
+    this.render();
+    this.onStateChange?.(this.state);
+  }
   /**
    * Pure caret placement (the click path): validated against the tree, applied as
    * state WITHOUT a log entry — movement never logs. Pending dead-^ (T8) does not
@@ -217,6 +315,7 @@ export class EditorController {
       throw new EngineError('caret-invalid', `placeCaret: caret does not resolve in this tree (${JSON.stringify(caret)})`);
     }
     this.pendingDeadPow = false;
+    this.takeHighlight(); // a click is not the confirming BS (D5)
     this.state = { root: this.state.root, caret, log: this.state.log, redo: this.state.redo, vocabulary: this.state.vocabulary };
     // clicks write no memory entries (and V2 never clears anything)
     this.updateCaret();
@@ -292,6 +391,7 @@ export class EditorController {
   private readonly handleBlur = (): void => {
     // T8 one-shot rule: blur discards a pending dead-^ with no trace.
     this.pendingDeadPow = false;
+    this.takeHighlight(); // blur is not the confirming BS (D5)
     // S-051: blur leaves the run — the conversion lands before the host
     // takes the envelope (one op, logged, undoable while the session lives).
     this.settle();
@@ -332,7 +432,12 @@ export class EditorController {
 
   private readonly handleKeydown = (event: KeyboardEvent): void => {
     if (this.container.ownerDocument.activeElement !== this.container) return; // only while focused
-    if (this.keyLeavesRun(event)) this.settle(); // S-051: leaving fires the conversion first
+    this.settleIfLeaving(event); // S-051: leaving fires the conversion first
+    // D5: any input that is not the confirming BS clears the armed highlight
+    // (behaving as if it never happened) — the BS key consumes it as the
+    // confirmation. A tree-changing settle invalidates the negotiation too
+    // (the armed path comparison then simply mismatches — a fresh decision).
+    const confirmHighlight = this.takeHighlight();
     if (this.pendingDeadPow && event.key === 'Process') {
       // Firefox on Windows may report the second keystroke of a dead-key
       // composition as 'Process' (no character identity in `key` — the
@@ -364,7 +469,22 @@ export class EditorController {
         if (action.token !== undefined && action.token.t !== 'pow') this.typeKey(action.token);
         return;
       }
-      // Any non-typing key press discards the pending — the key then does its
+      const composed = deadComposedBase(event.key);
+      if (composed !== null) {
+        // The Firefox/Windows rider (owner live reading 2026-11-09, rework
+        // session 3): with the pending armed, NO composition ever fires and
+        // the composed output rides the follow-up keydown as a two-character
+        // key value (`key === "^2"`). Consume it: the character after the
+        // dead accent resolves the pending power per S-034. (Inline like the
+        // type-resolution branch above — resolvePendingPow would return
+        // immediately: the pending flag is already consumed here.)
+        event.preventDefault();
+        this.typeKey({ t: 'pow' });
+        const token = KEYMAP[composed];
+        if (token !== undefined && token.t !== 'pow') this.typeKey(token);
+        return;
+      }
+      // Any other key press discards the pending — the key then does its
       // ordinary job ("as if ^ had never been pressed"): fall through.
     }
     switch (action.kind) {
@@ -384,7 +504,11 @@ export class EditorController {
         return;
       case 'backspace':
         event.preventDefault();
-        this.backspaceKey(action.ctrl);
+        this.backspaceKey(action.ctrl, confirmHighlight);
+        return;
+      case 'delete':
+        event.preventDefault();
+        this.deleteKey(action.ctrl);
         return;
       case 'type':
         // A typing key is handled (preventDefault) even when the token ends up
@@ -436,24 +560,6 @@ export class EditorController {
       throw e;
     }
     if (next === this.state) return; // byte-identical no-op (same-op swap retype)
-    this.state = next;
-    this.render();
-    this.onStateChange?.(this.state);
-  }
-
-  /** One Backspace key (Ctrl = whole-node delete): exactly one engine
-   *  backspace decision = at most one op = at most one log entry. A defined
-   *  no-op changes nothing; a rejected decision (typed EngineError) is a
-   *  no-op, never thrown to the DOM. */
-  private backspaceKey(ctrl: boolean): void {
-    let next: EditingState;
-    try {
-      next = engineBackspace(this.state, { ctrl });
-    } catch (e) {
-      if (e instanceof EngineError) return;
-      throw e;
-    }
-    if (next === this.state) return; // defined no-op
     this.state = next;
     this.render();
     this.onStateChange?.(this.state);

@@ -88,19 +88,19 @@ export type TypedToken = StructureToken | { readonly t: 'leaf'; readonly node: N
 const rowImplicit = (node: NodeJson): boolean =>
   node.type === 'op' && (node as { implicit?: boolean }).implicit === true;
 
-const fnJson = (name: string, args: (NodeJson | null)[], close: boolean): NodeJson =>
+export const fnJson = (name: string, args: (NodeJson | null)[], close: boolean): NodeJson =>
   close ? { type: 'fn', name, args } : { type: 'fn', name, args, close: false };
 
-const groupJson = (child: NodeJson | null, close: boolean): NodeJson =>
+export const groupJson = (child: NodeJson | null, close: boolean): NodeJson =>
   ({ type: 'group', parens: 'always', child, ...(close ? {} : { close: false }) }) as NodeJson;
 
 /** The glyph-less juxtaposition pair: its own implicit-multiply subrow. */
-const implicitPair = (a: NodeJson | null, b: NodeJson | null): NodeJson =>
+export const implicitPair = (a: NodeJson | null, b: NodeJson | null): NodeJson =>
   ({ type: 'op', op: 'multiply', args: [a, b], implicit: true }) as NodeJson;
 
 /** A num from literal text (digits + one dot; a trailing dot is the
  *  in-progress `dot` state, T4). Null when unrepresentable. */
-const numFromText = (text: string): NodeJson | null => {
+export const numFromText = (text: string): NodeJson | null => {
   const value = Number(text);
   if (!Number.isFinite(value)) return null;
   return text.endsWith('.') ? ({ type: 'num', value, dot: true } as NodeJson) : ({ type: 'num', value } as NodeJson);
@@ -158,7 +158,7 @@ const opRow = (fn: OperatorFn, args: (NodeJson | null)[]): NodeJson =>
   ({ type: 'op', op: fn, args }) as NodeJson;
 
 /** Clone an op/fn row with new cells, preserving name/implicit/close. */
-function rowClone(kind: NodeJson, cells: readonly (NodeJson | null)[]): NodeJson {
+export function rowClone(kind: NodeJson, cells: readonly (NodeJson | null)[]): NodeJson {
   if (kind.type === 'fn') {
     return fnJson((kind as { name: string }).name, [...cells], (kind as { close?: boolean }).close !== false);
   }
