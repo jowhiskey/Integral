@@ -74,8 +74,8 @@ describe('demo case browser', () => {
       const inSection = [...(section as HTMLElement).querySelectorAll('button[data-case-id]')].length;
       expect(inSection).toBe(CASES.filter((c) => c.category === cat.key).length);
     }
-    // the always-available empty scratchpad editor is present alongside
-    expect(target.querySelectorAll('.integral-editor').length).toBe(2);
+    // the single case editor is the demo's only editing surface
+    expect(target.querySelectorAll('.integral-editor').length).toBe(1);
     await unmount(app as never);
   });
 

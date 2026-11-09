@@ -6,8 +6,8 @@
     <title>Integral — editor demo (visual-test case browser)</title>
     <style>
       /* Page layout (demo refinement): the whole page is exactly one viewport —
-         header + case grid + testing area + scratchpad never scroll at page
-         level; the case grid and the readout panels scroll internally. */
+         header + case grid + testing area never scroll at page level; the
+         case grid and the readout panels scroll internally. */
       html {
         height: 100%;
       }
@@ -203,21 +203,10 @@
         white-space: pre;
       }
 
-      /* ——— scratchpad strip ——— */
-      .scratch {
-        flex: 0 0 auto;
-        max-height: 16vh;
-        overflow-y: auto;
-        border: 1px solid #ccc;
-        border-radius: 6px;
-        padding: 0.3em 0.7em;
-      }
-      .scratch .integral-editor {
+      /* ——— the case editor ——— */
+      .integral-editor {
         min-height: 1.8em;
         font-size: 1.1em;
-      }
-      .scratch-editor-wrap {
-        outline: none;
       }
 
       /* ——— the IME / dead-key event log (standing IME-debug tool) ——— */
@@ -299,8 +288,7 @@
         instruction” button runs the key sequence through the real keyboard path. In the editor: type, move with the
         arrow keys, Backspace / Ctrl+Backspace, undo/redo (Ctrl+Z, Ctrl+Y or Ctrl+Shift+Z), and click to place the
         caret. The testing area shows the live data without devtools: the stored AST envelope as pretty JSON, the
-        generated MathML as pretty source (right of the JSON), and a caret-state readout under the editor. The
-        scratchpad at the bottom is an always-free empty editor.
+        generated MathML as pretty source (right of the JSON), and a caret-state readout under the editor.
       </p>
     </details>
     <div id="app"></div>

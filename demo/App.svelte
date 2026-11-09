@@ -4,8 +4,7 @@
   // grouped by category. Clicking a case entry loads its seed AST + seed caret
   // into the single case editor; clicking the active case again resets to the
   // seed. Cases with a `keys` instruction (typed-from-empty) get a button that
-  // types the instruction through the real keyboard path. A separate
-  // always-empty editor is the free scratchpad.
+  // types the instruction through the real keyboard path.
   //
   // The testing area around the case editor carries three live readouts (no
   // devtools needed): the stored AST envelope as pretty JSON, the generated
@@ -22,7 +21,6 @@
   import { attachImeLogger, type ImeLogLine } from './ime-logger.js';
 
   let caseContainer: HTMLDivElement | undefined = $state();
-  let scratchWrap: HTMLDivElement | undefined = $state();
   let controller: EditorController | null = null;
   let activeId: string | null = $state(null);
   let caretText = $state('—');
@@ -108,15 +106,10 @@
     });
     refresh(controller.getState());
     // The standing IME / dead-key event logger (capture-phase, passive —
-    // pure observation): attach to both editing surfaces, latest first.
+    // pure observation): attach to the case editor, latest first.
     attachImeLogger(caseContainer, 'case', (line) => {
       imeLines = [line, ...imeLines].slice(0, MAX_IME_LINES);
     });
-    if (scratchWrap !== undefined) {
-      attachImeLogger(scratchWrap, 'scratch', (line) => {
-        imeLines = [line, ...imeLines].slice(0, MAX_IME_LINES);
-      });
-    }
   });
 
   /** Collapse the raw lines into the pane's text (seq + surface + line). */
@@ -148,7 +141,7 @@
         Click a case to load its seed (formula + starting caret) into the case editor; click the active case again
         to reset to the seed. Cases with a <code>keys</code> instruction seed the empty formula — use the “type
         instruction” button (or just type) to run it. The panels right of the editor show the live AST JSON and
-        MathML source; the caret readout sits under the editor. The scratchpad at the bottom is always free.
+        MathML source; the caret readout sits under the editor.
       </p>
     </details>
   </div>
@@ -200,13 +193,6 @@
   <div class="panel">
     <div class="label">generated MathML — pretty source (live)</div>
     <pre class="src" data-mathml>{mathmlText}</pre>
-  </div>
-</div>
-
-<div class="scratch">
-  <div class="label">scratchpad — always-available empty editor (free edit; the case browser never touches it)</div>
-  <div bind:this={scratchWrap} class="scratch-editor-wrap">
-    <IntegralEditor envelope={{ v: 1, root: null }} />
   </div>
 </div>
 
