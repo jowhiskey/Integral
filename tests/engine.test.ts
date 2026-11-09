@@ -240,8 +240,10 @@ describe('initSession', () => {
     expect(JSON.stringify(envelopeOf(initSession({ v: 1, root: null })))).toBe('{"v":1,"root":null}');
   });
 
-  it('places the initial caret on the root of a non-empty formula', () => {
-    expect(initSession(SEEDS.canonical).caret).toEqual({ kind: 'node', path: [] });
+  it('places the initial caret at the visual start station (4a re-pin: OA-visual-trumps)', () => {
+    // the old root node-caret duplicated the start station's visual spot; the
+    // seed is the leftmost bench position of the rendered content
+    expect(initSession(SEEDS.canonical).caret).toEqual({ kind: 'node', path: [], side: 'right' });
   });
 
   it('validates the envelope through fromJSON', () => {
@@ -265,7 +267,8 @@ describe('undo', () => {
     expect(state.log.length).toBe(1);
     state = undo(state);
     expect(state.log.length).toBe(0);
-    expect(JSON.stringify(state.caret)).toBe(JSON.stringify({ kind: 'node', path: [] }));
+    // 4a re-pin (OA-visual-trumps): the seed caret is the visual start station
+    expect(JSON.stringify(state.caret)).toBe(JSON.stringify({ kind: 'token', path: [2], index: 1 }));
     expect(JSON.stringify(envelopeOf(state))).toBe(treeBytes);
   });
 

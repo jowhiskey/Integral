@@ -72,12 +72,14 @@ describe('in-token movement (resolveMove / move op)', () => {
     expect(resolveMove(env, token([1], 1), 'left')).toEqual(token([1], 0));
     expect(resolveMove(env, token([1], 1), 'right')).toEqual(token([1], 2));
     expect(resolveMove(env, token([1], 2), 'right')).toEqual(token([1], 3));
-    // exits: offset 0 + Left → the structural station left of the num (cell 0 dive); offset len + Right → cell 2
-    expect(resolveMove(env, token([1], 0), 'left')).toEqual(node([0]));
-    expect(resolveMove(env, token([1], 3), 'right')).toEqual(node([2]));
-    // structural positions are unchanged: the node caret on the num still climbs
-    expect(resolveMove(env, node([1]), 'left')).toEqual(node([0]));
-    expect(resolveMove(env, node([1]), 'right')).toEqual(node([2]));
+    // exits (4a re-pin, OA-visual-trumps benches): offset 0 + Left crosses the
+    // glyph to cell 0's in-token END; offset len + Right crosses to cell 2's
+    // offset 0 — one visible movement per press (N1's exit rule)
+    expect(resolveMove(env, token([1], 0), 'left')).toEqual(token([0], 1));
+    expect(resolveMove(env, token([1], 3), 'right')).toEqual(token([2], 0));
+    // a node caret on the num takes the same exit climbs (bench stations)
+    expect(resolveMove(env, node([1]), 'left')).toEqual(token([0], 1));
+    expect(resolveMove(env, node([1]), 'right')).toEqual(token([2], 0));
     // a lone root num: token ends have no exit (document edge)
     const rootEnv = envOf(num(42));
     expect(resolveMove(rootEnv, token([], 0), 'left')).toBe(null);
@@ -89,12 +91,14 @@ describe('in-token movement (resolveMove / move op)', () => {
   it('vertical keys from an in-token position behave like the owning structural station', () => {
     const env = envOf({ v: 1, root: { type: 'frac', num: num(12), den: num(3) } });
     expect(resolveMove(env, token(['num'], 1), 'down')).toEqual(resolveMove(env, node(['num']), 'down'));
-    expect(resolveMove(env, token(['num'], 1), 'down')).toEqual(node(['den']));
-    expect(resolveMove(env, token(['den'], 0), 'up')).toEqual(node(['num']));
+    // 4a re-pin (OA-vertical-default): vertical arrival rests at the region
+    // content END — the in-token end, never a station ON the content node
+    expect(resolveMove(env, token(['num'], 1), 'down')).toEqual(token(['den'], 1));
+    expect(resolveMove(env, token(['den'], 0), 'up')).toEqual(token(['num'], 2));
     // pow: base up → exp (the raised-script edge)
     const powEnv = envOf({ v: 1, root: { type: 'pow', base: num(2), exp: num(10) } });
-    expect(resolveMove(powEnv, token(['base'], 1), 'up')).toEqual(node(['exp']));
-    expect(resolveMove(powEnv, token(['exp'], 1), 'down')).toEqual(node(['base']));
+    expect(resolveMove(powEnv, token(['base'], 1), 'up')).toEqual(token(['exp'], 2));
+    expect(resolveMove(powEnv, token(['exp'], 1), 'down')).toEqual(token(['base'], 1));
   });
 
   it('the move op carries token carets, never logs, and no-target moves are the same state', () => {
@@ -108,8 +112,8 @@ describe('in-token movement (resolveMove / move op)', () => {
     expect(moved.caret).toEqual(token([1], 1));
     // exit at the end, then a no-op at the document edge returns the same object
     let s2 = applyOp(moved, { op: 'move', dir: 'left' }); // token([1],0)
-    s2 = applyOp(s2, { op: 'move', dir: 'left' }); // exits to node([0])
-    expect(s2.caret).toEqual(node([0]));
+    s2 = applyOp(s2, { op: 'move', dir: 'left' }); // exits across the glyph to a's end
+    expect(s2.caret).toEqual(token([0], 1));
     const s3 = applyOp(at(num(5), token([], 0)), { op: 'move', dir: 'left' });
     expect(s3.caret).toEqual(token([], 0));
   });
@@ -185,7 +189,9 @@ describe('typing at in-token positions (Task 5)', () => {
     // 12|3 + '+' → 12+3
     let state = typeToken(at(num(123), token([], 2)), { t: 'operator', fn: 'add' });
     expect(j(envelopeOf(state).root)).toBe(j({ type: 'op', op: 'add', args: [num(12), num(3)] }));
-    expect(state.caret).toEqual(row([], 1)); // directly after the inserted glyph (literal insertion)
+    // 4a re-pin (OA-visual-trumps/N2): the station directly after the glyph IS
+    // the right half's offset 0 — one visible spot, one state
+    expect(state.caret).toEqual(token([1], 0));
     expect(state.log.length).toBe(1);
     legal(state);
     // 1|23 + '/' → frac(1, 23) — T7 re-pin (rework 2b-1): the owner's uniform
@@ -240,7 +246,8 @@ describe('typing at in-token positions (Task 5)', () => {
     expect(j(envelopeOf(l).root)).toBe(
       j({ type: 'op', op: 'multiply', args: [num(1), sym('x'), num(2)], implicit: true }),
     );
-    expect(l.caret).toEqual(row([], 2)); // directly after the inserted symbol
+    // 4a re-pin (OA-token-end): the typed x's in-token end
+    expect(l.caret).toEqual(token([1], 1));
     legal(l);
     // groupOpen at an interior offset: the T6 group juxtaposes between the halves
     const g = typeToken(at(num(123), token([], 1)), { t: 'groupOpen' });
@@ -266,7 +273,8 @@ describe('typing at in-token positions (Task 5)', () => {
     expect(j(envelopeOf(flat).root)).toBe(
       j({ type: 'op', op: 'add', args: [num(1), num(23), sym('b')] }),
     );
-    expect(flat.caret).toEqual(row([], 1)); // directly after the inserted glyph
+    // 4a re-pin (OA-visual-trumps/N2): after the inserted glyph IS the next cell's offset 0
+    expect(flat.caret).toEqual(token([1], 0));
     legal(flat);
   });
 

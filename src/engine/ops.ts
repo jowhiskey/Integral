@@ -35,7 +35,7 @@ import {
   type SlotName,
 } from './caret.js';
 import { EngineError } from './errors.js';
-import { NAV_PROFILES, resolveMove, type NavDir } from './nav.js';
+import { NAV_PROFILES, entryStation, rowEndStation, resolveMove, type NavDir } from './nav.js';
 
 /** Where an op acts — always an explicit path, never a policy decision.
  *
@@ -151,12 +151,38 @@ const EMPTY_ENVELOPE: Envelope = { v: 1, root: null };
 /**
  * Open an editing session. `envelope` is validated through fromJSON (typed
  * ValidationError on invalid trees); omitted = the empty formula. The initial
- * caret is the defined per-state default: `empty` for an empty formula, the
- * root node otherwise.
+ * caret is the just-typed analog (rework 4a — the old root node-caret is
+ * unreachable-ized per OA-visual-trumps; its documented readings normalize
+ * onto the states that actually paint there):
+ * - an INCOMPLETE tree pends in its first empty station — the □ slot or the
+ *   pending null cell (the natural continue);
+ * - a lone text token / sub / unit rests at its in-token END (the node
+ *   caret's "right edge" reading);
+ * - a complete op row rests at its collapsed row end;
+ * - a complete fenced/fenceless container (group/fn/frac/pow/root) rests at
+ *   its whole-structure after-station (the additive node `side: 'right'`).
  */
 export function initSession(envelope?: unknown, vocabulary?: StaticVocabulary): EditingState {
   const root = fromJSON(envelope ?? EMPTY_ENVELOPE, vocabulary);
-  const caret: Caret = root === null ? { kind: 'empty' } : { kind: 'node', path: [] };
+  if (root === null) return { root, caret: { kind: 'empty' }, log: [], redo: [], vocabulary };
+  const env = toJSON(root);
+  const pend = firstEmpty(env.root as NodeJson);
+  if (pend !== null) {
+    return {
+      root,
+      caret: 'slot' in pend ? { kind: 'slot', path: [], slot: pend.slot } : { kind: 'row', path: [], index: pend.index },
+      log: [],
+      redo: [],
+      vocabulary,
+    };
+  }
+  const t = (env.root as NodeJson).type;
+  const caret: Caret =
+    t === 'group' || t === 'fn' || t === 'frac' || t === 'pow' || t === 'root'
+      ? { kind: 'node', path: [], side: 'right' }
+      : t === 'op'
+        ? (rowEndStation(env, [], 'right', NAV_PROFILES) ?? { kind: 'node', path: [] })
+        : (entryStation(env, [], 'right', NAV_PROFILES) ?? { kind: 'node', path: [] });
   return { root, caret, log: [], redo: [], vocabulary };
 }
 

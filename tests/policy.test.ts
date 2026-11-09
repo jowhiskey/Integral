@@ -143,7 +143,7 @@ describe('T1 — literal operator insertion (glyphs appear at the caret, nothing
     // `2` completes a − 2×b (the math reading of the flat a−2×b text).
     const after2 = typeToken(state, d('2'));
     expectTree(after2, op('subtract', sym('a'), op('multiply', num(2), sym('b'))));
-    expect((after2.caret as { kind: string }).kind).toBe('node');
+    expect((after2.caret as { kind: string }).kind).toBe('token'); // 4a: OA-token-end
     legal(after2);
   });
 
@@ -233,7 +233,8 @@ describe('T3 — letters glue, different-type splits, digit-glue, juxtaposition,
   it('different-type input splits a symbol at the caret: `a|b` + `+` → a+|b (S-029)', () => {
     const state = typeToken(at(sym('ab'), tokc([], 1)), plus);
     expectTree(state, op('add', sym('a'), sym('b')));
-    expect(state.caret).toEqual(rowc([], 1));
+    // 4a (OA-visual-trumps/N2): the seam right of the glyph IS b's offset 0
+    expect(state.caret).toEqual(tokc([1], 0));
     legal(state);
   });
 
@@ -247,7 +248,8 @@ describe('T3 — letters glue, different-type splits, digit-glue, juxtaposition,
     // at the front of a symbol (no letters to the left) a digit starts a number
     const before = typeToken(at(sym('ab'), tokc([], 0)), d('5'));
     expectTree(before, imp(num(5), sym('ab')));
-    expect(before.caret).toEqual(rowc([], 1));
+    // 4a (OA-token-end): the typed token's in-token end
+    expect(before.caret).toEqual(tokc([0], 1));
     legal(before);
   });
 
@@ -255,16 +257,19 @@ describe('T3 — letters glue, different-type splits, digit-glue, juxtaposition,
     // S-031 A: a letter inside a number → number·symbol·number (flat 3-cell implicit row)
     const inner = typeToken(at(num(123), tokc([], 1)), s('x'));
     expectTree(inner, imp(num(1), sym('x'), num(23)));
-    expect(inner.caret).toEqual(rowc([], 2));
+    // 4a (OA-token-end): the glyph-less seam after x painted at x's end already
+    expect(inner.caret).toEqual(tokc([1], 1));
     legal(inner);
     // S-032: a letter before a number → the juxtaposed symbol-first pair
     const before = typeToken(at(num(123), tokc([], 0)), s('x'));
     expectTree(before, imp(sym('x'), num(123)));
-    expect(before.caret).toEqual(rowc([], 1));
+    // 4a (OA-token-end): the typed x's in-token end
+    expect(before.caret).toEqual(tokc([0], 1));
     // a letter after a number → the evaluating number-first pair (5x)
     const after = typeToken(at(num(5), node([])), s('x'));
     expectTree(after, imp(num(5), sym('x')));
-    expect(after.caret).toEqual(rowc([], 2));
+    // 4a (OA-token-end): the typed x's in-token end (the seam painted there)
+    expect(after.caret).toEqual(tokc([1], 1));
     legal(after);
   });
 
@@ -435,7 +440,8 @@ describe('T6 — group creation, S-097 close-paren pairing, dangling fences', ()
   it('a typed `)` completes the innermost unclosed open fence (S-097) and lands after it', () => {
     const state = typeToken(at(group(sym('x'), false), node([])), close);
     expectTree(state, group(sym('x'), true));
-    expect(state.caret).toEqual(node([]));
+    // 4a: the whole-structure after-station (the ratified lone-root border)
+    expect(state.caret).toEqual({ kind: 'node', path: [], side: 'right' });
     legal(state);
     // the function form restores the same call
     const fnState = typeToken(at(fn('sqrt', [sym('a')], false), node([0])), close);
@@ -547,7 +553,8 @@ describe('T7 — the fraction key `/` creates a fraction over the preceding node
     legal(state);
     state = typeToken(state, s('b'));
     expectTree(state, frac(sym('a'), sym('b')));
-    expect(state.caret).toEqual(node(['den']));
+    // 4a (OA-token-end): the typed b's in-token end
+    expect(state.caret).toEqual(tokc(['den'], 1));
     legal(state);
   });
 
@@ -610,9 +617,9 @@ describe('T7 — the power key `^` creates a power over the preceding node', () 
     legal(state);
     state = typeToken(state, d('2'));
     expectTree(state, pow(sym('a'), num(2)));
-    // the insert-at-slot relocation: the landing caret is ON the exponent's
-    // content (its right-edge station — the fill op's pinned rule)
-    expect(state.caret).toEqual(node(['exp']));
+    // 4a re-pin (OA-token-end): the typed 2's in-token end — never a
+    // whole-node caret (the state that painted at the element's LEFT edge)
+    expect(state.caret).toEqual(tokc(['exp'], 1));
     legal(state);
   });
 

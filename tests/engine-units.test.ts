@@ -58,7 +58,8 @@ describe('S-051 — the leave-run conversion (settleUnits)', () => {
   it('a typed letter run after a number has NOT converted while typing (letters leave nothing)', () => {
     const state = typedRun();
     expectTree(state, imp(num(50), sym('mm')));
-    expect(state.caret).toEqual({ kind: 'row', path: [], index: 2 });
+    // 4a re-pin (OA-token-end): the typed run's in-token end
+    expect(state.caret).toEqual({ kind: 'token', path: [1], index: 2 });
     expectLegal(state);
   });
 
@@ -244,8 +245,10 @@ describe('S-104 — unit label token carets (N1 letter-wise positions)', () => {
     expect(resolveMove(env, inLabel, 'left')).toEqual({ kind: 'token', path: [1], index: 0 });
     expect(resolveMove(env, inLabel, 'right')).toEqual({ kind: 'token', path: [1], index: 2 });
     // exits: the label start leaves left, the label end leaves right
-    expect(resolveMove(env, { kind: 'token', path: [1], index: 0 }, 'left')).toEqual({ kind: 'node', path: [0] });
-    expect(resolveMove(env, { kind: 'token', path: [1], index: 2 }, 'right')).toEqual({ kind: 'node', path: [2] });
+    // 4a re-pin (N1 exit + OA-visual-trumps): the exits cross the glyphs to
+    // the adjacent cells' bench stations — offset 0 of 1, the in-token end of 9
+    expect(resolveMove(env, { kind: 'token', path: [1], index: 0 }, 'left')).toEqual({ kind: 'token', path: [0], index: 1 });
+    expect(resolveMove(env, { kind: 'token', path: [1], index: 2 }, 'right')).toEqual({ kind: 'token', path: [2], index: 0 });
   });
 
   it('the caret union addresses the label exactly (bounds checked, labels sub-only)', () => {

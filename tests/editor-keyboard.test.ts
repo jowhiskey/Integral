@@ -138,7 +138,8 @@ describe('typing', () => {
     press(container, '5');
     expect(controller.getState().log.length).toBe(1);
     expect(j(controller.getEnvelope().root)).toBe(j(num(5)));
-    expect(j(controller.getState().caret)).toBe(j(node([])));
+    // 4a re-pin (OA-token-end): the typed 5's in-token end
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: [], index: 1 }));
 
     press(container, '+');
     expect(controller.getState().log.length).toBe(2);
@@ -188,24 +189,35 @@ describe('typing', () => {
 describe('arrows', () => {
   it('pinned carets move to the expected nav-profile targets and movement never enters the log', () => {
     const { controller, container } = make({ v: 1, root: { type: 'frac', num: sym('a'), den: sym('b') } });
-    controller.placeCaret(node(['num']));
+    // 4a: seed at the in-token end (the old node caret painted the same spot)
+    controller.placeCaret({ kind: 'token', path: ['num'], index: 1 });
     container.focus();
 
     const down = press(container, 'ArrowDown');
     expect(down.defaultPrevented).toBe(true);
-    expect(j(controller.getState().caret)).toBe(j(node(['den'])));
+    // 4a re-pin (OA-vertical-default): the arrival rests at the region content
+    // END (the in-token end), never ON the content node
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: ['den'], index: 1 }));
     expect(controller.getState().log.length).toBe(0);
 
     press(container, 'ArrowUp');
-    expect(j(controller.getState().caret)).toBe(j(node(['num'])));
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: ['num'], index: 1 }));
     expect(controller.getState().log.length).toBe(0);
 
-    // a no-target move is the same-state no-op
+    // 4a: up past the top is the same-state no-op; <- from the content start
+    // N1-steps out to the fraction's before-station (S-095's mirror at the
+    // lone root — the ruling keeps the before-station and the content start
+    // distinct positions), and a further <- is N3's no-op
     const before = controller.getState();
     press(container, 'ArrowUp'); // up from the numerator: document edge
     expect(controller.getState()).toBe(before);
-    press(container, 'ArrowLeft'); // left from a root-level leaf in the num: no target
-    expect(controller.getState()).toBe(before);
+    press(container, 'ArrowLeft'); // N1: char-step to the content start
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: ['num'], index: 0 }));
+    press(container, 'ArrowLeft'); // S-095-mirror: steps out to the before-station
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'node', path: [], side: 'left' }));
+    const atBorder = controller.getState();
+    press(container, 'ArrowLeft'); // N3 at the formula start: no-op
+    expect(controller.getState()).toBe(atBorder);
     expect(controller.getState().log.length).toBe(0);
   });
 });
@@ -218,12 +230,13 @@ describe('vertical positional memory V2 (session 3 rewrite)', () => {
     container.focus();
 
     press(container, 'ArrowDown');
-    expect(j(controller.getState().caret)).toBe(j(node(['den']))); // structural first arrival (no den store yet)
+    // 4a re-pin (OA-vertical-default): the den row's content END — d's end
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: ['den', 1], index: 1 }));
     expect(controller.getVerticalMemory().size).toBe(1); // the num region stored the origin
-    press(container, 'ArrowLeft');
-    expect(j(controller.getState().caret)).toBe(j(node(['den', 1])));
-    press(container, 'ArrowLeft');
-    expect(j(controller.getState().caret)).toBe(j(node(['den', 0])));
+    press(container, 'ArrowLeft'); // N1: to d's start
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: ['den', 1], index: 0 }));
+    press(container, 'ArrowLeft'); // crosses the glyph to c's end (N1's exit rule)
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: ['den', 0], index: 1 }));
     expect(controller.getVerticalMemory().size).toBe(1); // horizontal keys never disturb any store
     press(container, 'ArrowUp'); // arriving in the num region: the stored spot wins
     expect(j(controller.getState().caret)).toBe(j(start));
@@ -240,7 +253,8 @@ describe('vertical positional memory V2 (session 3 rewrite)', () => {
     press(container, 'ArrowUp'); // → stored num spot node(['num',0])
     expect(j(controller.getState().caret)).toBe(j(node(['num', 0])));
     press(container, 'ArrowDown'); // leaves num (re-stores it), arrives den → stored den spot fires
-    expect(j(controller.getState().caret)).toBe(j(node(['den', 0])));
+    // 4a re-pin: the stored spot is c's in-token END (the position on leaving, with 4a benches)
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: ['den', 0], index: 1 }));
     expect(controller.getState().log.length).toBe(0);
   });
 
@@ -259,19 +273,21 @@ describe('vertical positional memory V2 (session 3 rewrite)', () => {
     container.focus();
 
     press(container, 'ArrowDown'); // inner num → inner den (structural first arrival); stores inner-num
-    expect(j(controller.getState().caret)).toBe(j(node(['num', 'den'])));
+    // 4a re-pin (OA-vertical-default): the inner den's content end (b's end)
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: ['num', 'den'], index: 1 }));
     press(container, 'ArrowUp'); // arrives inner-num region → its store fires
     expect(j(controller.getState().caret)).toBe(j(start));
     press(container, 'ArrowDown'); // again into the inner den
-    expect(j(controller.getState().caret)).toBe(j(node(['num', 'den'])));
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: ['num', 'den'], index: 1 }));
     press(container, 'ArrowDown'); // inner den → outer den (stores inner-den)
-    expect(j(controller.getState().caret)).toBe(j(node(['den'])));
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: ['den'], index: 1 }));
     press(container, 'ArrowUp'); // outer num region has no store yet → structural; stores outer-den
-    expect(j(controller.getState().caret)).toBe(j(node(['num'])));
+    // 4a: "rest at the end of the frac" — the bare inner frac's content end
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: ['num', 'den'], index: 1 }));
     press(container, 'ArrowDown'); // arrives outer-den region → its store fires
-    expect(j(controller.getState().caret)).toBe(j(node(['den'])));
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: ['den'], index: 1 }));
     press(container, 'ArrowUp'); // arrives outer-num region → stored on the way down → fires
-    expect(j(controller.getState().caret)).toBe(j(node(['num'])));
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: ['num', 'den'], index: 1 }));
     expect(controller.getState().log.length).toBe(0);
   });
 
@@ -289,7 +305,8 @@ describe('vertical positional memory V2 (session 3 rewrite)', () => {
     controller.placeCaret(start);
     container.focus();
     press(container, 'ArrowDown');
-    expect(j(controller.getState().caret)).toBe(j(node(['den']))); // structural arrival into the den row
+    // 4a re-pin (OA-vertical-default): the den row's content end (y's end)
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: ['den', 1], index: 1 }));
     press(container, 'ArrowUp');
     expect(j(controller.getState().caret)).toBe(j(start)); // stored in-token caret wins
     expect(controller.getState().log.length).toBe(0);
@@ -350,7 +367,8 @@ describe('vertical positional memory V2 (session 3 rewrite)', () => {
     const env = toJSON(initSession({ v: 1, root: { type: 'frac', num: sym('a'), den: sym('b') } }).root);
     const res = applyVerticalKey(env, node(['den']), 'up', new Map([[regionKey({ parentPath: [], slot: 'num' }), { kind: 'node', path: ['gone'] }]]));
     expect(res.fired).toBe(false);
-    expect(j(res.caret)).toBe(j(node(['num']))); // structural target
+    // 4a re-pin (OA-vertical-default): the num content end
+    expect(j(res.caret)).toBe(j({ kind: 'token', path: ['num'], index: 1 }));
     expect(res.mem.has(regionKey({ parentPath: [], slot: 'num' }))).toBe(false); // dangling store discarded
     // a vertical press with no target writes nothing
     const res2 = applyVerticalKey(env, node(['num']), 'up', new Map());
@@ -461,7 +479,8 @@ describe('T8 — dead-key pending for the `^` position', () => {
     press(container, 'Dead', { shift: true, code: 'Backquote' });
     press(container, '2');
     expect(j(controller.getEnvelope().root)).toBe(j({ type: 'pow', base: sym('a'), exp: num(2) }));
-    expect(controller.getState().caret).toEqual(node(['exp'])); // the fill op's landing: on the exponent content
+    // 4a re-pin (OA-token-end): the typed 2's in-token end
+    expect(controller.getState().caret).toEqual({ kind: 'token', path: ['exp'], index: 1 });
     // two ops for two keys — undo parity with a live layout's `^` then `2`;
     // undo walks the character, then the power
     expect(controller.getState().log.length).toBe(2);
@@ -587,9 +606,10 @@ describe('T8 — dead-key pending for the `^` position', () => {
     press(container, 'Dead', { shift: true, code: 'Backquote' });
     press(container, 'ArrowLeft');
     press(container, 'b');
-    // no power — the pending was discarded; ← at the row start no-ops (N3)
-    // and `b` glues behind the symbol it never wrapped
-    expect(j(controller.getEnvelope().root)).toBe(j(sym('ab')));
+    // no power — the pending was discarded. N1: ← at the in-token end steps
+    // to the symbol's start (the lone root has no beyond), and `b` glues AT
+    // offset 0 (T3) — prepending: the ordinary no-power behavior.
+    expect(j(controller.getEnvelope().root)).toBe(j(sym('ba')));
   });
 
   it('one-shot: pure caret placement (the click path) discards the pending', () => {

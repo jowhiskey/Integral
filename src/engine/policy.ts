@@ -369,11 +369,23 @@ const apply1 = (ctx: Ctx, op: Op): EditingState => applyOp(ctx.state, op);
 const place = (ctx: Ctx, node: NodeJson | null, at: Position, to: Caret): EditingState =>
   apply1(ctx, { op: 'place', node, at, to });
 
+/** OA-token-end (rework 4a): the in-token end state of a freshly typed
+ *  leaf token — typing never leaves a whole-node caret on the fresh token
+ *  (the state that painted at the element's left edge). Non-text leaves
+ *  keep the node caret. */
+function tokenEndCaret(path: Path, node: NodeJson): Caret {
+  if (isTokenNode(node)) return { kind: 'token', path, index: tokenText(node).length };
+  return { kind: 'node', path };
+}
+
 /** The caret for a freshly juxtaposed token: inside a `0.`
  *  number after its dot (S-012/S-033), inside a fresh group's content slot
  *  (T6 — typing continues between the fences), at a fresh subscript's base
- *  label (T9 — the template's first empty string), else on the pair seam
- *  directly after the inserted token. */
+ *  label (T9 — the template's first empty string), the fresh fence's pair
+ *  seam (the position right after the glyph token), else the IN-TOKEN end
+ *  of the inserted token (OA-token-end — never a whole-node caret, and
+ *  never the pair's trailing seam, which would duplicate the token end's
+ *  visual spot). */
 function pairCaret(base: Path, cell: number, newTok: NodeJson): Caret {
   if (newTok.type === 'num' && (newTok as { dot?: boolean }).dot === true) {
     return { kind: 'token', path: [...base, cell], index: 2 };
@@ -384,7 +396,10 @@ function pairCaret(base: Path, cell: number, newTok: NodeJson): Caret {
   if (newTok.type === 'sub') {
     return { kind: 'token', path: [...base, cell], index: 0, label: 'base' };
   }
-  return { kind: 'row', path: base, index: cell + 1 };
+  if (newTok.type === 'fence') {
+    return { kind: 'row', path: base, index: cell + 1 };
+  }
+  return { kind: 'token', path: [...base, cell], index: tokenText(newTok).length };
 }
 
 /** Juxtapose `newTok` against the token station's node — before, after, or
@@ -484,19 +499,19 @@ function digitKey(ctx: Ctx, station: Station, digits: string): EditingState {
   if (num === null) return ctx.state;
   switch (station.kind) {
     case 'void':
-      return apply1(ctx, { op: 'insert', node: num, at: posOf(station.ref) });
+      return place(ctx, num, posOf(station.ref), tokenEndCaret(pathOf(station.ref), num));
     case 'tok':
       return digitAtToken(ctx, station, digits, num);
     case 'after':
       return place(ctx, implicitPair(station.node, num), replacePosOf(station.ref), {
-        kind: 'row', path: pathOf(station.ref), index: 2,
+        kind: 'token', path: [...pathOf(station.ref), 1], index: digits.length,
       });
     case 'seam': {
       const seam = seamOf(ctx.env, station);
       // 0. a pending null — left of the seam (S-003's `+|a` + `1` → 1+a) or
       //    at the right edge (S-006's continuation: `−|×b` + `2` → 2×b) —
       //    takes the leaf first.
-      const filled = seamPendingFill(ctx, station, seam, num, (path) => ({ kind: 'node', path }));
+      const filled = seamPendingFill(ctx, station, seam, num, (path) => tokenEndCaret(path, num));
       if (filled !== null) return filled;
       // 1. digit-glue: join the left symbol's name (letters to its left) —
       //    or append onto a left unit label (S-104's run; the grown label
@@ -523,22 +538,24 @@ function digitKey(ctx: Ctx, station: Station, digits: string): EditingState {
           });
         }
       }
-      // 4. juxtapose onto the right cell — the number-before-X pair.
+      // 4. juxtapose onto the right cell — the number-before-X pair; the
+      //    caret is the typed number's in-token end (OA-token-end — the
+      //    pair seam right of it painted at the same spot).
       if (seam.right !== null && seam.right.node !== null) {
         return place(ctx, implicitPair(num, seam.right.node), replacePosOf(refOfPath(seam.right.path)), {
-          kind: 'row', path: seam.right.path, index: 1,
+          kind: 'token', path: [...seam.right.path, 0], index: digits.length,
         });
       }
       // 5. row end: juxtapose onto the left cell ([x, 5] + `7` → x+5·7 —
       //    with the Space flag on, the S-098 editing state).
       if (seam.left !== null && seam.left.node !== null) {
         return place(ctx, implicitPair(seam.left.node, num), replacePosOf(refOfPath(seam.left.path)), {
-          kind: 'row', path: seam.left.path, index: 2,
+          kind: 'token', path: [...seam.left.path, 1], index: digits.length,
         });
       }
       // 6. no neighbor at all (an empty row): a fresh cell.
       return place(ctx, num, { at: 'row', path: station.path, index: station.index }, {
-        kind: 'row', path: station.path, index: station.index + 1,
+        kind: 'token', path: [...station.path, station.index], index: digits.length,
       });
     }
   }
@@ -603,18 +620,18 @@ function letterKey(ctx: Ctx, station: Station, letters: string): EditingState {
   const sym = symFromText(letters);
   switch (station.kind) {
     case 'void':
-      return apply1(ctx, { op: 'insert', node: sym, at: posOf(station.ref) });
+      return place(ctx, sym, posOf(station.ref), tokenEndCaret(pathOf(station.ref), sym));
     case 'tok':
       return letterAtToken(ctx, station, letters, sym);
     case 'after':
       return place(ctx, implicitPair(station.node, sym), replacePosOf(station.ref), {
-        kind: 'row', path: pathOf(station.ref), index: 2,
+        kind: 'token', path: [...pathOf(station.ref), 1], index: letters.length,
       });
     case 'seam': {
       const seam = seamOf(ctx.env, station);
       // 0. a pending null takes the leaf (S-003's leading flow, or a right
       //    edge waiting for its first operand).
-      const filled = seamPendingFill(ctx, station, seam, sym, (path) => ({ kind: 'node', path }));
+      const filled = seamPendingFill(ctx, station, seam, sym, (path) => tokenEndCaret(path, sym));
       if (filled !== null) return filled;
       // 0.5 a head-less re-bind pair: letters SEED the future head symbol
       //     as a fresh leading cell — they never glue into the content that
@@ -654,19 +671,20 @@ function letterKey(ctx: Ctx, station: Station, letters: string): EditingState {
       }
       // 3/4. juxtapose onto the right / left cell (letters never merge with
       // numbers: S-032's juxtaposed symbol; symbol-before-X refuses at
-      // evaluation — the ruling annotation, not a typing restriction).
+      // evaluation — the ruling annotation, not a typing restriction). The
+      // caret is the fresh symbol's in-token end (OA-token-end).
       if (seam.right !== null && seam.right.node !== null) {
         return place(ctx, implicitPair(sym, seam.right.node), replacePosOf(refOfPath(seam.right.path)), {
-          kind: 'row', path: seam.right.path, index: 1,
+          kind: 'token', path: [...seam.right.path, 0], index: letters.length,
         });
       }
       if (seam.left !== null && seam.left.node !== null) {
         return place(ctx, implicitPair(seam.left.node, sym), replacePosOf(refOfPath(seam.left.path)), {
-          kind: 'row', path: seam.left.path, index: 2,
+          kind: 'token', path: [...seam.left.path, 1], index: letters.length,
         });
       }
       return place(ctx, sym, { at: 'row', path: station.path, index: station.index }, {
-        kind: 'row', path: station.path, index: station.index + 1,
+        kind: 'token', path: [...station.path, station.index], index: letters.length,
       });
     }
   }
@@ -799,6 +817,24 @@ function opKey(ctx: Ctx, station: Station, fn: OperatorFn): EditingState {
       const { node, ref, offset } = station;
       const text = stationText(station);
       const at = replacePosOf(ref);
+      // OA-mixed + OA-visual-trumps (4a): a token edge inside a GLYPH-LESS
+      // (implicit) row IS the pair's seam — the same visual spot takes the
+      // same typed-operator behavior (the glyph wraps the pair, which nests;
+      // `5x|` + `*` → multiply[implicit{5,x}, null]). The row-caret seams
+      // pre-4a reached the same tree through the seam station; typed results
+      // now end in-token (OA-token-end), so the edge re-dispatches here.
+      if (ref.at === 'cell' && (offset === 0 || offset === text.length)) {
+        const parent = nodeAt(ctx.env, ref.path) as NodeJson;
+        if (parent.type === 'op' && rowImplicit(parent)) {
+          return opKey(ctx, {
+            kind: 'seam',
+            row: parent,
+            path: ref.path,
+            index: offset === 0 ? ref.index : ref.index + 1,
+            args: rowArgs(parent),
+          }, fn);
+        }
+      }
       // A token sitting in a SAME-op parent row extends the flat chain
       // (structural rule 3): the glyph splices another pending cell in at
       // the caret's side — before the token at offset 0 (a leading glyph),
@@ -831,11 +867,13 @@ function opKey(ctx: Ctx, station: Station, fn: OperatorFn): EditingState {
           const cells = [...rowArgs(parent)];
           cells.splice(ref.index, 1, left, right);
           return place(ctx, opRow(fn, cells), replacePosOf(refOfPath(ref.path)), {
-            kind: 'row', path: ref.path, index: ref.index + 1,
+            kind: 'token', path: [...ref.path, ref.index + 1], index: 0,
           });
         }
       }
-      return place(ctx, opRow(fn, [left, right]), at, { kind: 'row', path: pathOf(ref), index: 1 });
+      return place(ctx, opRow(fn, [left, right]), at, {
+        kind: 'token', path: [...pathOf(ref), 1], index: 0,
+      });
     }
     case 'after':
       return place(ctx, opRow(fn, [station.node, null]), replacePosOf(station.ref), {
@@ -1147,7 +1185,7 @@ function structureKey(ctx: Ctx, station: Station, kind: 'divide' | 'pow'): Editi
         const to: Caret = offset === 0
           ? node.type === 'unit'
             ? { kind: 'token', path: [...structPath, rightSlot], index: 0 }
-            : { kind: 'node', path: [...structPath, rightSlot] }
+            : { kind: 'token', path: [...structPath, rightSlot], index: 0, label: 'base' }
           : { kind: 'slot', path: structPath, slot: rightSlot };
         return place(ctx, mk(offset === 0 ? null : node, offset === 0 ? node : null), replacePosOf(ref), to);
       }

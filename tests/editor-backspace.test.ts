@@ -102,7 +102,8 @@ describe('the Firefox/Windows dead-key sequence through the controller (the sess
     expect(j(controller.getEnvelope().root)).toBe(
       j({ type: 'pow', base: null, exp: { type: 'num', value: 2 } }),
     );
-    expect(j(controller.getState().caret)).toBe(j(node(['exp'])));
+    // 4a re-pin (OA-token-end): the typed 2's in-token end
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: ['exp'], index: 1 }));
     // two ops: the deferred pow creation + the character — undo parity with a
     // live layout (the ^ then the 2)
     expect(controller.getState().log.length).toBe(2);

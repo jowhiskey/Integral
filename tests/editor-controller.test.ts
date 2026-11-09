@@ -85,7 +85,8 @@ describe('EditorController: full rebuild per tree change', () => {
     }
     expect(caught).toBeInstanceOf(EngineError);
     expect((caught as EngineError).code).toBe('caret-invalid');
-    expect(controller.getState().caret).toEqual({ kind: 'node', path: [] }); // unchanged
+    // 4a re-pin (OA-token-end): the seed rests at the lone token's in-token end
+    expect(controller.getState().caret).toEqual({ kind: 'token', path: [], index: 1 }); // unchanged
   });
 
   it('end-to-end click: dispatch on a leaf places the adjacent seam caret', () => {

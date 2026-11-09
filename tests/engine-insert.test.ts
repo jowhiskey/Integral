@@ -93,8 +93,9 @@ describe('T9 — root insertion (the owner forward-grab ruling)', () => {
   it('a seam grabs the right-adjacent node whole; the caret lands at the radicand beginning (deep content dives)', () => {
     const next = insertRoot(at(add(num(1), group(add(sym('a'), sym('b')))), { kind: 'row', path: [], index: 1 }));
     expectTree(next, add(num(1), rootn(group(add(sym('a'), sym('b'))))));
-    // the beginning of a group's radicand: the dive into its content's left end
-    expect(next.caret).toEqual({ kind: 'node', path: [1, 'radicand', 'child', 0] });
+    // 4a re-pin (OA-visual-trumps): the radicand beginning is the group's
+    // content-start bench — the first cell's in-token offset 0
+    expect(next.caret).toEqual({ kind: 'token', path: [1, 'radicand', 'child', 0], index: 0 });
     expectLegal(next);
   });
 
@@ -193,8 +194,11 @@ describe('T9 — subscript insertion (v1 label mode)', () => {
     const baseEnd: Caret = { kind: 'token', path: [0], index: 2, label: 'base' };
     expect(resolveMove(env, baseEnd, 'right')).toEqual({ kind: 'token', path: [0], index: 0, label: 'sub' });
     expect(resolveMove(env, { kind: 'token', path: [0], index: 0, label: 'sub' }, 'left')).toEqual(baseEnd);
-    expect(resolveMove(env, { kind: 'token', path: [0], index: 0, label: 'base' }, 'left')).toEqual({ kind: 'row', path: [], index: 0 }); // the row border seam before the sub
-    expect(resolveMove(env, { kind: 'token', path: [0], index: 4, label: 'sub' }, 'right')).toEqual({ kind: 'node', path: [1] });
+    // 4a re-pin (N3 + OA-visual-trumps): the row's left border collapses — the
+    // sub cell's base-start IS the formula start (the origin's own state; the op
+    // clamps it to the no-op); the right exit crosses the glyph to the 9's offset 0
+    expect(resolveMove(env, { kind: 'token', path: [0], index: 0, label: 'base' }, 'left')).toEqual({ kind: 'token', path: [0], index: 0, label: 'base' });
+    expect(resolveMove(env, { kind: 'token', path: [0], index: 4, label: 'sub' }, 'right')).toEqual({ kind: 'token', path: [1], index: 0 });
   });
 
   it('the seam-left symbol converts (the row path); elsewhere the template places/fills per the T7 branches', () => {

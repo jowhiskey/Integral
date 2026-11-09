@@ -97,13 +97,14 @@ describe('click mapping: args row (a+b+c)', () => {
   it('row container click → nearest end (dive into the flow end); fraction 0.5 goes right', () => {
     const f = mk();
     click(f.el('[]'), 2); // fraction ~0.06
-    expect(f.controller.getState().caret).toEqual(node([0]));
+    // 4a re-pin (OA-visual-trumps): the flow-end benches are in-token carets
+    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: [0], index: 0 });
     click(f.el('[]'), 34);
-    expect(f.controller.getState().caret).toEqual(node([2]));
+    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: [2], index: 1 });
     click(f.el('[]'), 17.5); // fraction exactly 0.5 → right side
-    expect(f.controller.getState().caret).toEqual(node([2]));
+    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: [2], index: 1 });
     click(f.el('[]'), 17); // 17/35 < 0.5 → left side
-    expect(f.controller.getState().caret).toEqual(node([0]));
+    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: [0], index: 0 });
   });
 
   it('placement is pure state: the undo log length is unchanged by clicks', () => {
@@ -114,7 +115,8 @@ describe('click mapping: args row (a+b+c)', () => {
     click(f.el('[1]'), 17);
     click(f.el('[]'), 34); // right end — the inserted 9 is now the last cell
     expect(f.controller.getState().log.length).toBe(logLen);
-    expect(f.controller.getState().caret).toEqual(node([3]));
+    // 4a re-pin (OA-visual-trumps): the flow-end bench — the 9's in-token end
+    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: [3], index: 1 });
   });
 });
 
@@ -129,10 +131,10 @@ describe('click mapping: fraction with null num, filled den', () => {
 
   it('container left half → empty num slot caret; right half → dive into den', () => {
     const f = fixture(env, layout, caretLayout);
-    click(f.el('[]'), 2); // fraction 0.1
-    expect(f.controller.getState().caret).toEqual(numSlotCaret);
-    click(f.el('[]'), 18); // fraction 0.9
-    expect(f.controller.getState().caret).toEqual(node(['den']));
+    click(f.el('[]'), 2); // fraction 0.1 — an edge-zone click: the outside now carries a station (4a)
+    expect(f.controller.getState().caret).toEqual({ kind: 'node', path: [], side: 'left' });
+    click(f.el('[]'), 18); // fraction 0.9 — the mirrored edge zone
+    expect(f.controller.getState().caret).toEqual({ kind: 'node', path: [], side: 'right' });
   });
 
   it('placeholder click → its slot caret; leaf in a slot → node caret on the leaf (both halves)', () => {
@@ -194,9 +196,11 @@ describe('click mapping: empty row cell, empty formula, unit, group nesting', ()
     click(f.el('["value"]'), 5);
     expect(f.controller.getState().caret).toEqual(node(['value']));
     click(f.el('[]'), 25); // left half of the unit label
-    expect(f.controller.getState().caret).toEqual(node(['value']));
-    click(f.el('[]'), 29); // right half
-    expect(f.controller.getState().caret).toEqual(node(['value']));
+    // 4a re-pin (OA-visual-trumps): the unit's left entry is the value's offset 0
+    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: ['value'], index: 0 });
+    click(f.el('[]'), 29); // right half — the unit's right side is its LABEL (S-104):
+    // 4a re-pin (OA-token-end): the label's in-token END is the unit's right end
+    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: [], index: 2 });
   });
 
   it('deepest uid wins: clicking a child inside a group hits the child, not the group', () => {
@@ -231,8 +235,9 @@ describe('caretFromHit + hitFromMouseEvent: the pure resolver and the event adap
     // session 4: the start/end of the formula are stations); the middle
     // zones keep the enter-from-side dive
     expect(caretFromHit(env, { kind: 'none', fraction: 0.04 })).toEqual(row(0));
-    expect(caretFromHit(env, { kind: 'none', fraction: 0.4 })).toEqual(node([0]));
-    expect(caretFromHit(env, { kind: 'none', fraction: 0.6 })).toEqual(node([1]));
+    // 4a re-pin (OA-visual-trumps): the enter-from-side dives are in-token benches
+    expect(caretFromHit(env, { kind: 'none', fraction: 0.4 })).toEqual({ kind: 'token', path: [0], index: 0 });
+    expect(caretFromHit(env, { kind: 'none', fraction: 0.6 })).toEqual({ kind: 'token', path: [1], index: 1 });
     expect(caretFromHit(env, { kind: 'none', fraction: 0.96 })).toEqual(row(2));
 
     expect(caretFromHit({ v: 1, root: num(7) }, { kind: 'node', path: [], fraction: 0.2 })).toEqual(node([]));

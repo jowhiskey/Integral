@@ -64,7 +64,9 @@ describe('applyVerticalKey V2: write on leave, read on arrival, nothing cleared'
     // Down from a deep leaf in the num: stores the deep caret under the num region
     let res = applyVerticalKey(env, node(['num', 0]), 'down', mem);
     expect(res.fired).toBe(false);
-    expect(j(res.caret)).toBe(j(node(['den']))); // structural first arrival
+    // 4a re-pin (OA-vertical-default): the structural arrival rests at the
+    // region content END — the den row's last cell's in-token end
+    expect(j(res.caret)).toBe(j(token(['den', 1], 1)));
     expect(j(res.mem.get(NUM_KEY))).toBe(j(node(['num', 0])));
     // Up from a den row cell (after horizontal exploration there): the den region stores the spot on the way out, the num store fires on arrival
     res = applyVerticalKey(env, node(['den', 1]), 'up', res.mem);
@@ -100,7 +102,8 @@ describe('applyVerticalKey V2: write on leave, read on arrival, nothing cleared'
     const deepEnv = envOf({ type: 'frac', num: { type: 'op', op: 'multiply', args: [num(7), sym('x')] }, den: num(3) });
     const start = node(['num', 0]);
     let res = applyVerticalKey(deepEnv, start, 'down', new Map());
-    expect(j(res.caret)).toBe(j(node(['den'])));
+    // 4a re-pin (OA-vertical-default): the den content end
+    expect(j(res.caret)).toBe(j(token(['den'], 1)));
     res = applyVerticalKey(deepEnv, node(['den']), 'up', res.mem);
     expect(res.fired).toBe(true);
     expect(j(res.caret)).toBe(j(start)); // the deep origin, not the structural node(['num'])
@@ -116,7 +119,8 @@ describe('applyVerticalKey V2: write on leave, read on arrival, nothing cleared'
     const dangling: VerticalMemory = new Map([[NUM_KEY, { kind: 'node', path: ['gone'] }]]);
     const res2 = applyVerticalKey(env, node(['den']), 'up', dangling);
     expect(res2.fired).toBe(false);
-    expect(j(res2.caret)).toBe(j(node(['num']))); // structural default
+    // 4a re-pin (OA-vertical-default): the num content end (never ON the row)
+    expect(j(res2.caret)).toBe(j(token(['num', 1], 1)));
     expect(res2.mem.has(NUM_KEY)).toBe(false); // discarded
     // ...while a resolving store wins over the structural default
     const live: VerticalMemory = new Map([[NUM_KEY, node(['num', 1])]]);

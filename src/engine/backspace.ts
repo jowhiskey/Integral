@@ -789,6 +789,25 @@ function tokenStation(env: Envelope, caret: Extract<Caret, { kind: 'token' }>, c
 function nodeStation(env: Envelope, caret: Extract<Caret, { kind: 'node' }>, ctx: BsCtx): BackspaceDecision {
   const node = nodeAt(env, caret.path) as NodeJson;
   const to: Caret = { kind: 'node', path: caret.path };
+  if (caret.side !== undefined) {
+    // The lone-root whole-structure border stations (4a, owner-ruled
+    // 2026-11-09): BS from the AFTER-station fires D5 for a fenceless 2D
+    // structure (highlight, then delete WITH content — S-109/D5 at root);
+    // the before-station has nothing left of it (D4), and a fenced
+    // container's outside mirrors are the session-3 named no-ops.
+    if (caret.side === 'left') return noopDecision(caret);
+    switch (node.type) {
+      case 'frac':
+      case 'pow':
+      case 'root':
+        return d5Gate(env, caret.path, caret, ctx);
+      case 'op':
+        if ((node as { op: string }).op === 'pow') return d5Gate(env, caret.path, caret, ctx); // op-pow renders as a 2D power
+        return noopDecision(caret);
+      default:
+        return noopDecision(caret); // group/fn outside: unruled (named default)
+    }
+  }
   switch (node.type) {
     case 'num':
     case 'sym':

@@ -121,7 +121,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '5 (freshly typed single digit)',
     stress: 'Single number leaf at root — type `7`, Backspace, Left/Right.',
     envelope: env(num(5)),
-    caret: nd([]),
+    caret: tk([], 1), // 4a reseed (OA-token-end): the in-token end
   },
 
   // ——— N: node types alone + stressed variants ———
@@ -141,7 +141,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'x (symbol alone)',
     stress: 'Symbol leaf at root — type `a`, click the glyph, Backspace.',
     envelope: env(sym('x')),
-    caret: nd([]),
+    caret: tk([], 1), // 4a reseed (OA-token-end)
   },
   {
     id: 'N-03',
@@ -186,7 +186,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '(a + b) (group alone)',
     stress: 'Group with a flat row child, caret on the group — type `)`, Left/Right, click the right edge zone of the group.',
     envelope: env(group(op('add', sym('a'), sym('b')))),
-    caret: nd([]),
+    caret: { kind: 'node', path: [], side: 'right' }, // 4a reseed: the whole-structure after-station
   },
   {
     id: 'N-08',
@@ -195,7 +195,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'a/b (fraction alone)',
     stress: 'Fraction, caret in the numerator — Down, Up, Left/Right, click the mfrac halves.',
     envelope: env(frac(sym('a'), sym('b'))),
-    caret: nd(['num']),
+    caret: tk(['num'], 1), // 4a reseed (OA-token-end)
   },
   {
     id: 'N-09',
@@ -204,7 +204,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'x² (power alone)',
     stress: 'Power, caret in the base — Right, Left, Up, Down.',
     envelope: env(pow(sym('x'), num(2))),
-    caret: nd(['base']),
+    caret: tk(['base'], 1), // 4a reseed (OA-token-end)
   },
   {
     id: 'N-10',
@@ -213,7 +213,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '√x (square root alone)',
     stress: 'Square root (no index in the tree), caret in the radicand — Up, Right, Backspace.',
     envelope: env(root(sym('x'))),
-    caret: nd(['radicand']),
+    caret: tk(['radicand'], 1), // 4a reseed (OA-token-end)
   },
   {
     id: 'N-11',
@@ -222,7 +222,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '³√x (indexed root)',
     stress: 'Root with an index, caret in the index — Down, Up, Left/Right, click the index.',
     envelope: env(root(sym('x'), num(3))),
-    caret: nd(['index']),
+    caret: tk(['index'], 1), // 4a reseed (OA-token-end)
   },
   {
     id: 'N-12',
@@ -231,7 +231,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'x_max (subscript alone)',
     stress: 'Subscript leaf at root — arrows, Backspace, click the msub.',
     envelope: env(sub('x', 'max')),
-    caret: nd([]),
+    caret: { kind: 'token', path: [], index: 3, label: 'sub' }, // 4a reseed: the script label's end
   },
   {
     id: 'N-13',
@@ -240,7 +240,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '50 mm (unit alone)',
     stress: 'Unit, caret in the value — click the upright mm symbol, Right, Backspace on the value.',
     envelope: env(unit(num(50), 'mm')),
-    caret: nd(['value']),
+    caret: tk(['value'], 2), // 4a reseed (OA-token-end)
   },
   {
     id: 'N-14',
@@ -249,7 +249,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '(a/b) m (unit on a complex operand)',
     stress: 'Unit wrapping a fraction, caret in the value’s numerator — Down, click the upright unit symbol.',
     envelope: env(unit(frac(sym('a'), sym('b')), 'm')),
-    caret: nd(['value', 'num']),
+    caret: tk(['value', 'num'], 1), // 4a reseed
   },
   {
     id: 'N-15',
@@ -269,7 +269,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '(a/b)/c (fraction inside fraction)',
     stress: 'Two stacked fraction levels, caret on the inner fraction — Down ×2, Up ×2, click the inner mfrac edge zone.',
     envelope: env(frac(frac(sym('a'), sym('b')), sym('c'))),
-    caret: nd(['num']),
+    caret: tk(['num', 'num'], 1), // 4a reseed: the inner fraction's num content end
   },
   {
     id: 'X-02',
@@ -287,7 +287,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'sin(x)² (function inside a power)',
     stress: 'Function row as a power base, caret on the base — Right, Up, Left into the fn args.',
     envelope: env(pow(fn('sin', sym('x')), num(2))),
-    caret: nd(['base']),
+    caret: tk(['base', 0], 1), // 4a reseed: the fn argument's content end
   },
   {
     id: 'X-04',
@@ -296,7 +296,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'x^(2^3) (power inside power)',
     stress: 'Nested power in the exponent, caret on the inner power — Down, click the exp msup.',
     envelope: env(pow(sym('x'), pow(num(2), num(3)))),
-    caret: nd(['exp']),
+    caret: tk(['exp', 'exp'], 1), // 4a reseed: the inner power's exponent content end
   },
 
   // ——— C: caret-reachability classes ———
@@ -352,7 +352,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'a + (bare empty cell), caret on the row container itself',
     stress: 'Self-on-container caret on a row with a pending cell — type `+`, Left/Right.',
     envelope: env(op('add', sym('a'), null)),
-    caret: nd([]),
+    caret: rw([], 1), // 4a reseed: the pending cell — the row's natural continue
   },
 
   // ——— T: typing from empty (instruction cases; seed = empty formula) ———
@@ -552,7 +552,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'a + b, caret on b (last operand)',
     stress: 'Held last operand — type `(`, then `)`.',
     envelope: env(op('add', sym('a'), sym('b'))),
-    caret: nd([1]),
+    caret: tk([1], 1), // 4a reseed (OA-token-end)
   },
   {
     id: 'I-06',
@@ -561,7 +561,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'a/b, caret on the numerator',
     stress: 'Left side of a fraction (numerator slot) — type `/`.',
     envelope: env(frac(sym('a'), sym('b'))),
-    caret: nd(['num']),
+    caret: tk(['num'], 1), // 4a reseed (OA-token-end)
   },
 
   {
@@ -634,7 +634,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'the symbol ab, caret after it',
     stress: 'Space at a token edge, then type `c` (the boundary separates same-type input; no visible mark).',
     envelope: env(sym('ab')),
-    caret: nd([]),
+    caret: tk([], 2), // 4a reseed: the symbol's in-token end
   },
   {
     id: 'I-15',
@@ -652,7 +652,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'the group (a+b), caret on it',
     stress: 'A caret directly after a complete group — press `/`: the grab reads the whole group as one node.',
     envelope: env(group(op('add', sym('a'), sym('b')))),
-    caret: nd([]),
+    caret: { kind: 'node', path: [], side: 'right' }, // 4a reseed: the after-group station
   },
   {
     id: 'I-17',
@@ -697,7 +697,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'subscript insertion at a symbol (T9 vocabulary)',
     stress: 'Click the x₍₎ button: the symbol converts into the base; then type a script label on the keyboard, Left/Right across the base and script labels, type a digit in each (the label caret); Backspace on the node is deletion-batch territory (session 3).',
     envelope: env(sym('x')),
-    caret: nd([]),
+    caret: tk([], 1), // 4a reseed (OA-token-end)
   },
 
   // ——— S: operator token at mid-row positions ———
@@ -744,7 +744,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'a + b + c, caret on b (mid-row operand)',
     stress: 'Node caret on a mid-row operand — type `-` while standing on b.',
     envelope: env(op('add', sym('a'), sym('b'), sym('c'))),
-    caret: nd([1]),
+    caret: tk([1], 1), // 4a reseed
   },
   {
     id: 'S-06',
@@ -762,7 +762,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'a×b, caret on a (first operand, structure token)',
     stress: 'Node caret on the first operand — type `^` while standing on a.',
     envelope: env(op('multiply', sym('a'), sym('b'))),
-    caret: nd([0]),
+    caret: tk([0], 1), // 4a reseed
   },
 
   // ——— B: backspace ———
@@ -773,7 +773,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '123 alone, caret on the number',
     stress: 'Number at root — Backspace ×3.',
     envelope: env(num(123)),
-    caret: nd([]),
+    caret: tk([], 3), // 4a reseed (OA-token-end)
   },
   {
     id: 'B-02',
@@ -827,7 +827,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'x², caret on the base',
     stress: 'Slot content node — Ctrl+Backspace, then Backspace at the base slot.',
     envelope: env(pow(sym('x'), num(2))),
-    caret: nd(['base']),
+    caret: tk(['base'], 1), // 4a reseed
   },
 
   // ——— backspace / forward delete under the ruled contract (rework session 3) ———
@@ -955,7 +955,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'sin(a+b), caret after the whole function',
     stress: 'Backspace (the closing paren goes), keep pressing through the letter-wise chain to the □ and the whole-function death.',
     envelope: env(fn('sin', op('add', sym('a'), sym('b')))),
-    caret: nd([]),
+    caret: { kind: 'node', path: [], side: 'right' }, // 4a reseed: the after-fn station
   },
   {
     id: 'B-22',
@@ -982,7 +982,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '(a+b), caret after the group',
     stress: 'Backspace (the close paren), then the letter-wise rundown to the open fence and the whole-group death.',
     envelope: env(group(op('add', sym('a'), sym('b')))),
-    caret: nd([]),
+    caret: { kind: 'node', path: [], side: 'right' }, // 4a reseed: the after-group station
   },
   {
     id: 'B-25',
@@ -1037,7 +1037,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '√a, caret directly behind the radicand content (position 1)',
     stress: 'Backspace deletes a (the □ appears), Backspace again deletes the ENTIRE root structure.',
     envelope: env(root(sym('a'))),
-    caret: nd(['radicand']),
+    caret: tk(['radicand'], 1), // 4a reseed
   },
   {
     id: 'B-31',
@@ -1066,7 +1066,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'a + b×c + d, caret on a',
     stress: 'Horizontal walk across a row containing a nested row — Right ×4, then Left ×4.',
     envelope: env(op('add', sym('a'), op('multiply', sym('b'), sym('c')), sym('d'))),
-    caret: nd([0]),
+    caret: tk([0], 1), // 4a reseed (OA-token-end)
   },
   {
     id: 'M-02',
@@ -1075,7 +1075,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '(x+y)/(c+d), caret on x',
     stress: 'Vertical move between fraction slots with horizontal moves in between — Down, Left, Left, Up.',
     envelope: env(frac(op('add', sym('x'), sym('y')), op('add', sym('c'), sym('d')))),
-    caret: nd(['num', 0]),
+    caret: tk(['num', 0], 1), // 4a reseed
   },
   {
     id: 'M-03',
@@ -1093,7 +1093,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '(x+y)², caret after y in the base row',
     stress: 'Power with a row base — Right, Left, Up, Down around the base/exp edge.',
     envelope: env(pow(op('add', sym('x'), sym('y')), num(2))),
-    caret: nd(['base', 1]),
+    caret: tk(['base', 1], 1), // 4a reseed
   },
   {
     id: 'M-05',
@@ -1102,7 +1102,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '³√(a+b), caret after b in the radicand row',
     stress: 'Indexed root — Up, Down between the radicand and index regions.',
     envelope: env(root(op('add', sym('a'), sym('b')), num(3))),
-    caret: nd(['radicand', 1]),
+    caret: tk(['radicand', 1], 1), // 4a reseed
   },
   {
     id: 'M-06',
@@ -1111,7 +1111,79 @@ export const CASES: readonly CatalogCase[] = [
     label: '(x²)/y, caret on the exponent',
     stress: 'Vertical move out of a power nested in a fraction numerator — Down, Down.',
     envelope: env(frac(pow(sym('x'), num(2)), sym('y'))),
-    caret: nd(['num', 'exp']),
+    caret: tk(['num', 'exp'], 1), // 4a reseed
+  },
+  {
+    id: 'M-07',
+    rules: ['N4', 'N3', 'D5', 'S-109', 'OA-visual-trumps'],
+    category: 'M',
+    label: '1/2 (fraction alone), caret after the 2',
+    stress: 'Lone fraction at the root — Right (the outside), Right again, Left (the re-entry), Backspace, Backspace.',
+    envelope: env(frac(num(1), num(2))),
+    caret: tk(['den'], 1),
+  },
+  {
+    id: 'M-08',
+    rules: ['S-095', 'N3', 'OA-visual-trumps'],
+    category: 'M',
+    label: '1/2 (fraction alone), caret before the 2',
+    stress: 'The denominator start — Left (the outside before the fraction), Left again, Right (the re-entry).',
+    envelope: env(frac(num(1), num(2))),
+    caret: tk(['den'], 0),
+  },
+  {
+    id: 'M-09',
+    rules: ['D5', 'S-109', 'OA-visual-trumps', 'N4'],
+    category: 'M',
+    label: 'x + 1/2, end of row (right after the fraction)',
+    stress: 'Backspace at the station right after the fraction, then the structure death; Right, Left.',
+    envelope: env(op('add', sym('x'), frac(num(1), num(2)))),
+    caret: rw([], 2),
+  },
+  {
+    id: 'M-10',
+    rules: ['S-094', 'N5', 'OA-visual-trumps', 'N1'],
+    category: 'M',
+    label: 'x + 1/2 + y, caret before the y',
+    stress: "Left from the y start (the fraction's right interface), Left/Right around the fraction.",
+    envelope: env(op('add', sym('x'), frac(num(1), num(2)), sym('y'))),
+    caret: tk([2], 0),
+  },
+  {
+    id: 'M-11',
+    rules: ['S-042', 'N5', 'N2', 'OA-visual-trumps'],
+    category: 'M',
+    label: 'x + 1/2 + y, caret after the x',
+    stress: 'Right into the fraction, Left back out, Right again — the glyph crossings.',
+    envelope: env(op('add', sym('x'), frac(num(1), num(2)), sym('y'))),
+    caret: tk([0], 1),
+  },
+  {
+    id: 'M-12',
+    rules: ['N6', 'S-040', 'OA-vertical-default', 'OA-visual-trumps'],
+    category: 'M',
+    label: "1/(a+b), caret after the denominator group's b",
+    stress: 'Vertical arrival into a slot holding a fenced group — Up from below the fraction, Down, Left/Right within.',
+    envelope: env(frac(num(1), group(op('add', sym('a'), sym('b'))))),
+    caret: tk(['den', 'child', 1], 1),
+  },
+  {
+    id: 'M-13',
+    rules: ['N6', 'S-040', 'OA-vertical-default'],
+    category: 'M',
+    label: 'q over (a + 1/2), caret after the q',
+    stress: 'Vertical arrival into a denominator whose row ends in a fraction — Down, Left/Right at the seam after it.',
+    envelope: env(frac(sym('q'), op('add', sym('a'), frac(num(1), num(2))))),
+    caret: tk(['num'], 1),
+  },
+  {
+    id: 'M-14',
+    rules: ['N1', 'N2', 'OA-token-end', 'OA-visual-trumps'],
+    category: 'M',
+    label: 'a full walk: abc + de, caret before the a',
+    stress: 'Hold Right to the formula end, then hold Left back — watch each visible position exactly once.',
+    envelope: env(op('add', sym('abc'), sym('de'))),
+    caret: tk([0], 0),
   },
 
   // ——— K: click placement (seed + precise click target in `stress`) ———
@@ -1122,7 +1194,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'a + b — background clicks',
     stress: 'Click the math background at fractions 0.04 / 0.4 / 0.6 / 0.96 of the math extent.',
     envelope: env(op('add', sym('a'), sym('b'))),
-    caret: nd([]),
+    caret: tk([1], 1), // 4a reseed: a reachable collapsed row end
   },
   {
     id: 'K-02',
@@ -1131,7 +1203,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '(a+b) + c — group container clicks',
     stress: 'Click the group mrow at fractions 0.9 / 0.1 / 0.5 of its extent.',
     envelope: env(op('add', group(op('add', sym('a'), sym('b'))), sym('c'))),
-    caret: nd([0]),
+    caret: rw([], 1), // 4a reseed: the seam right after the group
   },
   {
     id: 'K-03',
@@ -1140,7 +1212,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '1234 + b — number glyph click',
     stress: 'Click the number glyph (mn) at fraction 0.3 of its extent.',
     envelope: env(op('add', num(1234), sym('b'))),
-    caret: nd([0]),
+    caret: tk([0], 4), // 4a reseed (OA-token-end)
   },
   {
     id: 'K-04',
@@ -1167,7 +1239,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '50 mm + x — unit symbol click',
     stress: 'Click the upright mm symbol mi at middle fractions of its extent.',
     envelope: env(op('add', unit(num(50), 'mm'), sym('x'))),
-    caret: nd([0, 'value']),
+    caret: tk([0, 'value'], 2), // 4a reseed
   },
 
   // ——— U: undo/redo walk-backs ———
@@ -1261,7 +1333,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'V/R — Ohm’s law, caret in the denominator',
     stress: 'Type `2` in the den; arrows to V; Ctrl+Backspace; Backspace at the num slot.',
     envelope: env(frac(sym('V'), sym('R'))),
-    caret: nd(['den']),
+    caret: tk(['den'], 1), // 4a reseed
   },
   {
     id: 'R-07',
@@ -1291,7 +1363,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'a + b at root, caret on b',
     stress: 'Probe: Right out of the root row’s last cell.',
     envelope: env(op('add', sym('a'), sym('b'))),
-    caret: nd([1]),
+    caret: tk([1], 1), // 4a reseed
   },
   {
     id: 'P-03',
@@ -1300,7 +1372,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '(a+b)², caret after b in the base row',
     stress: 'Probe: Right out of the base row’s last cell (the row is nested in a power).',
     envelope: env(pow(op('add', sym('a'), sym('b')), num(2))),
-    caret: nd(['base', 1]),
+    caret: tk(['base', 1], 1), // 4a reseed
   },
   {
     id: 'P-04',
@@ -1309,7 +1381,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '(a+b) + c — group edge-zone clicks',
     stress: 'Probe: click the group mrow at fractions 0.74 / 0.76 / 0.9 of its extent (edge-zone boundary).',
     envelope: env(op('add', group(op('add', sym('a'), sym('b'))), sym('c'))),
-    caret: nd([0]),
+    caret: rw([], 1), // 4a reseed: the seam right after the group
   },
   {
     id: 'P-05',
@@ -1318,7 +1390,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '1234 + 56/78 — row-cell number vs slot number clicks',
     stress: 'Probe: click the row-cell 1234 vs the numerator 56.',
     envelope: env(op('add', num(1234), frac(num(56), num(78)))),
-    caret: nd([0]),
+    caret: tk([0], 4), // 4a reseed (OA-token-end)
   },
   {
     id: 'P-06',
@@ -1327,7 +1399,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '□/□, caret on the fraction itself',
     stress: 'Probe: self-on-container caret on a fraction with both slots empty — Down, Up, Left, Right.',
     envelope: env(frac(null, null)),
-    caret: nd([]),
+    caret: { kind: 'node', path: [], side: 'right' }, // 4a reseed: the after-station of the empty fraction
   },
   {
     id: 'P-07',
@@ -1345,7 +1417,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '(a+b)/(c+d) — stacked-layout click',
     stress: 'Probe: click the outer mfrac’s left half at denominator height.',
     envelope: env(frac(op('add', sym('a'), sym('b')), op('add', sym('c'), sym('d')))),
-    caret: nd(['num', 0]),
+    caret: tk(['num', 0], 1), // 4a reseed
   },
 
   // ——— V: contract rendering states (rework session 1) ———
@@ -1410,7 +1482,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '5(a+b) (implicit multiply of a group — evaluates per contract)',
     stress: 'Number before group, glyph-less — same probing shape as 5x one level up.',
     envelope: env(jmp(num(5), group(op('add', sym('a'), sym('b'))))),
-    caret: nd([1]),
+    caret: tk([1, 'child', 1], 1), // 4a reseed: the group's interior content end
   },
   {
     id: 'V-08',
@@ -1437,7 +1509,7 @@ export const CASES: readonly CatalogCase[] = [
     label: '(a+b (group missing its close fence — unbalanced, storable, refused)',
     stress: 'The movable-paren deletion state: open fence stands, no closing glyph — probe rendering, evaluation refusal annotation.',
     envelope: env(group(op('add', sym('a'), sym('b')), false)),
-    caret: nd([]),
+    caret: { kind: 'node', path: [], side: 'right' }, // 4a reseed: the after-station of the fenceless group
   },
   {
     id: 'V-11',
@@ -1446,7 +1518,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'sin(x (function missing its close fence)',
     stress: 'The atomic head + open fence stand alone — probe rendering, arrow out at the end, refusal annotation.',
     envelope: env({ type: 'fn', name: 'sin', args: [sym('x')], close: false }),
-    caret: nd([0]),
+    caret: tk([0], 1), // 4a reseed: the argument's content end
   },
   {
     id: 'V-12',
@@ -1559,7 +1631,7 @@ export const CASES: readonly CatalogCase[] = [
     label: 'the attached unit `50 mm` (render state)',
     stress: 'The converted attached unit: upright label with the tight value spacing (the standing render conventions); the value stays a separately navigable node.',
     envelope: env(unit(num(50), 'mm')),
-    caret: nd([]),
+    caret: tk([], 2), // 4a reseed: the label's in-token end
   },
   {
     id: 'V-24',

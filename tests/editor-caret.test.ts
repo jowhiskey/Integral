@@ -134,11 +134,12 @@ describe('updateCaretOverlay: the overlay div is positioned relative to the cont
     });
     const caretDiv = container.querySelector('.integral-caret') as HTMLElement;
 
-    // initial caret: node [] → anchor (105,55,20) → container-relative (5,5,20)
+    // 4a re-pin (OA-visual-trumps): the seed of an incomplete tree pends in
+    // its first empty station — the den slot; its anchor is the placeholder
     controller.updateCaret();
-    expect(caretDiv.style.left).toBe('5px');
-    expect(caretDiv.style.top).toBe('5px');
-    expect(caretDiv.style.height).toBe('20px');
+    expect(caretDiv.style.left).toBe('10px');
+    expect(caretDiv.style.top).toBe('20px');
+    expect(caretDiv.style.height).toBe('8px');
     expect(caretDiv.style.display).toBe('block');
 
     controller.placeCaret({ kind: 'node', path: ['num'] });

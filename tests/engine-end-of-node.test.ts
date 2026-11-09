@@ -67,7 +67,8 @@ describe('digit typing merges at the number’s own end station (node caret on a
     s = typeToken(s, d('1'));
     s = typeToken(s, d('2'));
     expect(j(envelopeOf(s).root)).toBe(j(num(12)));
-    expect(s.caret).toEqual(node([])); // the station survives the merge: repeated digits keep landing
+    // 4a re-pin (OA-token-end): the in-token end survives the merge
+    expect(s.caret).toEqual({ kind: 'token', path: [], index: 2 });
     expect(s.log.length).toBe(2);
     const u = undo(s);
     expect(j(envelopeOf(u).root)).toBe(j(num(1)));
@@ -80,10 +81,11 @@ describe('digit typing merges at the number’s own end station (node caret on a
   it('typing fills a slot and then merges into the number there (a numerator takes multi-digit input)', () => {
     let s = seed({ type: 'frac', num: null, den: num(3) });
     s = typeToken(s, d('1')); // operand: fill
-    expect(s.caret).toEqual(node(['num']));
+    // 4a re-pin (OA-token-end): the typed digit's in-token end
+    expect(s.caret).toEqual({ kind: 'token', path: ['num'], index: 1 });
     s = typeToken(s, d('2')); // merge at the number's end
     expect(j(envelopeOf(s).root)).toBe(j({ type: 'frac', num: num(12), den: num(3) }));
-    expect(s.caret).toEqual(node(['num']));
+    expect(s.caret).toEqual({ kind: 'token', path: ['num'], index: 2 });
     expect(s.log.length).toBe(2);
     legalEndState(s);
   });
@@ -105,14 +107,16 @@ describe('digit typing merges at the number’s own end station (node caret on a
     expect(j(envelopeOf(s).root)).toBe(
       j({ type: 'op', op: 'add', args: [num(12), num(34)] }),
     );
-    expect(s.caret).toEqual(node([1]));
+    // 4a re-pin (OA-token-end): the typed run's in-token end
+    expect(s.caret).toEqual({ kind: 'token', path: [1], index: 2 });
     expect(s.log.length).toBe(5);
     legalEndState(s);
 
     let f = initSession();
     for (const t of [d('1'), d('2'), divide, d('3')]) f = typeToken(f, t);
     expect(j(envelopeOf(f).root)).toBe(j({ type: 'frac', num: num(12), den: num(3) }));
-    expect(j(f.caret)).toBe(j(node(['den'])));
+    // 4a re-pin (OA-token-end): the typed 3's in-token end
+    expect(j(f.caret)).toBe(j({ kind: 'token', path: ['den'], index: 1 }));
     expect(f.log.length).toBe(4);
     legalEndState(f);
   });
@@ -153,9 +157,11 @@ describe('the row-end seam is a reachable station (dead-end overflow rests there
     expect(resolveMove(env, rowc([], 0), 'left')).toBe(null);
   });
 
-  it('design limit pinned: non-row roots still have no station beyond (null, unchanged)', () => {
+  it('non-row roots: the ratified whole-structure border stations (4a, owner ruling 2026-11-09)', () => {
+    // a lone token's in-token end IS its end (no side station)
     expect(resolveMove(envelopeOf(seed(num(50))), node([]), 'right')).toBe(null);
-    expect(resolveMove(envelopeOf(seed({ type: 'frac', num: sym('a'), den: sym('b') })), node(['den']), 'right')).toBe(null);
+    // the lone frac's after-station now exists ("add the two positions")
+    expect(resolveMove(envelopeOf(seed({ type: 'frac', num: sym('a'), den: sym('b') })), node(['den']), 'right')).toEqual({ kind: 'node', path: [], side: 'right' });
   });
 });
 
@@ -167,7 +173,8 @@ describe('typing at the row-end seam (route to the last operand’s hold / trail
     expect(s.caret).toEqual(rowc([], 1)); // the freed spot: the caret sits in the pending cell
     s = typeToken(s, letter('z')); // the dangling + operand fills — no retype needed
     expect(j(envelopeOf(s).root)).toBe(j({ type: 'op', op: 'add', args: [sym('x'), sym('z')] }));
-    expect(s.caret).toEqual(node([1]));
+    // 4a re-pin (OA-token-end): the typed z's in-token end
+    expect(s.caret).toEqual({ kind: 'token', path: [1], index: 1 });
     expect(s.log.length).toBe(3); // the moveCaret seed + delete + fill
     legalEndState(s);
   });
@@ -194,7 +201,8 @@ describe('typing at the row-end seam (route to the last operand’s hold / trail
     expect(j(envelopeOf(s).root)).toBe(
       j({ type: 'op', op: 'add', args: [sym('x'), { type: 'frac', num: num(50), den: num(3) }] }),
     );
-    expect(j(s.caret)).toBe(j(node([1, 'den'])));
+    // 4a re-pin (OA-token-end): the typed 5's in-token end
+    expect(j(s.caret)).toBe(j({ kind: 'token', path: [1, 'den'], index: 1 }));
     s = typeToken(s, d('0')); // …the next digit merges into the denominator
     expect(j(envelopeOf(s).root)).toBe(
       j({ type: 'op', op: 'add', args: [sym('x'), { type: 'frac', num: num(50), den: num(30) }] }),

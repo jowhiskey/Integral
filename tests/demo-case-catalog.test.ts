@@ -49,7 +49,11 @@ describe('demo case catalog — structure and hygiene', () => {
     // session 2b-2 adds the two live-ruling labels of its stop-and-ask:
     // OA-root-grab (the T9 forward-grab root insertion reading) and
     // OA-sub-label (the sub label token carets).
-    const RULE_PATTERN = /^(T\d\d?|N\d|C\d|D\d|U\d|K\d|S-\d{3}|OA-(digit-glue|juxtaposition|projection|fence|dot-eval|mixed|root-grab|sub-label))$/;
+    // rework 4a adds the three scoping rulings: OA-visual-trumps (the caret
+    // geography follows the rendered structure), OA-token-end (typed tokens
+    // rest in-token), OA-vertical-default (vertical arrival rests at the
+    // region content end).
+    const RULE_PATTERN = /^(T\d\d?|N\d|C\d|D\d|U\d|K\d|S-\d{3}|OA-(digit-glue|juxtaposition|projection|fence|dot-eval|mixed|root-grab|sub-label|visual-trumps|token-end|vertical-default))$/;
     for (const c of CASES) {
       expect(c.rules.length > 0, `${c.id} carries at least one rule ref`).toBe(true);
       for (const rule of c.rules) {

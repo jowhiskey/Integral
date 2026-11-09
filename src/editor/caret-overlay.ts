@@ -7,7 +7,9 @@
 // Anchor per caret kind (all coordinates in the same space as the rects, i.e.
 // page/client coordinates; updateCaretOverlay re-bases them onto the container):
 // - empty          → left edge of the <math> element (the empty formula's caret).
-// - node           → left edge of the node's rendered extent (first..last fragment).
+// - node           → left edge of the node's rendered extent (first..last fragment);
+//                    a `side: 'right'` border station (4a) anchors at the extent's
+//                    RIGHT edge (the whole-structure after-station).
 // - slot           → left edge of the <mi>□</mi> placeholder element.
 // - row, index < n → left edge of cell index's extent; a placeholder cell at its
 //                    □; a BARE op-row cell at the flanking separator glyph's edge
@@ -19,8 +21,9 @@
 // - token, index  → the character boundary inside the token's rect (left
 //                    edge + index/len of the width): a sub label (T9) within
 //                    its own label element, a unit label (S-104) within the
-//                    unit's own element — the upright label mi; a number over
-//                    its own extent.
+//                    unit's own element — the upright label mi; numbers and
+//                    symbols interpolate over their own extent (rework 4a —
+//                    typed syms rest in-token, OA-token-end).
 
 import type { Envelope } from '../ast/json.js';
 
@@ -69,7 +72,11 @@ export function caretAnchor(env: Envelope, caret: Caret, rendered: RenderedMath)
     }
     case 'node': {
       const r = extentRect(rendered, caret.path);
-      return r === null ? null : { x: r.left, y: r.top, height: r.height };
+      if (r === null) return null;
+      // The 4a border stations: side 'right' is the whole-structure
+      // after-station (the extent's right edge — the spot D5 fires from).
+      if (caret.side === 'right') return { x: r.right, y: r.top, height: r.height };
+      return { x: r.left, y: r.top, height: r.height };
     }
     case 'slot': {
       const ph = rendered.placeholderByCaret.get(caretKey(caret));
@@ -142,12 +149,14 @@ export function caretAnchor(env: Envelope, caret: Caret, rendered: RenderedMath)
         if (el === undefined) return null;
         rect = rectOf(el);
         len = node.unit.length;
-      } else if (node.type === 'num') {
+      } else if (node.type === 'num' || node.type === 'sym') {
         if (caret.label !== undefined) return null;
+        // Rework 4a: symbols interpolate over their own extent like numbers
+        // (typed syms rest in-token per OA-token-end).
         rect = extentRect(rendered, caret.path);
         len = tokenText(node).length;
       } else {
-        return null; // sym token carets: the parked glyph-metrics refinement (4a theme)
+        return null;
       }
       if (rect === null) return null;
       if (!Number.isInteger(caret.index) || caret.index < 0 || caret.index > len) return null;

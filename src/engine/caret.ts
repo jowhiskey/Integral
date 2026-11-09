@@ -42,6 +42,16 @@ const SLOTS: Readonly<Record<NodeJson['type'], readonly SlotName[]>> = {
  * - `node`    — on the node at `path` (leaf or container, `[]` = root). For a
  *               num/sym leaf it reads as the token's right edge (the station
  *               a token's continued typing continues from).
+ *               Additive `side` (rework session 4a, owner-ruled 2026-11-09):
+ *               the whole-structure BORDER station of a lone container —
+ *               `side: 'left'` = the position before the structure's extent,
+ *               `side: 'right'` = after it (the outside station D5 fires
+ *               from). Valid only on fenced/fenceless containers
+ *               (group/fn/frac/pow/root): a lone token's edges ARE its
+ *               in-token ends, and rows carry seams, so guarding them out
+ *               keeps one state per visual spot (OA-visual-trumps). Produced
+ *               only when the movement climb exhausts at a bare non-row
+ *               root; never serialized.
  * - `slot`    — in an empty fixed slot of the node at `path`.
  * - `row`     — insertion point into an args row: index 0..args.length
  *               (args.length = after the last arg). A null entry in a row is
@@ -73,9 +83,13 @@ export interface CaretBoundary {
  *  (T9 vocabulary ruling — required exactly on sub nodes). */
 export type SubLabel = 'base' | 'sub';
 
+/** The whole-structure border sides of a lone container's node caret
+ *  (rework session 4a, additive — `before` reads as left in JSON). */
+export type NodeSide = 'left' | 'right';
+
 export type Caret =
   | ({ readonly kind: 'empty' } & CaretBoundary)
-  | ({ readonly kind: 'node'; readonly path: Path } & CaretBoundary)
+  | ({ readonly kind: 'node'; readonly path: Path; readonly side?: NodeSide } & CaretBoundary)
   | ({ readonly kind: 'slot'; readonly path: Path; readonly slot: SlotName } & CaretBoundary)
   | ({ readonly kind: 'row'; readonly path: Path; readonly index: number } & CaretBoundary)
   | ({ readonly kind: 'token'; readonly path: Path; readonly index: number; readonly label?: SubLabel } & CaretBoundary);
@@ -208,8 +222,20 @@ export function caretResolvesIn(env: Envelope, caret: Caret): boolean {
   switch (caret.kind) {
     case 'empty':
       return env.root === null;
-    case 'node':
-      return nodeAt(env, caret.path) !== null;
+    case 'node': {
+      const node = nodeAt(env, caret.path);
+      if (node === null) return false;
+      // The additive border side (4a): guarded to whole containers whose
+      // extent exceeds their content ends — group/fn (fenced) and
+      // frac/pow/root (fenceless 2D). Tokens are addressed in-token, rows
+      // carry their own seams, and sub/unit label ends coincide with their
+      // extents: a side there would duplicate an existing state's spot.
+      if (caret.side !== undefined) {
+        const t = node.type;
+        return t === 'group' || t === 'fn' || t === 'frac' || t === 'pow' || t === 'root';
+      }
+      return true;
+    }
     case 'slot': {
       const parent = nodeAt(env, caret.path);
       return parent !== null && hasSlot(parent, caret.slot) && slotValue(parent, caret.slot) === null;

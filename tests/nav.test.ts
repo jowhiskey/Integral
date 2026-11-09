@@ -197,7 +197,9 @@ describe('profile swaps change movement with the engine untouched', () => {
       },
     };
     expect(resolveMove(env, self, 'right')).toEqual(slotCaret([], 'num'));
-    expect(resolveMove(env, self, 'right', swapped)).toEqual(nodeCaret(['den']));
+    // 4a re-pin (OA-visual-trumps): entry dives to the bench station — the
+    // filled den's in-token offset 0, never a whole-node caret.
+    expect(resolveMove(env, self, 'right', swapped)).toEqual({ kind: 'token', path: ['den'], index: 0 });
     // and the reversed vertical edge: down from the denominator now enters the numerator
     expect(resolveMove(env, onDen, 'down')).toBe(null);
     expect(resolveMove(env, onDen, 'down', swapped)).toEqual(slotCaret([], 'num')); // num is empty here
@@ -215,8 +217,10 @@ describe('profile swaps change movement with the engine untouched', () => {
       },
     };
     const onNumSlot = slotCaret([], 'num');
-    expect(resolveMove(env, onNumSlot, 'right')).toBe(null);
-    expect(resolveMove(env, onNumSlot, 'right', sideways)).toEqual(nodeCaret(['den']));
+    // 4a re-pin (ratified bare-root border station): at a lone frac the empty
+    // num slot's right exit steps out to the whole-structure after-station.
+    expect(resolveMove(env, onNumSlot, 'right')).toEqual({ kind: 'node', path: [], side: 'right' });
+    expect(resolveMove(env, onNumSlot, 'right', sideways)).toEqual({ kind: 'token', path: ['den'], index: 0 });
   });
 
   it('removing the pow chain edges by data changes pow traversal back to exit-only', () => {
@@ -224,14 +228,20 @@ describe('profile swaps change movement with the engine untouched', () => {
     const onBase = nodeCaret(['base']);
     const stackedPow: NavProfile = { children: 'slots', flow: ['base', 'exp'] };
     const swapped: NavRegistry = { ...NAV_PROFILES, pow: stackedPow };
-    expect(resolveMove(powEnv, onBase, 'right')).toEqual(nodeCaret(['exp']));
-    expect(resolveMove(powEnv, onBase, 'right', swapped)).toBe(null);
+    // 4a re-pin (OA-visual-trumps): the horizontal arrival dives to the
+    // exponent's in-token offset 0 (S-043), never a node caret on the token.
+    expect(resolveMove(powEnv, onBase, 'right')).toEqual({ kind: 'token', path: ['exp'], index: 0 });
+    // 4a: with the chain edge removed by data, the climb exits the lone pow
+    // to its whole-structure border station (the ratified after-position).
+    expect(resolveMove(powEnv, onBase, 'right', swapped)).toEqual({ kind: 'node', path: [], side: 'right' });
   });
 
   it('reprofiling op as slot-less makes its geometry exit-only by data', () => {
     const chainEnv = envOf(SEEDS.chain);
     const swapped: NavRegistry = { ...NAV_PROFILES, op: { children: 'slots', flow: [] } };
-    expect(resolveMove(chainEnv, nodeCaret(), 'right')).toEqual(nodeCaret([0]));
+    // 4a re-pin (OA-visual-trumps): entry into the first cell is its
+    // in-token offset 0, not a station "on" the token.
+    expect(resolveMove(chainEnv, nodeCaret(), 'right')).toEqual({ kind: 'token', path: [0], index: 0 });
     expect(resolveMove(chainEnv, nodeCaret(), 'right', swapped)).toBe(null);
   });
 });
@@ -246,11 +256,18 @@ describe('movement never enters the undo log', () => {
     const insertEntry = state.log[0];
     const logRef = state.log;
 
-    state = applyOp(state, moveOp('right')); // moves onto the inserted 3
-    expect(state.caret).toEqual(nodeCaret(['num']));
-    state = applyOp(state, moveOp('down')); // flows down into the denominator
-    expect(state.caret).toEqual(nodeCaret(['den']));
-    state = applyOp(state, moveOp('left')); // no target at root: no-op
+    // 4a re-pin (ratified bare-root borders + OA-vertical-default + S-095):
+    state = applyOp(state, moveOp('right')); // steps out to the after-fraction station
+    expect(state.caret).toEqual({ kind: 'node', path: [], side: 'right' });
+    state = applyOp(state, moveOp('left')); // S-094: re-enters at the numerator's content END
+    expect(state.caret).toEqual({ kind: 'token', path: ['num'], index: 1 });
+    state = applyOp(state, moveOp('down')); // the vertical dive: the denominator region's content end
+    expect(state.caret).toEqual({ kind: 'token', path: ['den'], index: 1 });
+    state = applyOp(state, moveOp('left')); // N1 char-step to the 2's start
+    expect(state.caret).toEqual({ kind: 'token', path: ['den'], index: 0 });
+    state = applyOp(state, moveOp('left')); // S-095 at root: exits past the whole fraction
+    expect(state.caret).toEqual({ kind: 'node', path: [], side: 'left' });
+    state = applyOp(state, moveOp('left')); // N3 at the formula start: no-op
     expect(state.log).toBe(logRef);
     expect(state.log.length).toBe(1);
 
@@ -318,27 +335,37 @@ describe('no-target movement is a defined no-op', () => {
     for (const dir of DIRS) expect(applyOp(state, moveOp(dir))).toBe(state);
   });
 
-  it('a lone leaf at the root has no target in any direction', () => {
+  it('a lone leaf at the root seeds at its in-token end; from there every direction no-ops or steps (N1)', () => {
+    // 4a re-pin (OA-token-end): the seed is the just-typed analog — the
+    // token's in-token END (the old node caret's "right edge" reading).
     const state = initSession(SEEDS.num);
-    for (const dir of DIRS) expect(applyOp(state, moveOp(dir))).toBe(state);
+    expect(state.caret).toEqual({ kind: 'token', path: [], index: 2 });
+    // N3: -> at the very end and up/down on a flat formula are silent no-ops
+    for (const dir of DIRS) {
+      if (dir === 'left') continue;
+      expect(applyOp(state, moveOp(dir))).toBe(state);
+    }
+    expect(applyOp(state, moveOp('left')).caret).toEqual({ kind: 'token', path: [], index: 1 }); // N1
   });
 
-  it('the far ends of the root row rest at its border seams (amended session 4: row ends are stations)', () => {
+  it('the far ends of the root row collapse onto the content ends (4a re-pin: N3 + OA-visual-trumps)', () => {
     const state = initSession(SEEDS.chain);
-    const atEnd = applyOp(state, { op: 'moveCaret', to: nodeCaret([2]) });
-    const movedRight = applyOp(atEnd, moveOp('right'));
-    expect(movedRight.caret).toEqual(rowCaret([], 3));
-    expect(movedRight.log.length).toBe(atEnd.log.length); // movement never logs
-    expect(applyOp(movedRight, moveOp('right'))).toBe(movedRight); // the end seam is the terminal station
-    const atStart = applyOp(state, { op: 'moveCaret', to: nodeCaret([0]) });
-    const movedLeft = applyOp(atStart, moveOp('left'));
-    expect(movedLeft.caret).toEqual(rowCaret([], 0));
-    expect(applyOp(movedLeft, moveOp('left'))).toBe(movedLeft); // seam 0 mirrors it
+    const atEnd = applyOp(state, { op: 'moveCaret', to: { kind: 'token', path: [2], index: 1 } });
+    expect(applyOp(atEnd, moveOp('right'))).toBe(atEnd); // N3: the last token's end IS the formula end
+    const atStart = applyOp(state, { op: 'moveCaret', to: { kind: 'token', path: [0], index: 0 } });
+    expect(applyOp(atStart, moveOp('left'))).toBe(atStart); // N3 mirrors at the start
+    // a structure boundary keeps its seam (the D5 after-station, OA-visual-trumps)
+    const fracRow = initSession({ v: 1, root: { type: 'op', op: 'add', args: [sym('x'), { type: 'frac', num: num(1), den: num(2) }] } });
+    const afterFrac = applyOp(fracRow, { op: 'moveCaret', to: { kind: 'row', path: [], index: 2 } });
+    expect(applyOp(afterFrac, moveOp('right'))).toBe(afterFrac); // N3 at the seam
+    const insideDen = applyOp(fracRow, { op: 'moveCaret', to: { kind: 'token', path: [1, 'den'], index: 1 } });
+    const exited = applyOp(insideDen, moveOp('right')); // N4: the slot end exits to the row
+    expect(exited.caret).toEqual({ kind: 'row', path: [], index: 2 });
   });
 
   it('a moved state is a new object carrying the same root and log references', () => {
-    const state = initSession(SEEDS.chain);
-    const moved = applyOp(state, moveOp('right'));
+    const state = initSession(SEEDS.chain); // 4a: the seed sits at the collapsed row end (c's in-token end)
+    const moved = applyOp(state, moveOp('left'));
     expect(moved).not.toBe(state);
     expect(moved.root).toBe(state.root);
     expect(moved.log).toBe(state.log);
@@ -357,30 +384,33 @@ describe('no-target movement is a defined no-op', () => {
 describe('the fraction pin: enter the numerator, flow down, never sideways', () => {
   const env = envOf({ v: 1, root: { type: 'frac', num: num(1), den: num(2) } });
 
-  it('traversal enters the numerator', () => {
-    expect(resolveMove(env, nodeCaret(), 'right')).toEqual(nodeCaret(['num']));
+  it('traversal enters the numerator (4a re-pin: OA-visual-trumps — the bench offset 0)', () => {
+    expect(resolveMove(env, nodeCaret(), 'right')).toEqual({ kind: 'token', path: ['num'], index: 0 });
   });
 
-  it('the numerator flows down into the denominator', () => {
-    expect(resolveMove(env, nodeCaret(['num']), 'down')).toEqual(nodeCaret(['den']));
-    expect(resolveMove(env, nodeCaret(['den']), 'up')).toEqual(nodeCaret(['num']));
+  it('the numerator flows down into the denominator (4a re-pin: OA-vertical-default content ends)', () => {
+    expect(resolveMove(env, nodeCaret(['num']), 'down')).toEqual({ kind: 'token', path: ['den'], index: 1 });
+    expect(resolveMove(env, nodeCaret(['den']), 'up')).toEqual({ kind: 'token', path: ['num'], index: 1 });
   });
 
   it('horizontal movement never crosses sideways between num and den', () => {
-    expect(resolveMove(env, nodeCaret(['num']), 'right')).toBe(null);
-    expect(resolveMove(env, nodeCaret(['den']), 'left')).toBe(null);
+    // 4a re-pin: at a lone frac the exits reach the ratified border stations
+    // (N4 out; S-095 the mirror) — never the sibling slot.
+    expect(resolveMove(env, nodeCaret(['num']), 'right')).toEqual({ kind: 'node', path: [], side: 'right' });
+    expect(resolveMove(env, nodeCaret(['den']), 'left')).toEqual({ kind: 'node', path: [], side: 'left' });
     expect(resolveMove(env, nodeCaret(['num']), 'up')).toBe(null);
     expect(resolveMove(env, nodeCaret(['den']), 'down')).toBe(null);
   });
 
   it('right from the numerator exits past the fraction to the parent right, not into den', () => {
     const rowEnv = envOf(SEEDS.fracInRow); // b * (1/2) * c — frac is cell 1
-    expect(resolveMove(rowEnv, nodeCaret([1, 'num']), 'right')).toEqual(nodeCaret([2]));
-    expect(resolveMove(rowEnv, nodeCaret([1, 'den']), 'left')).toEqual(nodeCaret([0]));
+    // 4a re-pin (N2/N1 merged spots): the dive lands the next/prev cells' bench ends
+    expect(resolveMove(rowEnv, nodeCaret([1, 'num']), 'right')).toEqual({ kind: 'token', path: [2], index: 0 });
+    expect(resolveMove(rowEnv, nodeCaret([1, 'den']), 'left')).toEqual({ kind: 'token', path: [0], index: 1 });
   });
 
-  it('backward traversal enters the fraction at the denominator end', () => {
-    expect(resolveMove(env, nodeCaret(), 'left')).toEqual(nodeCaret(['den']));
+  it('backward traversal enters the fraction at the NUMERATOR end (4a re-pin: N5/S-094)', () => {
+    expect(resolveMove(env, nodeCaret(), 'left')).toEqual({ kind: 'token', path: ['num'], index: 1 });
   });
 });
 
@@ -395,8 +425,10 @@ describe('empty slots are movement targets', () => {
 
   it('from inside the empty slot the geography continues', () => {
     const env = envOf(SEEDS.incompleteFrac);
-    expect(resolveMove(env, slotCaret([], 'num'), 'down')).toEqual(nodeCaret(['den']));
-    expect(resolveMove(env, slotCaret([], 'num'), 'right')).toBe(null); // at root: no exit target
+    // 4a re-pin: OA-vertical-default — the den region's content end; the exit
+    // reaches the ratified after-station at the lone frac.
+    expect(resolveMove(env, slotCaret([], 'num'), 'down')).toEqual({ kind: 'token', path: ['den'], index: 1 });
+    expect(resolveMove(env, slotCaret([], 'num'), 'right')).toEqual({ kind: 'node', path: [], side: 'right' });
   });
 
   it('applies per type: group child, unit value, pow exp', () => {
@@ -418,57 +450,65 @@ describe('empty slots are movement targets', () => {
 describe('pow: chained horizontally and vertical as a raised script', () => {
   const env = envOf({ v: 1, root: { type: 'pow', base: sym('x'), exp: num(2) } });
 
-  it('right from the base flows into the exponent and back', () => {
-    expect(resolveMove(env, nodeCaret(['base']), 'right')).toEqual(nodeCaret(['exp']));
-    expect(resolveMove(env, nodeCaret(['exp']), 'left')).toEqual(nodeCaret(['base']));
+  it('right from the base flows into the exponent and back (4a: S-043/S-096 benches)', () => {
+    expect(resolveMove(env, nodeCaret(['base']), 'right')).toEqual({ kind: 'token', path: ['exp'], index: 0 });
+    expect(resolveMove(env, nodeCaret(['exp']), 'left')).toEqual({ kind: 'token', path: ['base'], index: 1 });
   });
 
-  it('up/down also addresses the exponent script', () => {
-    expect(resolveMove(env, nodeCaret(['base']), 'up')).toEqual(nodeCaret(['exp']));
-    expect(resolveMove(env, nodeCaret(['exp']), 'down')).toEqual(nodeCaret(['base']));
+  it('up/down also addresses the exponent script (4a: OA-vertical-default ends)', () => {
+    expect(resolveMove(env, nodeCaret(['base']), 'up')).toEqual({ kind: 'token', path: ['exp'], index: 1 });
+    expect(resolveMove(env, nodeCaret(['exp']), 'down')).toEqual({ kind: 'token', path: ['base'], index: 1 });
   });
 
-  it('horizontal arrival dives into a container target; vertical arrival jumps onto it', () => {
+  it('horizontal arrival dives into a container target; vertical arrival rests at the content end', () => {
     const fracExpEnv = envOf(SEEDS.powFracExp);
-    expect(resolveMove(fracExpEnv, nodeCaret(['base']), 'right')).toEqual(nodeCaret(['exp', 'num']));
-    expect(resolveMove(fracExpEnv, nodeCaret(['base']), 'up')).toEqual(nodeCaret(['exp']));
+    // 4a: the horizontal entry benches at the frac's numerator start; the
+    // vertical arrival follows OA-vertical-default — the inner frac's den
+    // content end ("rest at the end of the frac", never ON it).
+    expect(resolveMove(fracExpEnv, nodeCaret(['base']), 'right')).toEqual({ kind: 'token', path: ['exp', 'num'], index: 0 });
+    expect(resolveMove(fracExpEnv, nodeCaret(['base']), 'up')).toEqual({ kind: 'token', path: ['exp', 'den'], index: 1 });
   });
 });
 
 describe('root: the index participates only when the tree carries one', () => {
-  it('a square root has no index geography', () => {
+  it('a square root has no index geography (4a re-pin: bench stations)', () => {
     const env = envOf(SEEDS.squareRoot); // root{radicand: 9} — index omitted
-    expect(resolveMove(env, nodeCaret(), 'right')).toEqual(nodeCaret(['radicand']));
-    expect(resolveMove(env, nodeCaret(), 'left')).toEqual(nodeCaret(['radicand']));
+    expect(resolveMove(env, nodeCaret(), 'right')).toEqual({ kind: 'token', path: ['radicand'], index: 0 });
+    // ← from the root's right boundary rides the radicand (enterRight)
+    expect(resolveMove(env, nodeCaret(), 'left')).toEqual({ kind: 'token', path: ['radicand'], index: 1 });
     expect(resolveMove(env, nodeCaret(['radicand']), 'up')).toBe(null);
     expect(resolveMove(env, nodeCaret(['radicand']), 'down')).toBe(null);
   });
 
   it('an n-th root: radicand is the entry, the index a vertical and backward target', () => {
     const env = envOf(SEEDS.nthRoot);
-    expect(resolveMove(env, nodeCaret(), 'right')).toEqual(nodeCaret(['radicand']));
-    expect(resolveMove(env, nodeCaret(), 'left')).toEqual(nodeCaret(['index']));
-    expect(resolveMove(env, nodeCaret(['radicand']), 'up')).toEqual(nodeCaret(['index']));
-    expect(resolveMove(env, nodeCaret(['index']), 'down')).toEqual(nodeCaret(['radicand']));
+    expect(resolveMove(env, nodeCaret(), 'right')).toEqual({ kind: 'token', path: ['radicand'], index: 0 });
+    // 4a re-pin (S-094 right-entry): the right boundary rides the RADICAND,
+    // never the front-top index.
+    expect(resolveMove(env, nodeCaret(), 'left')).toEqual({ kind: 'token', path: ['radicand'], index: 1 });
+    expect(resolveMove(env, nodeCaret(['radicand']), 'up')).toEqual({ kind: 'token', path: ['index'], index: 1 });
+    expect(resolveMove(env, nodeCaret(['index']), 'down')).toEqual({ kind: 'token', path: ['radicand'], index: 1 });
   });
 });
 
 describe('args rows: continuous flow, gaps stepwise, empty rows reachable', () => {
   it('a flat chain is walked cell by cell; the border overflows rest at the row seams', () => {
     const env = envOf(SEEDS.chain); // add[a, b, c]
-    expect(resolveMove(env, nodeCaret(), 'right')).toEqual(nodeCaret([0]));
-    expect(resolveMove(env, nodeCaret([0]), 'right')).toEqual(nodeCaret([1]));
-    expect(resolveMove(env, nodeCaret([1]), 'right')).toEqual(nodeCaret([2]));
-    // dead-end overflow: the caret parks after (before) the row's content
-    expect(resolveMove(env, nodeCaret([2]), 'right')).toEqual(rowCaret([], 3));
-    expect(resolveMove(env, nodeCaret([2]), 'left')).toEqual(nodeCaret([1]));
-    expect(resolveMove(env, nodeCaret([0]), 'left')).toEqual(rowCaret([], 0));
+    // 4a re-pins (OA-visual-trumps + N1/N2 + N3): entries/dive are bench
+    // stations; the tokens step char-wise; the border collapses (no dead-end
+    // seam, S-046's session-4 reading void) — one press = one visible move.
+    expect(resolveMove(env, nodeCaret(), 'right')).toEqual({ kind: 'token', path: [0], index: 0 });
+    expect(resolveMove(env, { kind: 'token', path: [0], index: 1 }, 'right')).toEqual({ kind: 'token', path: [1], index: 0 });
+    expect(resolveMove(env, { kind: 'token', path: [1], index: 1 }, 'right')).toEqual({ kind: 'token', path: [2], index: 0 });
+    expect(resolveMove(env, { kind: 'token', path: [2], index: 1 }, 'right')).toEqual({ kind: 'token', path: [2], index: 1 }); // N3: the boundary reproduces the origin (the op clamps no-op)
+    expect(resolveMove(env, { kind: 'token', path: [2], index: 0 }, 'left')).toEqual({ kind: 'token', path: [1], index: 1 });
+    expect(resolveMove(env, { kind: 'token', path: [0], index: 0 }, 'left')).toEqual({ kind: 'token', path: [0], index: 0 }); // N3 (the op clamps no-op)
   });
 
   it('a row caret (insertion boundary) participates in movement', () => {
     const env = envOf(SEEDS.chain);
-    expect(resolveMove(env, rowCaret([], 1), 'right')).toEqual(nodeCaret([1]));
-    expect(resolveMove(env, rowCaret([], 1), 'left')).toEqual(nodeCaret([0]));
+    expect(resolveMove(env, rowCaret([], 1), 'right')).toEqual({ kind: 'token', path: [1], index: 0 });
+    expect(resolveMove(env, rowCaret([], 1), 'left')).toEqual({ kind: 'token', path: [0], index: 1 });
     expect(resolveMove(env, rowCaret([], 0), 'left')).toBe(null);
   });
 
@@ -476,8 +516,8 @@ describe('args rows: continuous flow, gaps stepwise, empty rows reachable', () =
     const gapEnv = envOf(SEEDS.gaps); // add[a, null, b]
     expect(resolveMove(envOf(SEEDS.doubleGap), nodeCaret([0]), 'right')).toEqual(rowCaret([], 1));
     expect(resolveMove(envOf(SEEDS.doubleGap), rowCaret([], 1), 'right')).toEqual(rowCaret([], 2));
-    expect(resolveMove(gapEnv, rowCaret([], 1), 'right')).toEqual(nodeCaret([2]));
-    expect(resolveMove(gapEnv, rowCaret([], 1), 'left')).toEqual(nodeCaret([0]));
+    expect(resolveMove(gapEnv, rowCaret([], 1), 'right')).toEqual({ kind: 'token', path: [2], index: 0 });
+    expect(resolveMove(gapEnv, rowCaret([], 1), 'left')).toEqual({ kind: 'token', path: [0], index: 1 });
     expect(resolveMove(envOf(SEEDS.emptyRow), nodeCaret(), 'right')).toEqual(rowCaret([], 0));
     expect(resolveMove(envOf(SEEDS.emptyRow), rowCaret([], 0), 'right')).toBe(null);
   });
@@ -487,24 +527,30 @@ describe('deep climbs and jumps through nested structures', () => {
   const env = envOf(SEEDS.canonical); // (5 + 4·3) / 2
 
   it('horizontal flow walks continuously into nested containers; slot barriers rest the overflow at the innermost row seam', () => {
-    expect(resolveMove(env, nodeCaret(), 'right')).toEqual(nodeCaret(['num', 'child', 0]));
-    expect(resolveMove(env, nodeCaret(['num', 'child', 0]), 'right')).toEqual(nodeCaret(['num', 'child', 1, 0]));
-    // the group's parens stop the flow: the caret parks at the row end seam
-    // just inside them (no station beyond exists in the union)
-    expect(resolveMove(env, nodeCaret(['num', 'child', 1, 1]), 'right')).toEqual(rowCaret(['num', 'child'], 2));
-    expect(resolveMove(env, nodeCaret(), 'left')).toEqual(nodeCaret(['den']));
+    expect(resolveMove(env, nodeCaret(), 'right')).toEqual({ kind: 'token', path: ['num', 'child', 0], index: 0 });
+    expect(resolveMove(env, nodeCaret(['num', 'child', 0]), 'right')).toEqual({ kind: 'token', path: ['num', 'child', 1, 0], index: 0 });
+    // 4a re-pin (N4/S-046): the group's parens stop nothing — the content
+    // end exits past the close fence out to the fraction's after-station
+    // (the ratified bare-root border; the session-4 dead-end seam is void).
+    expect(resolveMove(env, { kind: 'token', path: ['num', 'child', 1, 1], index: 1 }, 'right')).toEqual({ kind: 'node', path: [], side: 'right' });
+    // S-094 + OA-vertical-default: ← into the fraction reaches the
+    // numerator's INTERIOR end — inside the fences, after the last content
+    // char (the `1/(a+b|)` station, distinct from the after-`)` position).
+    expect(resolveMove(env, nodeCaret(), 'left')).toEqual({ kind: 'token', path: ['num', 'child', 1, 1], index: 1 });
   });
 
-  it('vertical movement climbs out of rows and jumps onto the paired slot', () => {
-    expect(resolveMove(env, nodeCaret(['num', 'child', 0]), 'down')).toEqual(nodeCaret(['den']));
-    expect(resolveMove(env, nodeCaret(['den']), 'up')).toEqual(nodeCaret(['num'])); // jump onto the group
-    expect(resolveMove(env, nodeCaret(['den']), 'right')).toBe(null);
+  it('vertical movement climbs out of rows and rests at the region content end (4a: OA-vertical-default)', () => {
+    expect(resolveMove(env, nodeCaret(['num', 'child', 0]), 'down')).toEqual({ kind: 'token', path: ['den'], index: 1 });
+    // diving through the group wrapper: INSIDE the fences, after the last
+    // content character (the ruled fenced-group arrival, never ON it)
+    expect(resolveMove(env, nodeCaret(['den']), 'up')).toEqual({ kind: 'token', path: ['num', 'child', 1, 1], index: 1 });
+    expect(resolveMove(env, nodeCaret(['den']), 'right')).toEqual({ kind: 'node', path: [], side: 'right' });
   });
 
-  it('nested rows: up from deep in the denominator reaches the numerator row', () => {
+  it('nested rows: up from deep in the denominator reaches the numerator row (4a bench ends)', () => {
     const nested = envOf(SEEDS.nestedRows); // (a+b)/(c+d)
-    expect(resolveMove(nested, nodeCaret(['den', 1]), 'up')).toEqual(nodeCaret(['num']));
-    expect(resolveMove(nested, nodeCaret(['num', 0]), 'down')).toEqual(nodeCaret(['den']));
+    expect(resolveMove(nested, nodeCaret(['den', 1]), 'up')).toEqual({ kind: 'token', path: ['num', 1], index: 1 });
+    expect(resolveMove(nested, nodeCaret(['num', 0]), 'down')).toEqual({ kind: 'token', path: ['den', 1], index: 1 });
   });
 });
 
@@ -514,9 +560,10 @@ describe('leaf and string-channel types are exit-only', () => {
     for (const dir of DIRS) expect(resolveMove(env, nodeCaret(), dir)).toBe(null);
   });
 
-  it('unit: the value is traversable, the unit block itself is exit-only', () => {
+  it('unit: the value is the left entry, the unit block itself is exit-only', () => {
     const filled = envOf({ v: 1, root: { type: 'unit', value: num(50), unit: 'mm' } });
-    expect(resolveMove(filled, nodeCaret(), 'right')).toEqual(nodeCaret(['value']));
+    // 4a re-pin: entry benches at the value's in-token offset 0
+    expect(resolveMove(filled, nodeCaret(), 'right')).toEqual({ kind: 'token', path: ['value'], index: 0 });
     expect(resolveMove(filled, nodeCaret(['value']), 'right')).toBe(null);
     expect(resolveMove(filled, nodeCaret(['value']), 'down')).toBe(null);
   });

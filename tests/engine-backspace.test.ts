@@ -272,7 +272,9 @@ describe('D2 — backspace at gaps (S-064/S-066 A/S-077)', () => {
   it('BS at the gap before a function is the ordinary gap rule (S-077): the leading dangling + deletes, never the fn', () => {
     const state = backspace(at(op('add', null, fn('sin', [sym('a')])), rowc([], 1)));
     expect(j(envelopeOf(state).root)).toBe(j(fn('sin', [sym('a')])));
-    expect(state.caret).toEqual(node([0])); // the promoted content's right edge (sin(a|)
+    // 4a re-pin (OA-visual-trumps): the freed spot is the content end bench —
+    // the argument's in-token end (the old node caret painted the same spot)
+    expect(state.caret).toEqual({ kind: 'token', path: [0], index: 1 }); // the promoted content's right edge (sin(a|)
     legal(state);
   });
 });
@@ -594,13 +596,15 @@ describe('D7 — the function chain + the head swap (S-075/S-077, the S-023 A an
   it('the movable close paren deletes first (C4): close → false, the caret continues at the content right edge', () => {
     let state = backspace(at(SIN_AB, node([])));
     expect(j(envelopeOf(state).root)).toBe(j(fn('sin', [op('add', sym('a'), sym('b'))], false)));
-    expect(state.caret).toEqual(node([0, 1])); // the content tail inside the fn: sin(a+b|
+    // 4a re-pin (OA-visual-trumps): the content right edge is the in-token end
+    expect(state.caret).toEqual({ kind: 'token', path: [0, 1], index: 1 }); // the content tail inside the fn: sin(a+b|
     expect(state.log.length).toBe(1);
     legal(state);
     // a group takes the same chain (D8): caret at its child row's tail
     state = backspace(at(group(op('add', sym('a'), sym('b'))), node([])));
     expect(j(envelopeOf(state).root)).toBe(j(group(op('add', sym('a'), sym('b')), false)));
-    expect(state.caret).toEqual(node(['child', 1]));
+    // 4a re-pin (OA-visual-trumps): the content right edge is the in-token end
+    expect(state.caret).toEqual({ kind: 'token', path: ['child', 1], index: 1 });
     legal(state);
   });
 

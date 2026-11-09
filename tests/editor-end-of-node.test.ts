@@ -53,7 +53,8 @@ describe('keyboard: multi-digit typing through the controller', () => {
     expect(j(controller.getEnvelope().root)).toBe(
       j({ type: 'frac', num: num(12), den: num(3) }),
     );
-    expect(j(controller.getState().caret)).toBe(j(node(['den'])));
+    // 4a re-pin (OA-token-end): the typed 3's in-token end
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: ['den'], index: 1 }));
     expect(controller.getState().log.length).toBe(4); // one key = one op = one log entry
   });
 
@@ -113,7 +114,8 @@ describe('keyboard: the delete-then-continue recovery flow', () => {
     expect(j(controller.getEnvelope().root)).toBe(
       j({ type: 'op', op: 'add', args: [sym('x'), sym('z')] }),
     );
-    expect(j(controller.getState().caret)).toBe(j(node([1])));
+    // 4a re-pin (OA-token-end): the typed z's in-token end
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: [1], index: 1 }));
     expect(controller.getState().log.length).toBe(2); // delete, fill
   });
 
@@ -161,7 +163,9 @@ describe('click: the row-end seam is placeable', () => {
     click(math, 110); // fraction (110-100)/300 ≈ 0.033 ≤ 0.25 → the start seam
     expect(j(controller.getState().caret)).toBe(j(rowc([], 0)));
     click(math, 250); // fraction 0.5 — the middle zone: not < 0.5, so the right side: enter at the right flow end
-    expect(j(controller.getState().caret)).toBe(j(node([1, 'den'])));
+    // 4a re-pin (OA-visual-trumps bench + S-094 enterRight): the fraction's
+    // NUMERATOR end is its horizontal right interface
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: [1, 'num'], index: 1 }));
     click(math, 390); // fraction (390-100)/300 ≈ 0.967 ≥ 0.75 → the end seam
     expect(j(controller.getState().caret)).toBe(j(rowc([], 2)));
   });

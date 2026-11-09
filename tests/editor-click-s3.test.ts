@@ -119,7 +119,8 @@ describe('slot-edge click-to-exit (container outer-edge zone)', () => {
   it('a click in the group’s right outer-edge zone → the station after the group (not a dive inside)', () => {
     const f = mk();
     click(f.el('[0]'), 19); // fraction 0.95 ≥ 0.75 → exit right → cell 1 dives to its leftmost station
-    expect(f.controller.getState().caret).toEqual(node([1]));
+    // 4a re-pin (OA-visual-trumps): the station is c's in-token offset 0
+    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: [1], index: 0 });
     expect(f.controller.getState().log.length).toBe(0);
   });
 
@@ -128,24 +129,27 @@ describe('slot-edge click-to-exit (container outer-edge zone)', () => {
     click(f.el('[0]'), 1); // fraction 0.05 ≤ 0.25 → exit left → the row’s border seam: before the group (amended session 4)
     expect(f.controller.getState().caret).toEqual(row(0));
     click(f.el('[0]'), 12); // fraction 0.6 → not an edge zone → dive right end
-    expect(f.controller.getState().caret).toEqual(node([0, 'child', 1]));
+    // 4a re-pin (OA-visual-trumps): b's in-token end / a's in-token start
+    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: [0, 'child', 1], index: 1 });
     click(f.el('[0]'), 8); // fraction 0.4 → dive left end
-    expect(f.controller.getState().caret).toEqual(node([0, 'child', 0]));
+    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: [0, 'child', 0], index: 0 });
   });
 
   it('caretFromHit pure pins: edge zones exit via exitStation; at the root there is no outside → the dive fallback', () => {
     // nested group at cell 0: right edge → node([1]); left edge → row start climbs out → null at root row? cell 0 left → climb → root edge → null → fallback = dive left
-    expect(caretFromHit(env as Envelope, { kind: 'node', path: [0], fraction: 0.9 })).toEqual(node([1]));
-    expect(caretFromHit(env as Envelope, { kind: 'node', path: [0], fraction: 0.5 })).toEqual(node([0, 'child', 1]));
-    // root container at 0.9: no outside → dive (pinned session-1 behavior)
+    expect(caretFromHit(env as Envelope, { kind: 'node', path: [0], fraction: 0.9 })).toEqual({ kind: 'token', path: [1], index: 0 });
+    expect(caretFromHit(env as Envelope, { kind: 'node', path: [0], fraction: 0.5 })).toEqual({ kind: 'token', path: [0, 'child', 1], index: 1 });
+    // root container at 0.9: the row-root now has no outside station (rows never
+    // take the node-side borders) → dive; the bench end is b's in-token end
     const rowEnv: Envelope = { v: 1, root: { type: 'op', op: 'add', args: [sym('a'), sym('b')] } };
-    expect(caretFromHit(rowEnv, { kind: 'node', path: [], fraction: 0.9 })).toEqual(node([1]));
-    // a nested row inside a slot at the root: right edge has no outside (the frac is the root) → dive fallback
+    expect(caretFromHit(rowEnv, { kind: 'node', path: [], fraction: 0.9 })).toEqual({ kind: 'token', path: [1], index: 1 });
+    // a nested row inside a slot at the root: the outside NOW carries the
+    // ratified lone-root after-station (4a) — the click exits there
     const fracEnv: Envelope = {
       v: 1,
       root: { type: 'frac', num: { type: 'op', op: 'add', args: [sym('a'), sym('b')] }, den: sym('c') },
     };
-    expect(caretFromHit(fracEnv, { kind: 'node', path: ['num'], fraction: 0.9 })).toEqual(node(['num', 1]));
+    expect(caretFromHit(fracEnv, { kind: 'node', path: ['num'], fraction: 0.9 })).toEqual({ kind: 'node', path: [], side: 'right' });
   });
 });
 

@@ -101,7 +101,9 @@ describe('redo (engine)', () => {
     s = applyOp(s, { op: 'moveCaret', to: { kind: 'row', path: [], index: 2 } });
     const caretAfter = JSON.stringify(s.caret);
     s = undo(s);
-    expect(JSON.stringify(s.caret)).toBe(JSON.stringify({ kind: 'node', path: [] }));
+    // 4a re-pin (OA-visual-trumps): the restored seed is the visual start station
+    // 4a re-pin (OA-token-end): the seed is the just-typed end of the row
+    expect(JSON.stringify(s.caret)).toBe(JSON.stringify({ kind: 'token', path: [1], index: 1 }));
     s = redo(s);
     expect(JSON.stringify(s.caret)).toBe(caretAfter);
     expect(s.log.length).toBe(1);
