@@ -82,6 +82,36 @@ describe('caretAnchor per caret kind (stubbed rects)', () => {
     // extent spans first..last fragment element: value mn .. label mi
     expect(caretAnchor(env, { kind: 'node', path: [] }, rendered)).toEqual({ x: 0, y: 0, height: 10 });
   });
+
+  it('unit LABEL token carets interpolate within the label element (S-104), not the whole unit extent', () => {
+    const env: Envelope = { v: 1, root: { type: 'unit', value: num(50), unit: 'mm' } };
+    const rendered = buildMathML(fromJSON(env), document);
+    const stub = stubRects();
+    stub.syncPath(rendered, {
+      '["value"]': { left: 0, top: 0, width: 10, height: 10 },
+      '[]': { left: 24, top: 0, width: 6, height: 10 }, // label mi: x 24..30
+    });
+    expect(caretAnchor(env, { kind: 'token', path: [], index: 0 }, rendered)).toEqual({ x: 24, y: 0, height: 10 });
+    expect(caretAnchor(env, { kind: 'token', path: [], index: 1 }, rendered)).toEqual({ x: 27, y: 0, height: 10 });
+    expect(caretAnchor(env, { kind: 'token', path: [], index: 2 }, rendered)).toEqual({ x: 30, y: 0, height: 10 });
+    expect(caretAnchor(env, { kind: 'token', path: [], index: 3 }, rendered)).toEqual(null); // out of the label
+  });
+
+  it('sub LABEL token carets anchor within their own label element (T9), base and script separately', () => {
+    const env: Envelope = { v: 1, root: { type: 'sub', base: 'x', sub: 'max' } };
+    const rendered = buildMathML(fromJSON(env), document);
+    const stub = stubRects();
+    const labels = rendered.subLabels.get('[]')!;
+    expect(labels).toBeDefined();
+    stub.set(labels.base, { left: 0, top: 2, width: 4, height: 8 });
+    stub.set(labels.script, { left: 6, top: 0, width: 9, height: 6 });
+    expect(caretAnchor(env, { kind: 'token', path: [], index: 0, label: 'base' }, rendered)).toEqual({ x: 0, y: 2, height: 8 });
+    expect(caretAnchor(env, { kind: 'token', path: [], index: 1, label: 'base' }, rendered)).toEqual({ x: 4, y: 2, height: 8 });
+    expect(caretAnchor(env, { kind: 'token', path: [], index: 0, label: 'sub' }, rendered)).toEqual({ x: 6, y: 0, height: 6 });
+    expect(caretAnchor(env, { kind: 'token', path: [], index: 2, label: 'sub' }, rendered)).toEqual({ x: 12, y: 0, height: 6 });
+    // a label-less token caret on a sub never anchors
+    expect(caretAnchor(env, { kind: 'token', path: [], index: 0 }, rendered)).toEqual(null);
+  });
 });
 
 describe('updateCaretOverlay: the overlay div is positioned relative to the container', () => {

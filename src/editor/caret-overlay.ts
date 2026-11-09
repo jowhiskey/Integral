@@ -16,8 +16,11 @@
 //                    <math> height — the caret is never invisible).
 // - row, index = n → right edge of the last cell's extent (row owner's left edge
 //                    when the row is empty).
-// - token, index  → the character boundary inside the number's extent
-//                    (left edge + index/len of the width).
+// - token, index  → the character boundary inside the token's rect (left
+//                    edge + index/len of the width): a sub label (T9) within
+//                    its own label element, a unit label (S-104) within the
+//                    unit's own element — the upright label mi; a number over
+//                    its own extent.
 
 import type { Envelope } from '../ast/json.js';
 
@@ -116,17 +119,40 @@ export function caretAnchor(env: Envelope, caret: Caret, rendered: RenderedMath)
       return r === null ? null : { x: r.right, y: r.top, height: r.height };
     }
     case 'token': {
-      // in-token: the character boundary within the number's extent, linearly
-      // interpolated over the token rect (glyph metrics are reserved for a
-      // later session; the extent is the stubbed-rect-testable anchor)
+      // in-token: the character boundary within the token's rect, linearly
+      // interpolated (glyph metrics are reserved for a later session; the
+      // extent is the stubbed-rect-testable anchor).
       const node = nodeAt(env, caret.path);
-      if (node === null || node.type !== 'num') return null;
-      const len = tokenText(node).length;
+      if (node === null) return null;
+      // A sub label (T9) interpolates within its OWN label element; a unit
+      // label (S-104) within the unit's own element — the upright label mi;
+      // numbers interpolate over the node's extent like before.
+      let rect: RectLike | null = null;
+      let len = 0;
+      if (node.type === 'sub') {
+        if (caret.label !== 'base' && caret.label !== 'sub') return null;
+        const labels = rendered.subLabels.get(pathKey(caret.path));
+        if (labels === undefined) return null;
+        const el = caret.label === 'base' ? labels.base : labels.script;
+        rect = rectOf(el);
+        len = (caret.label === 'base' ? node.base : node.sub).length;
+      } else if (node.type === 'unit') {
+        if (caret.label !== undefined) return null;
+        const el = rendered.elementByPath.get(pathKey(caret.path));
+        if (el === undefined) return null;
+        rect = rectOf(el);
+        len = node.unit.length;
+      } else if (node.type === 'num') {
+        if (caret.label !== undefined) return null;
+        rect = extentRect(rendered, caret.path);
+        len = tokenText(node).length;
+      } else {
+        return null; // sym token carets: the parked glyph-metrics refinement (4a theme)
+      }
+      if (rect === null) return null;
       if (!Number.isInteger(caret.index) || caret.index < 0 || caret.index > len) return null;
-      const r = extentRect(rendered, caret.path);
-      if (r === null) return null;
-      const x = len === 0 ? r.left : r.left + (caret.index / len) * (r.right - r.left);
-      return { x, y: r.top, height: r.height };
+      const x = len === 0 ? rect.left : rect.left + (caret.index / len) * (rect.right - rect.left);
+      return { x, y: rect.top, height: rect.height };
     }
   }
 }

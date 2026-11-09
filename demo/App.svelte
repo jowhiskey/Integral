@@ -19,13 +19,19 @@
   import { EditorController, IntegralEditor } from '../src/editor/index.js';
   import { envelopeOf, type Caret, type EditingState } from '../src/engine/index.js';
   import { CATEGORIES, CASES, type CatalogCase } from './cases.js';
+  import { attachImeLogger, type ImeLogLine } from './ime-logger.js';
 
   let caseContainer: HTMLDivElement | undefined = $state();
+  let scratchWrap: HTMLDivElement | undefined = $state();
   let controller: EditorController | null = null;
   let activeId: string | null = $state(null);
   let caretText = $state('—');
   let jsonText = $state('—');
   let mathmlText = $state('—');
+  /** The IME / dead-key event log (standing debug tool): latest line first,
+   *  bounded so the pane stays readable. */
+  let imeLines: readonly ImeLogLine[] = $state([]);
+  const MAX_IME_LINES = 80;
 
   const activeCase = $derived(CASES.find((c) => c.id === activeId) ?? null);
 
@@ -101,7 +107,28 @@
       onStateChange: refresh,
     });
     refresh(controller.getState());
+    // The standing IME / dead-key event logger (capture-phase, passive —
+    // pure observation): attach to both editing surfaces, latest first.
+    attachImeLogger(caseContainer, 'case', (line) => {
+      imeLines = [line, ...imeLines].slice(0, MAX_IME_LINES);
+    });
+    if (scratchWrap !== undefined) {
+      attachImeLogger(scratchWrap, 'scratch', (line) => {
+        imeLines = [line, ...imeLines].slice(0, MAX_IME_LINES);
+      });
+    }
   });
+
+  /** Collapse the raw lines into the pane's text (seq + surface + line). */
+  const imeText = $derived(
+    imeLines.length === 0
+      ? '(no events yet — focus an editor and type; dead-key compositions land here)'
+      : imeLines.map((l) => `${String(l.seq).padStart(3, ' ')} [${l.surface}] ${l.line}`).join('\n'),
+  );
+
+  function clearImeLog(): void {
+    imeLines = [];
+  }
 
   // test/host accessors (the mounted component exposes these)
   export function getActiveCaseId(): string | null {
@@ -152,6 +179,12 @@
         type instruction `{activeCase.keys}`
       </button>
     {/if}
+    <div class="vocab-ops">
+      <span class="label">T9 insertion vocabulary (the palette/suggestion surface):</span>
+      <button type="button" data-insert-root onclick={() => controller?.insertRoot()}>√ insert</button>
+      <button type="button" data-insert-mroot onclick={() => controller?.insertRoot({ mroot: true })}>ⁿ√ insert</button>
+      <button type="button" data-insert-sub onclick={() => controller?.insertSubscript()}>x₍₎ insert</button>
+    </div>
     <div class="caret-readout" data-caret>caret {caretText}</div>
     {#if activeCase}
       <div class="note">
@@ -172,5 +205,15 @@
 
 <div class="scratch">
   <div class="label">scratchpad — always-available empty editor (free edit; the case browser never touches it)</div>
-  <IntegralEditor envelope={{ v: 1, root: null }} />
+  <div bind:this={scratchWrap} class="scratch-editor-wrap">
+    <IntegralEditor envelope={{ v: 1, root: null }} />
+  </div>
+</div>
+
+<div class="ime-log">
+  <div class="label">
+    IME / dead-key event log — the standing IME-debug tool (capture-phase, passive, latest first)
+    <button type="button" data-ime-clear onclick={clearImeLog}>clear</button>
+  </div>
+  <pre class="src" data-ime-lines>{imeText}</pre>
 </div>

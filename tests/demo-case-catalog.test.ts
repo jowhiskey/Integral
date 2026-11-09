@@ -46,7 +46,10 @@ describe('demo case catalog — structure and hygiene', () => {
     // session 2a extends the OA set with the two additions ruled/fixed during the session:
     // OA-dot-eval (a dotted number evaluates as its value) and OA-mixed (the
     // mixed implicit/explicit multiply-row definition).
-    const RULE_PATTERN = /^(T\d\d?|N\d|C\d|D\d|U\d|K\d|S-\d{3}|OA-(digit-glue|juxtaposition|projection|fence|dot-eval|mixed))$/;
+    // session 2b-2 adds the two live-ruling labels of its stop-and-ask:
+    // OA-root-grab (the T9 forward-grab root insertion reading) and
+    // OA-sub-label (the sub label token carets).
+    const RULE_PATTERN = /^(T\d\d?|N\d|C\d|D\d|U\d|K\d|S-\d{3}|OA-(digit-glue|juxtaposition|projection|fence|dot-eval|mixed|root-grab|sub-label))$/;
     for (const c of CASES) {
       expect(c.rules.length > 0, `${c.id} carries at least one rule ref`).toBe(true);
       for (const rule of c.rules) {

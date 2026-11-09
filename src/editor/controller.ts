@@ -21,7 +21,10 @@ import {
   EngineError,
   envelopeOf,
   initSession,
+  insertRoot as engineInsertRoot,
+  insertSubscript as engineInsertSubscript,
   redo as engineRedo,
+  settleUnits,
   typeToken,
   undo,
   type Caret,
@@ -165,6 +168,42 @@ export class EditorController {
     return this.vmem;
   }
 
+  // ——— S-051: the unit-run conversion fires on LEAVING the run ———
+
+  /**
+   * Settle every convertible unit run (S-051 C): the leave events are
+   * controller-side — any non-letter key press, arrow (all movement keys),
+   * any click (its target caret set first, so the mapping carries it), and
+   * blur. One converted run = one logged op (undo restores the symbol run);
+   * nothing convertible = no state change at all. Letters never fire it
+   * (they extend the run), and neither do the undo/redo keys — history
+   * commands are not content keys, and a settle landing with them would
+   * clobber the redo list for a no-op keystroke.
+   */
+  private settle(triggerCaret?: Caret): boolean {
+    const base: EditingState =
+      triggerCaret === undefined ? this.state : { ...this.state, caret: triggerCaret };
+    const next = settleUnits(base);
+    if (next === base) return false;
+    this.state = next;
+    this.render();
+    this.onStateChange?.(this.state);
+    return true;
+  }
+
+  /** Whether the pressed key LEAVES a unit run (S-051's "any non-letter
+   *  key"): every key except KEYMAP letters and the undo/redo history
+   *  commands. */
+  private readonly keyLeavesRun = (event: KeyboardEvent): boolean => {
+    if (event.ctrlKey || event.metaKey) {
+      const k = event.key.toLowerCase();
+      return k !== 'z' && k !== 'y';
+    }
+    const token = KEYMAP[event.key];
+    return !(event.key.length === 1 && token !== undefined && token.t === 'leaf' && token.node.type === 'sym');
+  };
+
+
   /**
    * Pure caret placement (the click path): validated against the tree, applied as
    * state WITHOUT a log entry — movement never logs. Pending dead-^ (T8) does not
@@ -212,16 +251,50 @@ export class EditorController {
   private readonly handleClick = (event: MouseEvent): void => {
     if (this.rendered === null) return;
     const hit = hitFromMouseEvent(event, this.rendered);
-    this.placeCaret(caretFromHit(toJSON(this.state.root), hit));
+    const caret = caretFromHit(toJSON(this.state.root), hit);
+    this.pendingDeadPow = false; // the click discards the pending (T8, one-shot)
+    if (this.settle(caret)) return; // S-051 click away: the mapped caret is placed
+    this.placeCaret(caret);
   };
 
   // ——— Keyboard (sessions 2–3): the handler lives on the focusable root and
   // acts only while the root is focused; handled keys are preventDefault'ed,
   // everything else passes through untouched. ———
 
+  /** Insertion vocabulary (T9): one insert = one op = one undo step; the
+   *  caret lands per the ruled shapes (the radicand's beginning / the base
+   *  label). EngineError rejections are defined no-ops. */
+  insertRoot(opts: { readonly mroot?: boolean } = {}): void {
+    this.applyEngineFn(() => engineInsertRoot(this.state, opts));
+  }
+
+  insertSubscript(): void {
+    this.applyEngineFn(() => engineInsertSubscript(this.state));
+  }
+
+  /** Apply one engine-level editing function (vocabulary insertions): a
+   *  rejected call is a defined no-op — no state change, no exception to the
+   *  DOM (the typeKey pattern). */
+  private applyEngineFn(fn: () => EditingState): void {
+    let next: EditingState;
+    try {
+      next = fn();
+    } catch (e) {
+      if (e instanceof EngineError) return;
+      throw e;
+    }
+    if (next === this.state) return;
+    this.state = next;
+    this.render();
+    this.onStateChange?.(this.state);
+  }
+
   private readonly handleBlur = (): void => {
     // T8 one-shot rule: blur discards a pending dead-^ with no trace.
     this.pendingDeadPow = false;
+    // S-051: blur leaves the run — the conversion lands before the host
+    // takes the envelope (one op, logged, undoable while the session lives).
+    this.settle();
   };
 
   /** Resolve a pending dead-^ with (at most) one typed character: the power
@@ -259,6 +332,7 @@ export class EditorController {
 
   private readonly handleKeydown = (event: KeyboardEvent): void => {
     if (this.container.ownerDocument.activeElement !== this.container) return; // only while focused
+    if (this.keyLeavesRun(event)) this.settle(); // S-051: leaving fires the conversion first
     if (this.pendingDeadPow && event.key === 'Process') {
       // Firefox on Windows may report the second keystroke of a dead-key
       // composition as 'Process' (no character identity in `key` — the

@@ -12,7 +12,7 @@ import { mount, unmount } from 'svelte';
 
 import App from '../demo/App.svelte';
 import { CASES, CATEGORIES } from '../demo/cases.js';
-import { envelopeOf, initSession, typeToken } from '../src/engine/index.js';
+import { envelopeOf, initSession, settleUnits, typeToken } from '../src/engine/index.js';
 import { KEYMAP } from '../src/editor/keys.js';
 import type { EditorController } from '../src/editor/index.js';
 import { countNodes } from './editor-support.js';
@@ -107,9 +107,17 @@ describe('demo case browser', () => {
       const runBtn = target.querySelector('button[data-run-keys]') as HTMLButtonElement | null;
       expect(runBtn, `${c.id} run-keys button`).not.toBeNull();
       click(runBtn!);
-      // engine replay of the same instruction
+      // engine replay of the same instruction + the controller-side leave
+      // settle (rework 2b-2: the DOM path fires the S-051 conversion on the
+      // leave keys BEFORE the key acts — letters never leave, every other
+      // key does)
       let expected = initSession(c.envelope);
-      for (const ch of c.keys!) expected = typeToken(expected, KEYMAP[ch]!);
+      for (const ch of c.keys!) {
+        const token = KEYMAP[ch]!;
+        const isLetter = token !== undefined && token.t === 'leaf' && token.node.type === 'sym' && ch.length === 1;
+        if (!isLetter) expected = settleUnits(expected);
+        expected = typeToken(expected, token!);
+      }
       const state = app.getController()!.getState();
       expect(envelopeOf(state), `${c.id} typed envelope`).toEqual(envelopeOf(expected));
       expect(state.caret, `${c.id} typed caret`).toEqual(expected.caret);

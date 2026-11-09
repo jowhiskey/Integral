@@ -31,6 +31,7 @@ import {
   nodeAt,
   rowArgs,
   slotValue,
+  subLabelText,
   tokenText,
   type Caret,
   type Path,
@@ -214,6 +215,28 @@ function deepest(env: Envelope, path: Path, registry: NavRegistry, side: Side): 
   }
 }
 
+/**
+ * The station a programmatic insertion places its caret at: the entry into
+ * the node at `path` from side — T9's ruled radicand start ("the caret sits
+ * at the beginning of the radicand"). Refines `deepest` for the node itself
+ * being a text token: entering a num/sym/token node from the left addresses
+ * its FIRST text position (T7's right-slot rule — `12|3` + `/` lands caret at
+ * `3`'s offset 0), from the right its last.
+ */
+export function entryStation(
+  env: Envelope,
+  path: Path,
+  side: Side,
+  registry: NavRegistry = NAV_PROFILES,
+): Caret | null {
+  const node = nodeAt(env, path);
+  if (node !== null && isTokenNode(node)) {
+    const len = tokenText(node).length;
+    return { kind: 'token', path, index: side === 'left' ? 0 : len };
+  }
+  return deepest(env, path, registry, side);
+}
+
 // ——— The climb: a position hands its direction up to the parent's geography ———
 
 /** Movement leaving the node at `path` (as a unit standing at one of its
@@ -356,13 +379,40 @@ export function resolveMove(
     }
 
     case 'token': {
-      // Inside a num or sym token (rework session 2a: symbols join numbers —
-      // N1; every other leaf stays atomic). Left/Right step one character; at
-      // the ends they exit to the adjacent structural stations (the climb the
-      // node caret would do). Vertical keys behave like the token's owning
-      // structural station for the move itself.
       const node = nodeAt(env, caret.path);
-      if (node === null || !isTokenNode(node)) return null;
+      if (node === null) return null;
+      if (node.type === 'sub') {
+        // A subscript's label strings are addressed one at a time (T9
+        // vocabulary ruling): Left/Right step within the addressed label and
+        // cross base↔script at their seam (the visual reading order) — out
+        // of the sub entirely only past the outer ends. Vertical keys: the
+        // sub is a leaf, the climb answers.
+        const label = caret.label;
+        if (label !== 'base' && label !== 'sub') return null;
+        const text = subLabelText(node, label);
+        const len = text.length;
+        if (!Number.isInteger(caret.index) || caret.index < 0 || caret.index > len) return null;
+        if (dir === 'left') {
+          if (caret.index > 0) return { kind: 'token', path: caret.path, index: caret.index - 1, label };
+          if (label === 'sub') {
+            return { kind: 'token', path: caret.path, index: subLabelText(node, 'base').length, label: 'base' };
+          }
+          return climb(env, caret.path, 'left', registry);
+        }
+        if (dir === 'right') {
+          if (caret.index < len) return { kind: 'token', path: caret.path, index: caret.index + 1, label };
+          if (label === 'base') return { kind: 'token', path: caret.path, index: 0, label: 'sub' };
+          return climb(env, caret.path, 'right', registry);
+        }
+        return climb(env, caret.path, dir, registry);
+      }
+      // Inside a num, sym, or unit-label token (rework 2a: symbols join
+      // numbers — N1; rework 2b-2: unit labels — S-104; every other leaf
+      // stays atomic). Left/Right step one character; at the ends they exit
+      // to the adjacent structural stations (the climb the node caret would
+      // do). Vertical keys behave like the token's owning structural station
+      // for the move itself.
+      if (!isTokenNode(node)) return null;
       const len = tokenText(node).length;
       if (!Number.isInteger(caret.index) || caret.index < 0 || caret.index > len) return null;
       if (dir === 'left') {

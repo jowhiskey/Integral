@@ -99,6 +99,9 @@ export interface RenderedMath {
   readonly separators: ReadonlyMap<Element, { readonly path: Path; readonly index: number }>;
   /** caret key → the bare-cell anchor (op-row null cells — no placeholder element). */
   readonly bareAnchors: ReadonlyMap<string, BareAnchor>;
+  /** path key → a sub node's two label <mi> elements (T9: label token carets
+   *  anchor within their own label element, not the msub extent). */
+  readonly subLabels: ReadonlyMap<string, { readonly base: Element; readonly script: Element }>;
 }
 
 /** Module-level UID counter: ids stay unique across rebuilds and across trees
@@ -119,6 +122,7 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
   const placeholderByCaret = new Map<string, Element>();
   const separators = new Map<Element, { path: Path; index: number }>();
   const bareAnchors = new Map<string, BareAnchor>();
+  const subLabels = new Map<string, { base: Element; script: Element }>();
 
   const el = (tag: string): Element => doc.createElementNS(MATHML_NS, tag);
   const mo = (text: string, fence: boolean): Element => {
@@ -357,6 +361,7 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
         script.textContent = sub.sub;
         msub.appendChild(base);
         msub.appendChild(script);
+        subLabels.set(pathKey(path), { base, script });
         return own(path, [msub], msub);
       }
       case 'unit': {
@@ -407,5 +412,5 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
     }
   }
 
-  return { math, uidByPath, pathByUid, elementByPath, extents, placeholders, placeholderByCaret, separators, bareAnchors };
+  return { math, uidByPath, pathByUid, elementByPath, extents, placeholders, placeholderByCaret, separators, bareAnchors, subLabels };
 }

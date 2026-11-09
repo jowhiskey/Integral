@@ -47,13 +47,18 @@ const SLOTS: Readonly<Record<NodeJson['type'], readonly SlotName[]>> = {
  *               (args.length = after the last arg). A null entry in a row is
  *               not addressed by this — it is an empty slot like any other,
  *               addressed structurally by index when an op targets it.
- * - `token`   — inside a num or sym token: on the node at `path`, at
- *               character offset `index` (0..len of the rendered text). Units,
- *               subscripts, and function names stay atomic — no in-token
- *               positions for them. (Rework session 2a: symbols join numbers
- *               as in-token tokens — T3 glue/split at any caret offset; the
- *               trailing decimal dot of a `dot`-flagged number is part of the
- *               text.)
+ * - `token`   — inside a text-like token: on the node at `path`, at character
+ *               offset `index` (0..len of the addressed text). Numbers and
+ *               symbols (rework session 2a, T3 glue/split at any caret offset;
+ *               the trailing decimal dot of a `dot`-flagged number is part of
+ *               the text). Rework session 2b-2 (S-104): a unit's LABEL is
+ *               letter-wise addressable exactly like a symbol name — attached
+ *               units are granular. A `sub` node's two label strings are
+ *               addressable one at a time (T9 vocabulary ruling, 2026-11-09):
+ *               a token caret on a `sub` carries `label` choosing the string
+ *               `index` addresses ('base' | 'sub' — additive field, present
+ *               exactly for sub nodes; its absence addresses the plain token
+ *               text of num/sym/unit). Function heads stay atomic.
  * - `boundary` — pure additive flag (on every non-empty kind): armed by the
  *               Space key at a token edge (S-021/S-022); the NEXT same-type
  *               input starts a new node instead of gluing; no visible mark,
@@ -64,28 +69,45 @@ export interface CaretBoundary {
   readonly boundary?: true;
 }
 
+/** Which of a `sub` node's two label strings a token caret addresses
+ *  (T9 vocabulary ruling — required exactly on sub nodes). */
+export type SubLabel = 'base' | 'sub';
+
 export type Caret =
   | ({ readonly kind: 'empty' } & CaretBoundary)
   | ({ readonly kind: 'node'; readonly path: Path } & CaretBoundary)
   | ({ readonly kind: 'slot'; readonly path: Path; readonly slot: SlotName } & CaretBoundary)
   | ({ readonly kind: 'row'; readonly path: Path; readonly index: number } & CaretBoundary)
-  | ({ readonly kind: 'token'; readonly path: Path; readonly index: number } & CaretBoundary);
+  | ({ readonly kind: 'token'; readonly path: Path; readonly index: number; readonly label?: SubLabel } & CaretBoundary);
 
 /**
  * The rendered text of a number or symbol token (what the editor shows and
  * what the in-token offset addresses). A `dot`-flagged number's trailing
- * decimal point is part of the text (`5.` has length 2). Everything else is
- * not an in-token token (0).
+ * decimal point is part of the text (`5.` has length 2). A unit's text is its
+ * LABEL string (S-104: attached units are granular — the label is addressed
+ * exactly like a symbol name). A `sub` node's text depends on which label a
+ * specific caret carries — see `subLabelText`; plain `tokenText` does not
+ * address sub. Everything else is not an in-token token (0).
  */
 export function tokenText(node: NodeJson): string {
   if (node.type === 'num') return String(node.value) + ((node as { dot?: boolean }).dot === true ? '.' : '');
   if (node.type === 'sym') return node.name;
+  if (node.type === 'unit') return node.unit;
   return '';
 }
 
-/** True iff the node is a text-like in-token token (num or sym). */
+/** The one sub label string a token caret addresses (T9): the caret's
+ *  `label` field selects it; it is required on sub nodes. */
+export function subLabelText(node: NodeJson, label: SubLabel): string {
+  if (node.type !== 'sub') return '';
+  return label === 'base' ? (node as { base: string }).base : (node as { sub: string }).sub;
+}
+
+/** True iff the node is a text-like in-token token (num, sym, or — since
+ *  S-104 — a unit, whose label is the addressed text). Sub labels are
+ *  addressed caret-wise, not by this predicate. */
 export function isTokenNode(node: NodeJson): boolean {
-  return node.type === 'num' || node.type === 'sym';
+  return node.type === 'num' || node.type === 'sym' || node.type === 'unit';
 }
 
 // ——— Refs: where content sits or will land (the envelope-level analog of a
@@ -201,7 +223,16 @@ export function caretResolvesIn(env: Envelope, caret: Caret): boolean {
     }
     case 'token': {
       const node = nodeAt(env, caret.path);
-      if (node === null || !isTokenNode(node)) return false;
+      if (node === null) return false;
+      if (node.type === 'sub') {
+        // Sub labels are addressed one at a time (T9): the `label` field is
+        // required here and forbidden everywhere else.
+        if (caret.label !== 'base' && caret.label !== 'sub') return false;
+        const len = subLabelText(node, caret.label).length;
+        return Number.isInteger(caret.index) && caret.index >= 0 && caret.index <= len;
+      }
+      if (caret.label !== undefined) return false;
+      if (!isTokenNode(node)) return false;
       return Number.isInteger(caret.index) && caret.index >= 0 && caret.index <= tokenText(node).length;
     }
   }

@@ -42,14 +42,16 @@ import {
   pathOfRef,
   refOfPath,
   rowArgs,
+  subLabelText,
   tokenText,
   type Caret,
   type Path,
   type Ref,
   type SlotName,
+  type SubLabel,
 } from './caret.js';
 import { EngineError } from './errors.js';
-import { exitStation } from './nav.js';
+import { entryStation, exitStation } from './nav.js';
 import {
   applyOp,
   envelopeOf,
@@ -105,6 +107,51 @@ const numFromText = (text: string): NodeJson | null => {
 };
 
 const symFromText = (name: string): NodeJson => ({ type: 'sym', name }) as NodeJson;
+
+const unitJson = (value: NodeJson, unit: string): NodeJson => ({ type: 'unit', value, unit }) as NodeJson;
+
+const subJson = (base: string, sub: string): NodeJson => ({ type: 'sub', base, sub }) as NodeJson;
+
+/** The session's unit name set (S-051: the vocabulary the conversion and
+ *  fromJSON both gate against — the session's own list, never the default
+ *  when a custom vocabulary was opened with). */
+export const unitSetOf = (state: EditingState): ReadonlySet<string> =>
+  new Set(state.vocabulary?.units ?? defaultStaticVocabulary.units);
+
+/** ——— Sub labels (T9 vocabulary ruling, 2026-11-09) ———
+ *  A sub node's label strings glue letters/digits exactly like symbol
+ *  names, but the grown label must keep its contracted identifier shape —
+ *  fromJSON rejects anything else. A glue that breaks the shape is a silent
+ *  no-op. */
+const SUB_BASE_SHAPE = /^\p{L}[\p{L}\p{N}]*$/u;
+const SUB_SUB_SHAPE = /^[\p{L}\p{N}]+$/u;
+const subLabelShapeOk = (label: SubLabel, grown: string): boolean =>
+  label === 'base' ? SUB_BASE_SHAPE.test(grown) : SUB_SUB_SHAPE.test(grown);
+
+/** ——— Unit label runs (S-104) ———
+ *  Attached units are granular: the label is a letter run addressed by
+ *  in-token carets. Typing letters/digits into the label EXTENDS the run —
+ *  unit-ness re-validates at the edit (fromJSON gates unit labels, so the
+ *  knot cannot survive an unknown label): a still-known label stays an
+ *  attached unit; an unknown label reverts to the ordinary symbol pair
+ *  (the derived reversion — the value juxtaposed with the grown run,
+ *  a fresh pair that REPLACES the unit, so its symbol lives one level
+ *  deeper: `toReverted` addresses it). */
+function unitGrow(
+  ctx: Ctx,
+  target: { readonly node: NodeJson | null; readonly path: Path },
+  grown: string,
+  toKept: Caret,
+  toReverted: Caret,
+): EditingState {
+  const value = (target.node as { value: NodeJson | null }).value;
+  if (value === null) return ctx.state;
+  const at = replacePosOf(refOfPath(target.path));
+  if (unitSetOf(ctx.state).has(grown)) {
+    return place(ctx, unitJson(value, grown), at, toKept);
+  }
+  return place(ctx, implicitPair(value, symFromText(grown)), at, toReverted);
+}
 
 /** An op row (n-ary, so same-op glyphs render between the cells). */
 const opRow = (fn: OperatorFn, args: (NodeJson | null)[]): NodeJson =>
@@ -215,6 +262,9 @@ interface TokenStation {
   readonly ref: Ref;
   readonly path: Path;
   readonly offset: number;
+  /** Which sub label string the caret addresses (T9; present exactly on
+   *  sub nodes — the station's text is then that label). */
+  readonly label?: SubLabel;
 }
 
 interface SeamStation {
@@ -239,6 +289,11 @@ interface VoidStation {
 }
 
 type Station = TokenStation | SeamStation | AfterStation | VoidStation;
+
+/** The text a token station addresses: the caret's sub label when the node
+ *  is a sub (T9), else the node's own token text. */
+const stationText = (station: TokenStation): string =>
+  station.label !== undefined ? subLabelText(station.node, station.label) : tokenText(station.node);
 
 function stationOf(env: Envelope, caret: Caret): Station {
   switch (caret.kind) {
@@ -279,6 +334,7 @@ function stationOf(env: Envelope, caret: Caret): Station {
         ref: refOfPath(caret.path),
         path: caret.path,
         offset: caret.index,
+        ...(caret.label !== undefined ? { label: caret.label } : {}),
       };
   }
 }
@@ -302,7 +358,8 @@ const place = (ctx: Ctx, node: NodeJson | null, at: Position, to: Caret): Editin
 
 /** The caret for a freshly juxtaposed token: inside a `0.`
  *  number after its dot (S-012/S-033), inside a fresh group's content slot
- *  (T6 — typing continues between the fences), else on the pair seam
+ *  (T6 — typing continues between the fences), at a fresh subscript's base
+ *  label (T9 — the template's first empty string), else on the pair seam
  *  directly after the inserted token. */
 function pairCaret(base: Path, cell: number, newTok: NodeJson): Caret {
   if (newTok.type === 'num' && (newTok as { dot?: boolean }).dot === true) {
@@ -310,6 +367,9 @@ function pairCaret(base: Path, cell: number, newTok: NodeJson): Caret {
   }
   if (newTok.type === 'group') {
     return { kind: 'slot', path: [...base, cell], slot: 'child' };
+  }
+  if (newTok.type === 'sub') {
+    return { kind: 'token', path: [...base, cell], index: 0, label: 'base' };
   }
   return { kind: 'row', path: base, index: cell + 1 };
 }
@@ -319,7 +379,7 @@ function pairCaret(base: Path, cell: number, newTok: NodeJson): Caret {
  *  T3/S-029-style; S-031's number·symbol·number shape). */
 function juxtaposeToken(ctx: Ctx, station: TokenStation, newTok: NodeJson, side: 'before' | 'after' | 'split'): EditingState {
   const { node, ref, offset } = station;
-  const text = tokenText(node);
+  const text = stationText(station);
   const at = replacePosOf(ref);
   const base = pathOf(ref);
   if (side === 'split' && offset > 0 && offset < text.length) {
@@ -425,9 +485,16 @@ function digitKey(ctx: Ctx, station: Station, digits: string): EditingState {
       //    takes the leaf first.
       const filled = seamPendingFill(ctx, station, seam, num, (path) => ({ kind: 'node', path }));
       if (filled !== null) return filled;
-      // 1. digit-glue: join the left symbol's name (letters to its left).
-      if (seam.left !== null && seam.left.node !== null && seam.left.node.type === 'sym' && !ctx.flagged) {
-        return growLeft(ctx, seam.left, symFromText(tokenText(seam.left.node) + digits));
+      // 1. digit-glue: join the left symbol's name (letters to its left) —
+      //    or append onto a left unit label (S-104's run; the grown label
+      //    re-validates at the edit).
+      if (seam.left !== null && seam.left.node !== null && !ctx.flagged) {
+        if (seam.left.node.type === 'sym') {
+          return growLeft(ctx, seam.left, symFromText(tokenText(seam.left.node) + digits));
+        }
+        if (seam.left.node.type === 'unit') {
+          return unitGrow(ctx, seam.left, tokenText(seam.left.node) + digits, ctx.caret, ctx.caret);
+        }
       }
       // 2. extend the left number's text (glyph-free adjacency only).
       if (seam.freeLeft && seam.left !== null && seam.left.node !== null && seam.left.node.type === 'num' && !ctx.flagged) {
@@ -466,7 +533,7 @@ function digitKey(ctx: Ctx, station: Station, digits: string): EditingState {
 
 function digitAtToken(ctx: Ctx, station: TokenStation, digits: string, num: NodeJson): EditingState {
   const { node, ref, offset } = station;
-  const text = tokenText(node);
+  const text = stationText(station);
   if (node.type === 'sym') {
     // Digit-glue: digits are symbol-name characters wherever letters exist
     // to their left; before letters (offset 0) a digit starts a number.
@@ -474,6 +541,36 @@ function digitAtToken(ctx: Ctx, station: TokenStation, digits: string, num: Node
       return growLeft(ctx, { node, path: station.path }, symFromText(text.slice(0, offset) + digits + text.slice(offset)));
     }
     return juxtaposeToken(ctx, station, num, offset === 0 ? 'before' : 'after');
+  }
+  if (node.type === 'unit') {
+    // S-104 + the digit-glue amendment: a digit inside/after a unit label
+    // extends the run text (the label re-validates at the edit — a digit
+    // adding an unknown label reverts to the symbol pair). Against the armed
+    // boundary a digit juxtaposes instead. A digit at the label's FRONT
+    // (offset 0) has no letters to its left: the number-before-X pairing.
+    if (ctx.flagged || offset === 0) {
+      return juxtaposeToken(ctx, station, num, offset === text.length ? 'after' : 'split');
+    }
+    const grown = text.slice(0, offset) + digits + text.slice(offset);
+    return unitGrow(
+      ctx, station, grown,
+      { kind: 'token', path: station.path, index: offset + digits.length },
+      { kind: 'token', path: [...pathOf(ref), 1], index: offset + digits.length },
+    );
+  }
+  if (node.type === 'sub' && !ctx.flagged && station.label !== undefined) {
+    // T9: digits glue into the addressed label while the shape holds
+    // (the base needs a leading letter; the script label is alnum).
+    const grown = text.slice(0, offset) + digits + text.slice(offset);
+    if (subLabelShapeOk(station.label, grown)) {
+      const labels = node as { base: string; sub: string };
+      const next =
+        station.label === 'base' ? subJson(grown, labels.sub) : subJson(labels.base, grown);
+      return place(ctx, next, replacePosOf(ref), {
+        kind: 'token', path: station.path, index: offset + digits.length, label: station.label,
+      });
+    }
+    return ctx.state;
   }
   if (ctx.flagged) {
     // Space-forced number-number adjacency (S-098): the state is legal and
@@ -506,13 +603,30 @@ function letterKey(ctx: Ctx, station: Station, letters: string): EditingState {
       //    edge waiting for its first operand).
       const filled = seamPendingFill(ctx, station, seam, sym, (path) => ({ kind: 'node', path }));
       if (filled !== null) return filled;
-      // 1. glue into the right symbol's front (N2).
-      if (seam.right !== null && seam.right.node !== null && seam.right.node.type === 'sym' && !ctx.flagged) {
-        return glueFront(ctx, seam.right, letters);
+      // 1. glue into the right symbol's front (N2) — or into a right unit
+      //    label's front (S-104: inside a unit label extends the run).
+      if (seam.right !== null && seam.right.node !== null && !ctx.flagged) {
+        if (seam.right.node.type === 'sym') {
+          return glueFront(ctx, seam.right, letters);
+        }
+        if (seam.right.node.type === 'unit') {
+          const grown = letters + tokenText(seam.right.node);
+          return unitGrow(
+            ctx, seam.right, grown,
+            { kind: 'token', path: seam.right.path, index: letters.length },
+            { kind: 'token', path: [...seam.right.path, 1], index: letters.length },
+          );
+        }
       }
-      // 2. glue onto the left symbol (behind — T3's "front or behind").
-      if (seam.left !== null && seam.left.node !== null && seam.left.node.type === 'sym' && !ctx.flagged) {
-        return growLeft(ctx, seam.left, symFromText(tokenText(seam.left.node) + letters));
+      // 2. glue onto the left symbol (behind — T3's "front or behind") — or
+      //    append onto a left unit label (S-104).
+      if (seam.left !== null && seam.left.node !== null && !ctx.flagged) {
+        if (seam.left.node.type === 'sym') {
+          return growLeft(ctx, seam.left, symFromText(tokenText(seam.left.node) + letters));
+        }
+        if (seam.left.node.type === 'unit') {
+          return unitGrow(ctx, seam.left, tokenText(seam.left.node) + letters, ctx.caret, ctx.caret);
+        }
       }
       // 3/4. juxtapose onto the right / left cell (letters never merge with
       // numbers: S-032's juxtaposed symbol; symbol-before-X refuses at
@@ -536,13 +650,40 @@ function letterKey(ctx: Ctx, station: Station, letters: string): EditingState {
 
 function letterAtToken(ctx: Ctx, station: TokenStation, letters: string, sym: NodeJson): EditingState {
   const { node, ref, offset } = station;
-  const text = tokenText(node);
+  const text = stationText(station);
   if (node.type === 'sym') {
     if (!ctx.flagged) {
       const glued = symFromText(text.slice(0, offset) + letters + text.slice(offset));
       return apply1(ctx, { op: 'insert', node: glued, at: replacePosOf(ref) });
     }
     return juxtaposeToken(ctx, station, sym, offset === 0 ? 'before' : 'after');
+  }
+  if (node.type === 'unit') {
+    // S-104: a letter inside/after a unit label extends the run (against
+    // the armed boundary it juxtaposes a separate symbol instead, S-021).
+    if (ctx.flagged) {
+      return juxtaposeToken(ctx, station, sym, offset === 0 ? 'before' : offset === text.length ? 'after' : 'split');
+    }
+    const grown = text.slice(0, offset) + letters + text.slice(offset);
+    return unitGrow(
+      ctx, station, grown,
+      { kind: 'token', path: station.path, index: offset + letters.length },
+      { kind: 'token', path: [...pathOf(ref), 1], index: offset + letters.length },
+    );
+  }
+  if (node.type === 'sub' && !ctx.flagged && station.label !== undefined) {
+    // T9: letters glue into the addressed label; a shape-breaking glue is
+    // a silent no-op (fromJSON would reject the grown label).
+    const grown = text.slice(0, offset) + letters + text.slice(offset);
+    if (subLabelShapeOk(station.label, grown)) {
+      const labels = node as { base: string; sub: string };
+      const next =
+        station.label === 'base' ? subJson(grown, labels.sub) : subJson(labels.base, grown);
+      return place(ctx, next, replacePosOf(ref), {
+        kind: 'token', path: station.path, index: offset + letters.length, label: station.label,
+      });
+    }
+    return ctx.state;
   }
   // A letter into a number: S-031's number·symbol·number split inside,
   // S-032's juxtaposed symbol at the edges — a letter never joins a number.
@@ -559,7 +700,7 @@ function dotKey(ctx: Ctx, station: Station): EditingState {
       return place(ctx, dotted, posOf(station.ref), { kind: 'token', path: pathOf(station.ref), index: 2 });
     case 'tok': {
       const { node, ref, offset } = station;
-      const text = tokenText(node);
+      const text = stationText(station);
       if (node.type === 'num') {
         if (text.includes('.')) return ctx.state; // second dot: silent no-op (S-013)
         const next = numFromText(text.slice(0, offset) + '.' + text.slice(offset));
@@ -632,7 +773,7 @@ function opKey(ctx: Ctx, station: Station, fn: OperatorFn): EditingState {
     }
     case 'tok': {
       const { node, ref, offset } = station;
-      const text = tokenText(node);
+      const text = stationText(station);
       const at = replacePosOf(ref);
       // A token sitting in a SAME-op parent row extends the flat chain
       // (structural rule 3): the glyph splices another pending cell in at
@@ -757,7 +898,7 @@ function openKey(ctx: Ctx, station: Station): EditingState {
       // T6: a group with both fences at the caret; content to the left
       // stays outside (the juxtaposition pairing handles that).
       const group = groupJson(null, true);
-      return juxtaposeToken(ctx, station, group, offset === 0 ? 'before' : offset === tokenText(node).length ? 'after' : 'split');
+      return juxtaposeToken(ctx, station, group, offset === 0 ? 'before' : offset === stationText(station).length ? 'after' : 'split');
     }
     case 'after':
       return place(ctx, implicitPair(station.node, groupJson(null, true)), replacePosOf(station.ref), {
@@ -824,7 +965,7 @@ function closeKey(ctx: Ctx, station: Station): EditingState {
     case 'void':
       return place(ctx, fence, posOf(station.ref), { kind: 'node', path: pathOf(station.ref) });
     case 'tok':
-      return juxtaposeToken(ctx, station, fence, station.offset === 0 ? 'before' : station.offset === tokenText(station.node).length ? 'after' : 'split');
+      return juxtaposeToken(ctx, station, fence, station.offset === 0 ? 'before' : station.offset === stationText(station).length ? 'after' : 'split');
     case 'after':
       return place(ctx, implicitPair(station.node, fence), replacePosOf(station.ref), {
         kind: 'row', path: pathOf(station.ref), index: 2,
@@ -865,11 +1006,28 @@ function spaceKey(ctx: Ctx, station: Station): EditingState {
   switch (station.kind) {
     case 'tok': {
       const { node, ref, offset } = station;
-      const text = tokenText(node);
+      const text = stationText(station);
+      if (node.type === 'unit' && offset > 0 && offset < text.length) {
+        // Space splits a unit label run like a symbol (S-098's separation
+        // family): the value keeps its own glyph-less cell (a unit needs a
+        // value — it never flies apart into the split), both label halves
+        // revert to ordinary symbols; the result is NOT a convertible pair
+        // (a settle never touches it — the explicit break stands).
+        const value = (node as { value: NodeJson }).value;
+        const payload = {
+          type: 'op', op: 'multiply',
+          args: [value, symFromText(text.slice(0, offset)), symFromText(text.slice(offset))],
+          implicit: true,
+        } as NodeJson;
+        return place(ctx, payload, replacePosOf(ref), {
+          kind: 'row', path: pathOf(ref), index: 2,
+        });
+      }
       if (offset > 0 && offset < text.length) {
         // Inside a token: split it into two glyph-less adjacent nodes —
         // two symbols (S-021's same-type state) or S-098's forced
         // number-number adjacency (the editing state; refuses evaluation).
+        // (A sub label's halves are unrepresentable — a silent no-op.)
         const left = node.type === 'sym' ? symFromText(text.slice(0, offset)) : numFromText(text.slice(0, offset));
         const right = node.type === 'sym' ? symFromText(text.slice(offset)) : numFromText(text.slice(offset));
         if (left === null || right === null) return ctx.state;
@@ -926,7 +1084,21 @@ function structureKey(ctx: Ctx, station: Station, kind: 'divide' | 'pow'): Editi
       });
     case 'tok': {
       const { node, ref, offset } = station;
-      const text = tokenText(node);
+      const text = stationText(station);
+      const base = pathOf(ref);
+      // A unit label or sub label never splits into halves (a unit cannot
+      // fly apart from its value; a sub is atomic node-wise): its edges read
+      // as whole-node grabs for the T7 split instead, interior label offsets
+      // are silent no-ops (the halves below cannot represent them).
+      if ((node.type === 'unit' || node.type === 'sub') && (offset === 0 || offset === text.length)) {
+        const structPath = base;
+        const to: Caret = offset === 0
+          ? node.type === 'unit'
+            ? { kind: 'token', path: [...structPath, rightSlot], index: 0 }
+            : { kind: 'node', path: [...structPath, rightSlot] }
+          : { kind: 'slot', path: structPath, slot: rightSlot };
+        return place(ctx, mk(offset === 0 ? null : node, offset === 0 ? node : null), replacePosOf(ref), to);
+      }
       let left: NodeJson | null = null;
       if (offset > 0) {
         left = node.type === 'sym' ? symFromText(text.slice(0, offset)) : numFromText(text.slice(0, offset));
@@ -986,6 +1158,207 @@ function structureKey(ctx: Ctx, station: Station, kind: 'divide' | 'pow'): Editi
   }
 }
 
+// ——— T9: the keyless-structure insertion vocabulary (rework session 2b-2) ———
+//
+// Root and subscript have no entry keys (the suggestion box and the palette
+// ride on this surface). Owner ruling 2026-11-09 (forward-grab): the root
+// OPENS at the caret — it wraps the content that FOLLOWS the caret; the
+// left-of-caret content stays in the row before it (a mid-token insert
+// splices: the right half goes under the radical, the left half juxtaposes
+// before the root). The caret comes to rest at the BEGINNING of the radicand
+// (its first text position when the radicand is a token); with nothing to
+// grab the radicand is a □ the caret sits in; a caret in a PENDING null
+// cell grabs the right operand (a+|b → a+√b). Square root = the v1
+// index-omitted form; the general root (mroot) grabs the same way and leaves
+// the index an EMPTY □ slot (the flag never combines with a filled
+// index — fromJSON's contract). The subscript converts the left-adjacent
+// symbol into the base (T5's conversion shape); its label strings are
+// caret-addressable one at a time (T9 ruling: a token caret on a sub
+// carries `label` — letters/digits glue into the addressed label while
+// its contracted identifier shape holds). One insert = one op = one log
+// entry; undo unwinds the whole creation (S-083).
+
+/** The insertion guard typeToken uses: an unresolvable caret is a typed
+ *  rejection, never a silent wrong placement. */
+function resolvableStationOf(state: EditingState): { ctx: Ctx; station: Station } {
+  const env = envelopeOf(state);
+  if (!caretResolvesIn(env, state.caret)) {
+    throw new EngineError(
+      'not-a-typing-point',
+      `caret does not resolve in this envelope (${JSON.stringify(state.caret)})`,
+    );
+  }
+  return {
+    ctx: { env, state, caret: state.caret, flagged: state.caret.boundary === true },
+    station: stationOf(env, state.caret),
+  };
+}
+
+/** Shift a caret that pointed at/into the grabbed subtree one level down:
+ *  after the grab the content sits under the fresh radicand slot of the
+ *  root that replaced it in place. */
+function underRadicand(caret: Caret, at: number): Caret {
+  if (caret.kind === 'empty') return caret; // unreachable: a grabbed entry caret is never empty
+  const path = [...caret.path];
+  path.splice(at, 0, 'radicand');
+  return { ...caret, path };
+}
+
+/** Grab the node at `targetPath` into a fresh root, replacing it in place;
+ *  the caret lands at the radicand's beginning (T7's right-slot rule: the
+ *  entry station of the still-unchanged subtree, one level deeper). */
+function grabCell(ctx: Ctx, targetPath: Path, mk: (radicand: NodeJson | null) => NodeJson): EditingState {
+  const target = nodeAt(ctx.env, targetPath) as NodeJson;
+  const entry = entryStation(ctx.env, targetPath, 'left') ?? { kind: 'node', path: targetPath };
+  return place(ctx, mk(target), replacePosOf(refOfPath(targetPath)), underRadicand(entry, targetPath.length));
+}
+
+/** Root insertion (T9): `opts.mroot` selects the n-th-root form (empty □
+ *  index slot); default = square root (index omitted, the v1 rule). Pure:
+ *  returns the next state. */
+export function insertRoot(state: EditingState, opts: { readonly mroot?: boolean } = {}): EditingState {
+  const rootOf = (radicand: NodeJson | null): NodeJson =>
+    (opts.mroot === true
+      ? { type: 'root', radicand, index: null, mroot: true }
+      : { type: 'root', radicand }) as NodeJson;
+  const emptyInto = (rootPath: Path): Caret => ({ kind: 'slot', path: rootPath, slot: 'radicand' });
+  const { ctx, station } = resolvableStationOf(state);
+  switch (station.kind) {
+    case 'void': {
+      if (station.ref.at === 'cell') {
+        const args = rowArgs(nodeAt(ctx.env, station.ref.path) as NodeJson);
+        const after = station.ref.index + 1;
+        if (after < args.length && args[after] !== null) {
+          // A caret IN a pending null cell grabs the right operand.
+          return grabCell(ctx, [...station.ref.path, after], rootOf);
+        }
+        return place(
+          ctx, rootOf(null),
+          { at: 'fill', path: station.ref.path, index: station.ref.index },
+          emptyInto([...station.ref.path, station.ref.index]),
+        );
+      }
+      return place(ctx, rootOf(null), posOf(station.ref), emptyInto(pathOf(station.ref)));
+    }
+    case 'tok': {
+      const { node, ref, offset } = station;
+      const text = stationText(station);
+      const base = pathOf(ref);
+      if (offset === 0) {
+        // Whole-token grab at the token's left end: the radicand's
+        // beginning is the token's own offset 0.
+        return place(ctx, rootOf(node), replacePosOf(ref), {
+          kind: 'token', path: [...base, 'radicand'], index: 0,
+        });
+      }
+      if (offset < text.length) {
+        const left = node.type === 'sym' ? symFromText(text.slice(0, offset)) : numFromText(text.slice(0, offset));
+        const right = node.type === 'sym' ? symFromText(text.slice(offset)) : numFromText(text.slice(offset));
+        if (left === null || right === null) return ctx.state; // unrepresentable half: silent no-op
+        return place(ctx, implicitPair(left, rootOf(right)), replacePosOf(ref), {
+          kind: 'token', path: [...base, 1, 'radicand'], index: 0,
+        });
+      }
+      // Nothing right of the caret: the □ template juxtaposes after.
+      return place(ctx, implicitPair(node, rootOf(null)), replacePosOf(ref), {
+        kind: 'slot', path: [...base, 1], slot: 'radicand',
+      });
+    }
+    case 'after': {
+      const fwd = forwardCellOf(ctx.env, station.ref);
+      if (fwd !== null) {
+        if (fwd.drop) {
+          return place(ctx, rootOf(null), { at: 'fill', path: fwd.path, index: fwd.index }, emptyInto([...fwd.path, fwd.index]));
+        }
+        return grabCell(ctx, [...fwd.path, fwd.index], rootOf);
+      }
+      // A complete structure at a slot/root with no following cell: the □
+      // template juxtaposes after the node.
+      const base = pathOf(station.ref);
+      return place(ctx, implicitPair(station.node, rootOf(null)), replacePosOf(station.ref), {
+        kind: 'slot', path: [...base, 1], slot: 'radicand',
+      });
+    }
+    case 'seam': {
+      const seam = seamOf(ctx.env, station);
+      if (seam.right !== null && seam.right.node !== null) {
+        return grabCell(ctx, seam.right.path, rootOf);
+      }
+      if (seam.right !== null) {
+        // The right edge descends into a row whose leading cell pends.
+        return place(ctx, rootOf(null), { at: 'fill', path: seam.right.path, index: 0 }, emptyInto([...seam.right.path, 0]));
+      }
+      if (station.index > 0 && station.args[station.index - 1] === null) {
+        // The row's own pending cell just left of the seam takes the □.
+        return place(ctx, rootOf(null), { at: 'fill', path: station.path, index: station.index - 1 }, emptyInto([...station.path, station.index - 1]));
+      }
+      // Row end: the □ template splices in as a fresh cell.
+      return place(ctx, rootOf(null), { at: 'row', path: station.path, index: station.index }, emptyInto([...station.path, station.index]));
+    }
+  }
+}
+
+/** The row-cell FORWARD of a ref (insertions at after-stations): the args
+ *  cell after the ref's own — null when the node sits at a slot/root (no
+ *  row cell follows); `drop: true` when that cell pends or the row ended
+ *  (the □ template fills it instead of grabbing). */
+function forwardCellOf(
+  env: Envelope,
+  ref: Ref,
+): { readonly path: Path; readonly index: number; readonly drop: boolean } | null {
+  if (ref.at !== 'cell') return null;
+  const args = rowArgs(nodeAt(env, ref.path) as NodeJson);
+  const i = ref.index + 1;
+  return { path: ref.path, index: i, drop: i >= args.length || args[i] === null };
+}
+
+/** Subscript insertion (T9, v1 label mode): the left-adjacent symbol
+ *  converts into the base (T5's conversion shape, offset irrelevant) with
+ *  the caret in the empty script label; anywhere else the empty
+ *  sub{base:'', sub:''} template is placed with the caret in the BASE label
+ *  (the first thing typed). A symbol whose name is not identifier-shaped
+ *  cannot become a base — the template juxtaposes instead. */
+export function insertSubscript(state: EditingState): EditingState {
+  const empty = subJson('', '');
+  const { ctx, station } = resolvableStationOf(state);
+  const baseCaret = (path: Path): Caret => ({ kind: 'token', path, index: 0, label: 'base' });
+  const scriptCaret = (path: Path): Caret => ({ kind: 'token', path, index: 0, label: 'sub' });
+  switch (station.kind) {
+    case 'void':
+      return place(ctx, empty, posOf(station.ref), baseCaret(pathOf(station.ref)));
+    case 'tok': {
+      const { node, ref, offset } = station;
+      if (node.type === 'sym' && subLabelShapeOk('base', tokenText(node))) {
+        return place(ctx, subJson(tokenText(node), ''), replacePosOf(ref), scriptCaret(station.path));
+      }
+      return juxtaposeToken(ctx, station, empty, offset === 0 ? 'before' : offset === stationText(station).length ? 'after' : 'split');
+    }
+    case 'after':
+      return place(ctx, implicitPair(station.node, empty), replacePosOf(station.ref), {
+        kind: 'token', path: [...pathOf(station.ref), 1], index: 0, label: 'base',
+      });
+    case 'seam': {
+      const seam = seamOf(ctx.env, station);
+      if (seam.left !== null && seam.left.node !== null && seam.left.node.type === 'sym' &&
+          subLabelShapeOk('base', tokenText(seam.left.node))) {
+        return place(ctx, subJson(tokenText(seam.left.node), ''), replacePosOf(refOfPath(seam.left.path)), scriptCaret(seam.left.path));
+      }
+      if (station.index > 0 && station.args[station.index - 1] === null) {
+        const idx = station.index - 1;
+        return place(ctx, empty, { at: 'fill', path: station.path, index: idx }, baseCaret([...station.path, idx]));
+      }
+      if (seam.right !== null && seam.right.node === null) {
+        return place(ctx, empty, { at: 'fill', path: seam.right.path, index: 0 }, baseCaret([...seam.right.path, 0]));
+      }
+      if (seam.right !== null && seam.right.node !== null) {
+        return place(ctx, implicitPair(empty, seam.right.node), replacePosOf(refOfPath(seam.right.path)), {
+          kind: 'token', path: [...seam.right.path, 0], index: 0, label: 'base',
+        });
+      }
+      return place(ctx, empty, { at: 'row', path: station.path, index: station.index }, baseCaret([...station.path, station.index]));
+    }
+  }
+}
 // ——— The typing surface ———
 
 /** Type one token into the session (the T1–T6 rules + amendments). Pure:
