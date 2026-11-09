@@ -86,6 +86,15 @@ describe('toMathML: structural rendering per node type', () => {
     );
   });
 
+  it('fn: the FIRST empty argument keeps the □; an empty argument beyond the first renders BARE — the trailing comma carries the state (the owner\'s B-23 live ruling)', () => {
+    expect(new FunctionNode('f', [null, new SymbolNode('z')]).toMathML()).toBe(
+      M`<math><mrow><mi>f</mi><mo fence="true">(</mo><mi>□</mi><mo>,</mo><mi>z</mi><mo fence="true">)</mo></mrow></math>`,
+    );
+    expect(new FunctionNode('f', [new SymbolNode('x'), null]).toMathML()).toBe(
+      M`<math><mrow><mi>f</mi><mo fence="true">(</mo><mi>x</mi><mo>,</mo><mo fence="true">)</mo></mrow></math>`,
+    );
+  });
+
   it('GroupNode renders one fenced mrow: (5+3)', () => {
     const ast = new GroupNode(new OperatorNode('add', [new NumberNode(5), new NumberNode(3)]));
     expect(ast.toMathML()).toBe(

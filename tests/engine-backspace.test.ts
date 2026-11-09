@@ -555,6 +555,28 @@ describe('D6 — BS at a □ unwraps and promotes (S-073/S-074/S-100–S-102/S-1
     }
   });
 
+  it("the owner's B-18 follow-up: outright deaths at an ARGS CELL leave the PENDING NULL — only the dying node goes, the + keeps dangling (x + √□ → x + |)", () => {
+    const deaths: { tree: unknown; caret: Caret }[] = [
+      // the flagged state itself: the empty radicand in an args row
+      { tree: op('add', sym('x'), { type: 'root', radicand: null } as NodeJson), caret: slot([1], 'radicand') },
+      // the same death class: the both-empty frac, the baseless sub, the valueless unit
+      { tree: op('add', sym('x'), frac(null, null)), caret: slot([1], 'num') },
+      { tree: op('add', sym('x'), sub('', '')), caret: tokc([1], 0, 'base') },
+      { tree: op('add', sym('x'), { type: 'unit', value: null, unit: 'm' } as NodeJson), caret: tokc([1], 1) },
+    ];
+    for (const { tree, caret } of deaths) {
+      const state = backspace(at(tree, caret));
+      expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('x'), null)), `death case ${j(caret)}`);
+      expect(state.caret).toEqual(rowc([], 1));
+      expect(state.log.length).toBe(1);
+      legal(state);
+      const undone = undo(state);
+      expect(j(envelopeOf(undone).root)).toBe(j(tree));
+      expect(undone.caret).toEqual(caret);
+      legal(undone);
+    }
+  });
+
   it('the D5/D6 asymmetry is INTENDED (S-102: outside deletes with content, inside unwraps and keeps the sibling)', () => {
     const outside = backspace(at(op('add', sym('x'), frac(num(1), num(2))), rowc([], 2)), { highlighted: [1] });
     expect(j(envelopeOf(outside).root)).toBe(j(op('add', sym('x'), null)));
@@ -608,9 +630,13 @@ describe('D7 — the function chain + the head swap (S-075/S-077, the S-023 A an
     expect(state.caret).toEqual({ kind: 'empty' });
     expect(state.log.length).toBe(1);
     legal(state);
-    // the multi-arg convergence: the empty SECOND argument kills the whole fn
+    // the multi-arg convergence RE-RULED (the owner's B-23 live ruling): no
+    // placeholder beyond the first argument — the emptied second argument
+    // collapses WITH its comma, the caret at the removed cell's seam
     state = backspace(at(fn('sin', [sym('x'), null]), rowc([], 1)));
-    expect(j(envelopeOf(state).root)).toBe('null');
+    expect(j(envelopeOf(state).root)).toBe(j(fn('sin', [sym('x')])));
+    expect(state.caret).toEqual(rowc([], 1)); // sin(x|
+    expect(state.log.length).toBe(1);
     legal(state);
     // and the freed spot inside a parent row is the parent seam
     state = backspace(at(op('add', sym('x'), fn('sin', [null])), rowc([1], 0)));
@@ -623,6 +649,52 @@ describe('D7 — the function chain + the head swap (S-075/S-077, the S-023 A an
     const state = backspace(at(fn('sin', [null, sym('y')]), rowc([], 1)));
     expect(j(envelopeOf(state).root)).toBe(j(fn('sin', [sym('y')])));
     expect(state.caret).toEqual(rowc([], 0));
+    legal(state);
+  });
+
+  it("the owner's B-23 chain, key by key: sin(x,y) → sin(x,|) → sin(x|) → sin(|□) → the fn dies — one log entry per key, byte-exact undo/redo", () => {
+    let state = at(fn('sin', [sym('x'), sym('y')]), rowc([], 2));
+    state = backspace(state); // y: its only letter — the freed cell is the seat
+    expect(j(envelopeOf(state).root)).toBe(j(fn('sin', [sym('x'), null])));
+    expect(state.caret).toEqual(rowc([], 1)); // sin(x,| — no placeholder renders
+    state = backspace(state); // the emptied second argument collapses WITH its comma
+    expect(j(envelopeOf(state).root)).toBe(j(fn('sin', [sym('x')])));
+    expect(state.caret).toEqual(rowc([], 1)); // sin(x|
+    state = backspace(state); // x: its only letter
+    expect(j(envelopeOf(state).root)).toBe(j(fn('sin', [null])));
+    expect(state.caret).toEqual(rowc([], 0)); // sin(|□)
+    state = backspace(state); // the FIRST argument's □: the whole fn dies
+    expect(j(envelopeOf(state).root)).toBe('null');
+    expect(state.caret).toEqual({ kind: 'empty' });
+    expect(state.log.length).toBe(4);
+    for (let i = 0; i < 4; i++) {
+      state = undo(state);
+      legal(state);
+    }
+    expect(j(envelopeOf(state).root)).toBe(j(fn('sin', [sym('x'), sym('y')])));
+    expect(state.caret).toEqual(rowc([], 2));
+    expect(state.log.length).toBe(0);
+    for (let i = 0; i < 4; i++) state = redo(state);
+    expect(j(envelopeOf(state).root)).toBe('null');
+    expect(state.caret).toEqual({ kind: 'empty' });
+  });
+
+  it('a mid-row empty argument collapses with its comma from either of its seats (B-23)', () => {
+    const inside = backspace(at(fn('sin', [sym('x'), null, sym('z')]), rowc([], 1)));
+    expect(j(envelopeOf(inside).root)).toBe(j(fn('sin', [sym('x'), sym('z')])));
+    expect(inside.caret).toEqual(rowc([], 1)); // sin(x,|z
+    legal(inside);
+    const behind = backspace(at(fn('sin', [sym('x'), null, sym('z')]), rowc([], 2)));
+    expect(j(envelopeOf(behind).root)).toBe(j(fn('sin', [sym('x'), sym('z')])));
+    expect(behind.caret).toEqual(rowc([], 1)); // sin(x,|z
+    legal(behind);
+  });
+
+  it('BS from BEHIND an open-ended fn whose trailing argument emptied collapses it too (B-23 from the tail side)', () => {
+    const state = backspace(at(op('add', sym('x'), fn('sin', [sym('a'), null], false)), node([1])));
+    expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('x'), fn('sin', [sym('a')], false))));
+    expect(state.caret).toEqual(rowc([1], 1)); // x + sin(a|
+    expect(state.log.length).toBe(1);
     legal(state);
   });
 });

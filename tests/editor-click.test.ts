@@ -147,17 +147,24 @@ describe('click mapping: fraction with null num, filled den', () => {
 });
 
 describe('click mapping: empty row cell, empty formula, unit, group nesting', () => {
-  it('null fn-arg cell placeholder → row caret in the empty arg (fn args keep □)', () => {
-    // Re-pinned (T7 split): op-row null cells render BARE and have no □ to
-    // click — placeholder-click coverage moves to a fn args row; a bare op-row
-    // null cell is still reached by clicking the adjacent separator glyph.
-    const env = { v: 1, root: { type: 'fn', name: 'f', args: [sym('a'), null] } };
-    const cellCaret: Caret = row(1);
-    const f = fixture(env, { '[]': { left: 0, top: 0, width: 20, height: 10 }, '[0]': { left: 0, top: 0, width: 10, height: 10 } }, {
-      [caretKey(cellCaret)]: { left: 12, top: 0, width: 6, height: 10 },
+  it('the FIRST fn arg null → its □ placeholder → row caret in the empty arg (re-pinned per the owner\'s B-23 live ruling: the □ lives on the first argument only)', () => {
+    // Re-pinned (the owner's B-23 ruling): a fn argument beyond the first
+    // renders BARE when empty — placeholder-click coverage lives on the
+    // FIRST argument; a bare later empty arg is reached via its comma.
+    const env = { v: 1, root: { type: 'fn', name: 'f', args: [null, sym('a')] } };
+    const cellCaret: Caret = row(0);
+    const f = fixture(env, { '[]': { left: 0, top: 0, width: 20, height: 10 }, '[1]': { left: 0, top: 0, width: 10, height: 10 } }, {
+      [caretKey(cellCaret)]: { left: 2, top: 0, width: 6, height: 10 },
     });
     click(f.placeholder(cellCaret), 14);
     expect(f.controller.getState().caret).toEqual(cellCaret);
+  });
+
+  it('a bare fn empty SECOND argument: clicking its comma reaches the empty cell (the op-row bare analog)', () => {
+    const env = { v: 1, root: { type: 'fn', name: 'f', args: [sym('a'), null] } };
+    const f = fixture(env, { '[]': { left: 0, top: 0, width: 20, height: 10 }, '[0]': { left: 0, top: 0, width: 10, height: 10 } });
+    click(f.sep(0), 12);
+    expect(f.controller.getState().caret).toEqual(row(1));
   });
 
   it('bare op-row null cell: clicking the flanking separator glyph reaches the empty cell', () => {

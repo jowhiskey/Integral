@@ -386,10 +386,14 @@ export class FunctionNode extends MathNode {
   protected mathmlContent(): string {
     // Name + fenced args; commas separate multiple args, a zero-arg call
     // (complete, evaluable — host zero-arg functions are legal) shows ().
-    // Function arguments are placeholder territory (T7/S-023): a null arg
-    // cell renders exactly one □. close = false: the movable closing fence
-    // is absent — the row stands open.
-    const args = this.args.map((a) => this.childMathml(a)).join('<mo>,</mo>');
+    // The FIRST argument is placeholder territory (T7/S-023 A: its null
+    // cell renders exactly one □); an argument BEYOND the first renders BARE
+    // when empty (the owner's B-23 live re-ruling: no placeholder — the
+    // trailing comma carries the state). close = false: the movable closing
+    // fence is absent — the row stands open.
+    const args = this.args
+      .map((a, i) => (a === null && i > 0 ? this.bareMathml(a) : this.childMathml(a)))
+      .join('<mo>,</mo>');
     const close = this.close ? '<mo fence="true">)</mo>' : '';
     return `<mrow><mi>${escapeMathml(this.name)}</mi><mo fence="true">(</mo>${args}${close}</mrow>`;
   }

@@ -970,10 +970,10 @@ export const CASES: readonly CatalogCase[] = [
     id: 'B-23',
     rules: ['D7', 'S-075', 'S-023'],
     category: 'B',
-    label: 'sin(x, □) — the empty second argument',
-    stress: 'Backspace in the empty second argument (the whole function goes).',
-    envelope: env(fn('sin', sym('x'), null)),
-    caret: rw([], 1),
+    label: 'sin(x, y) — the empty-argument chain (B-23 re-ruled)',
+    stress: 'Backspace chain: y goes, the emptied SECOND argument (no placeholder, just the comma) collapses with it, then x — the first argument shows its □ — then the whole function dies.',
+    envelope: env(fn('sin', sym('x'), sym('y'))),
+    caret: rw([], 2),
   },
   {
     id: 'B-24',
@@ -1047,6 +1047,15 @@ export const CASES: readonly CatalogCase[] = [
     stress: 'Backspace highlights the root red; Backspace again deletes the entire root with its content.',
     envelope: env(op('add', sym('x'), root(sym('a')))),
     caret: rw([], 2),
+  },
+  {
+    id: 'B-32',
+    rules: ['D6', 'S-073'],
+    category: 'B',
+    label: 'x + √□ — the EMPTY radicand, caret inside it',
+    stress: "Backspace deletes ONLY the root structure — the + keeps dangling (x + |), nothing else goes (the owner's B-18 follow-up).",
+    envelope: env(op('add', sym('x'), root(null))),
+    caret: sl([1], 'radicand'),
   },
 
   // ——— M: navigation (horizontal + vertical) ———

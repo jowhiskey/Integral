@@ -180,6 +180,35 @@ describe('the ruled chains through the keyboard', () => {
     expect(del.defaultPrevented).toBe(true);
     expect(controller.getState()).toBe(before);
   });
+
+  it("B-23 through the keyboard: the empty-argument chain sin(x,y) → sin(x,|) → sin(x|) → sin(|□) → the fn dies; NO placeholder renders beyond the first argument", () => {
+    const env = { v: 1, root: { type: 'fn', name: 'sin', args: [sym('x'), sym('y')] } };
+    const { controller, container } = make(env);
+    controller.placeCaret(rowc([], 2));
+    container.focus();
+    press(container, 'Backspace'); // y — the freed seat renders BARE (no □)
+    expect(j(controller.getEnvelope().root)).toBe(j({ type: 'fn', name: 'sin', args: [sym('x'), null] }));
+    expect(controller.getRendered()!.placeholders.size).toBe(0); // the □ lives on the FIRST argument only
+    press(container, 'Backspace'); // the emptied second argument collapses WITH its comma
+    expect(j(controller.getEnvelope().root)).toBe(j({ type: 'fn', name: 'sin', args: [sym('x')] }));
+    press(container, 'Backspace'); // x
+    expect(j(controller.getEnvelope().root)).toBe(j({ type: 'fn', name: 'sin', args: [null] }));
+    press(container, 'Backspace'); // sin(|□) — the whole function dies
+    expect(j(controller.getEnvelope().root)).toBe('null');
+    expect(controller.getState().caret).toEqual({ kind: 'empty' });
+    expect(controller.getState().log.length).toBe(4);
+  });
+
+  it("B-18 through the keyboard: BS at the EMPTY radicand of a root in an args row kills ONLY the root — the + keeps dangling", () => {
+    const env = { v: 1, root: op('add', sym('x'), { type: 'root', radicand: null }) };
+    const { controller, container } = make(env);
+    controller.placeCaret(slot([1], 'radicand'));
+    container.focus();
+    press(container, 'Backspace');
+    expect(j(controller.getEnvelope().root)).toBe(j(op('add', sym('x'), null))); // x + |
+    expect(j(controller.getState().caret)).toBe(j(rowc([], 1)));
+    expect(controller.getState().log.length).toBe(1);
+  });
 });
 
 describe('D5 highlight-then-delete through the keyboard (transient, never logged)', () => {

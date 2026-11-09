@@ -51,8 +51,10 @@
 //        root's index is a LEFT slot — the owner's B-18 ruling:
 //        `x + ₙ√a` → `x + |a`).
 //  D7 — functions: the movable `)` deletes first (close → false), then the
-//        chain runs char-wise inward; an emptied argument is the □ and BS
-//        there deletes the ENTIRE function (S-075, the S-023 anchor); BS at
+//        chain runs char-wise inward; the FIRST argument's emptied □ deletes
+//        the ENTIRE function (S-075, the S-023 A anchor); an emptied argument
+//        BEYOND the first carries NO placeholder and collapses WITH its comma
+//        (the owner's B-23 live re-ruling); BS at
 //        the argument start deletes the entire ATOMIC head `sin(` — content
 //        and closing paren survive as a glyph-less pair carrying the close as
 //        a fence token (S-077). The one caret where both rules meet — the
@@ -299,7 +301,9 @@ function unitStrip(env: Envelope, path: Path): BackspaceDecision {
   const ref = refOfPath(path);
   const value = (nodeAt(env, path) as { value: NodeJson | null }).value;
   if (value === null) {
-    return { kind: 'unwrap', ops: [{ op: 'deleteAt', at: posOfRef(ref) }], caret: freedSpot(ref) };
+    // The valueless unit dies whole — pending-null at an args cell (the
+    // B-18 class: the left neighbor keeps dangling).
+    return outrightDeath(env, path, 'unwrap');
   }
   const after = withRefSet(env, ref, value);
   const to = spliceStation(after, ref, 'right'); // the label stood right of the value
@@ -311,7 +315,7 @@ function unitStrip(env: Envelope, path: Path): BackspaceDecision {
 /** D1: a deletion that empties a token removes the NODE — at an args cell the
  *  cell becomes the PENDING NULL (the glyph survives as dangling; the D2 rule
  *  deletes it next), at a fixed slot the □, at the root the empty formula. */
-function tokenDeath(env: Envelope, path: Path, station: Caret): BackspaceDecision {
+function tokenDeath(env: Envelope, path: Path, station?: Caret): BackspaceDecision {
   const ref = refOfPath(path);
   if (ref.at !== 'cell') {
     return { kind: 'token-death', ops: [{ op: 'deleteAt', at: posOfRef(ref) }], caret: freedSpot(ref) };
@@ -405,7 +409,9 @@ function subScriptUnwrap(env: Envelope, path: Path, node: NodeJson): BackspaceDe
   const base = (node as { base: string; sub: string }).base;
   const ref = refOfPath(path);
   if (base === '') {
-    return { kind: 'unwrap', ops: [{ op: 'deleteAt', at: posOfRef(ref) }], caret: freedSpot(ref) };
+    // The baseless sub dies with nothing promoted — pending-null at an args
+    // cell (the B-18 class).
+    return outrightDeath(env, path, 'unwrap');
   }
   const promoted = symOf(base);
   const after = withRefSet(env, ref, promoted);
@@ -422,9 +428,8 @@ function subLabelAtStart(env: Envelope, node: NodeJson, path: Path, label: SubLa
   if (label === 'base' && labels.base === '') {
     // A baseless sub cannot keep content (the script is a modifier channel):
     // the structure dies, nothing promoted (the empty-template both-empty
-    // case included).
-    const ref = refOfPath(path);
-    return { kind: 'unwrap', ops: [{ op: 'deleteAt', at: posOfRef(ref) }], caret: freedSpot(ref) };
+    // case included) — pending-null at an args cell (the B-18 class).
+    return outrightDeath(env, path, 'unwrap');
   }
   if (label === 'base') {
     // The sub's visual left edge: the before-station rules of its container.
@@ -489,19 +494,30 @@ function fencedTail(env: Envelope, path: Path, node: NodeJson, station: Caret, c
     return child === null ? containerDeath(env, path, station) : tail(env, [...path, 'child'], station, ctx);
   }
   const rowArgs_ = args as (NodeJson | null)[];
+  if (rowArgs_.length > 1 && rowArgs_[rowArgs_.length - 1] === null) {
+    // The trailing argument emptied (the chain reached it from behind, the
+    // close already gone) — the owner's B-23 live ruling: no placeholder
+    // beyond the first argument; the argument (and its comma) collapse.
+    return argCollapse(env, path, rowArgs_.length - 1);
+  }
   if (rowArgs_.length === 0 || rowArgs_[rowArgs_.length - 1] === null) {
-    // The emptied argument is the □ (S-023 A): BS deletes the ENTIRE function.
+    // The FIRST argument's □ (S-023 A): BS deletes the ENTIRE function.
     return containerDeath(env, path, station);
   }
   return tail(env, [...path, rowArgs_.length - 1], station, ctx);
 }
 
+/** The outright structure death (the B-14/B-26/B-18 class): at an args cell
+ *  the freed spot is the PENDING NULL — only the dying node goes, the left
+ *  neighbor keeps dangling; a one-cell remainder unwraps through the same
+ *  tokenDeath placement; root/slot refs keep the plain deleteAt. One op. */
+function outrightDeath(env: Envelope, path: Path, kind: BackspaceKind): BackspaceDecision {
+  const death = tokenDeath(env, path);
+  return { kind, ops: death.ops, caret: death.caret };
+}
+
 function containerDeath(env: Envelope, path: Path, station: Caret): BackspaceDecision {
-  // At an args cell the death leaves the PENDING NULL — the neighboring
-  // operator keeps dangling (B-14/B-26: only the container dies); a one-cell
-  // remainder unwraps through the same tokenDeath placement. One op.
-  const death = tokenDeath(env, path, station);
-  return { kind: 'container-death', ops: death.ops, caret: death.caret };
+  return outrightDeath(env, path, 'container-death');
 }
 
 // ——— D2 glyph / open fence / head ———
@@ -535,8 +551,9 @@ function glyphSplice(env: Envelope, rowPath: Path, nullIndex: number, station: C
   const cells = args.filter((_, i) => i !== nullIndex);
   if (cells.length === 0 || (cells.length === 1 && cells[0] === null)) {
     // Nothing visible remains (the fresh glyph template, an all-null row):
-    // the row dies with its glyph.
-    return { kind: 'glyph', ops: [{ op: 'deleteAt', at: posOfRef(ref) }], caret: freedSpot(ref) };
+    // the row dies with its glyph — pending-null at an args cell (the B-18
+    // class); root/slot rows keep the plain removal.
+    return outrightDeath(env, rowPath, 'glyph');
   }
   if (cells.length === 1 && cells[0] !== null) {
     const after = withRefSet(env, ref, cells[0]);
@@ -545,6 +562,17 @@ function glyphSplice(env: Envelope, rowPath: Path, nullIndex: number, station: C
   }
   const to: Caret = { kind: 'row', path: rowPath, index: Math.min(nullIndex, cells.length) };
   return { kind: 'glyph', ops: [{ op: 'place', node: rowClone(row, cells), at: replacePosOfRef(ref), to }], caret: to };
+}
+
+/** The owner's B-23 live re-ruling: an empty fn argument BEYOND the first is
+ *  no placeholder territory — BS collapses the argument cell WITH its
+ *  separator (the comma goes, the remaining arguments close ranks:
+ *  `sin(x,□)` → `sin(x)`), the caret at the removed cell's seam. One op. */
+function argCollapse(env: Envelope, rowPath: Path, drop: number): BackspaceDecision {
+  const row = nodeAt(env, rowPath) as NodeJson;
+  const cells = rowArgs(row).filter((_, i) => i !== drop);
+  const to: Caret = { kind: 'row', path: rowPath, index: Math.min(drop, cells.length) };
+  return { kind: 'glyph', ops: [{ op: 'place', node: rowClone(row, cells), at: replacePosOfRef(refOfPath(rowPath)), to }], caret: to };
 }
 
 /** The landing station after an open-fence/head delete: content + close-fence
@@ -695,11 +723,10 @@ function rowSeam(env: Envelope, rowPath: Path, index: number, station: Caret, ct
     return glyphBond(env, rowPath, index - 1);
   }
 
-  // An empty fn argument left of the seam: the argument cell (and its comma) go.
+  // An empty fn argument left of the seam: the argument cell (and its comma)
+  // collapse (the argCollapse helper — the owner's B-23 ruling).
   if (fn && index > 0 && args[index - 1] === null) {
-    const cells = args.filter((_, i) => i !== index - 1);
-    const to: Caret = { kind: 'row', path: rowPath, index: index - 1 };
-    return { kind: 'glyph', ops: [{ op: 'place', node: rowClone(row, cells), at: replacePosOfRef(refOfPath(rowPath)), to }], caret: to };
+    return argCollapse(env, rowPath, index - 1);
   }
 
   if (index === 0) {
@@ -827,8 +854,10 @@ function unwrap(env: Envelope, parentPath: Path, parent: NodeJson, station: Care
   const ref = refOfPath(parentPath);
   if (siblingSlot === null || sibling === null) {
     // The sibling slot does not exist or is empty too → outright death,
-    // nothing promoted (S-073: "both slots empty → the structure dies").
-    return { kind: 'unwrap', ops: [{ op: 'deleteAt', at: posOfRef(ref) }], caret: freedSpot(ref) };
+    // nothing promoted (S-073: "both slots empty → the structure dies") —
+    // pending-null at an args cell (the owner's B-18 follow-up: x + sqrt(□)
+    // → x+, ONLY the root structure dies).
+    return outrightDeath(env, parentPath, 'unwrap');
   }
   const facing = SLOT_SIDE[slot] ?? 'left'; // the DELETED slot's geometric side (B-18)
   const after = withRefSet(env, ref, sibling);
@@ -841,8 +870,12 @@ function rowStationEntry(env: Envelope, caret: Extract<Caret, { kind: 'row' }>, 
   if (row === null || !isRowNode(row)) return noopDecision(caret);
   const args = rowArgs(row);
   if (row.type === 'fn' && caret.index < args.length && args[caret.index] === null) {
-    // D7a (S-075, S-023 A): the □ argument — BS deletes the ENTIRE function.
-    return containerDeath(env, caret.path, caret);
+    // D7a (S-075, S-023 A): the FIRST argument's □ kills the ENTIRE function;
+    // the owner's B-23 live re-ruling: an empty argument BEYOND the first
+    // carries NO placeholder — it collapses WITH its comma instead.
+    return caret.index === 0
+      ? containerDeath(env, caret.path, caret)
+      : argCollapse(env, caret.path, caret.index);
   }
   return rowSeam(env, caret.path, caret.index, caret, ctx);
 }

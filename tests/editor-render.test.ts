@@ -34,6 +34,7 @@ const CORPUS: Record<string, unknown> = {
   fn: { v: 1, root: { type: 'fn', name: 'sin', args: [sym('x'), num(0.5)] } },
   fnZeroArg: { v: 1, root: { type: 'fn', name: 'f', args: [] } },
   fnNullArg: { v: 1, root: { type: 'fn', name: 'f', args: [null] } },
+  fnNullSecondArg: { v: 1, root: { type: 'fn', name: 'f', args: [sym('a'), null] } },
   group: { v: 1, root: { type: 'group', parens: 'always', child: { type: 'op', op: 'add', args: [sym('a'), sym('b')] } } },
   groupNull: { v: 1, root: { type: 'group', parens: 'always', child: null } },
   groupUnit: { v: 1, root: { type: 'group', parens: 'always', child: { type: 'unit', value: num(50), unit: 'mm' } } },
@@ -162,6 +163,13 @@ describe('editor renderer: per-type pinned structure', () => {
     const fences = [...r.math.querySelectorAll('mo')].filter((m) => m.getAttribute('fence') === 'true');
     expect(fences.map((m) => m.textContent)).toEqual(['(', ')']);
     expect(shape(built('fnZeroArg').math)).toBe('<math><mrow><mi>#f</mi><mo>#(</mo><mo>#)</mo></mrow></math>');
+  });
+
+  it('fn: an empty argument BEYOND the first renders BARE — no □ element, a bare-cell anchor at its comma (the owner\'s B-23 live ruling)', () => {
+    const r = built('fnNullSecondArg');
+    expect(shape(r.math)).toBe('<math><mrow><mi>#f</mi><mo>#(</mo><mi>#a</mi><mo>#,</mo><mo>#)</mo></mrow></math>');
+    expect(r.placeholders.size).toBe(0);
+    expect(r.bareAnchors.get(caretKey({ kind: 'row', path: [], index: 1 }))).toBeDefined();
   });
 
   it('group → mrow with fence="true" parens; flat op child inlines (one mrow)', () => {

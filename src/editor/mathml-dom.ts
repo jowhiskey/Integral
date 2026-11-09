@@ -167,8 +167,10 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
   // A node's loose fragment: the elements its mathmlContent() would produce,
   // without any contextual wrapper. Slots/rows/root add the wrappers.
 
-  /** childMathml: loose child in a fn args row (null → placeholder with a ROW
-   *  caret — function arguments are placeholder territory, T7/S-023). */
+  /** childMathml: loose child in a fn args row. The FIRST argument cells
+   *  are placeholder territory (T7/S-023 A: null → □ with a ROW caret); an
+   *  empty argument beyond the first renders BARE at the fn case (the
+   *  owner's B-23 live ruling), never through this helper. */
   const rowChild = (path: Path, index: number, child: MathNode | null): Element[] =>
     child === null
       ? [placeholder({ kind: 'row', path, index })]
@@ -309,14 +311,25 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
         const open = mo('(', true);
         fenceGlyphs.set(open, { path, side: 'open' });
         mrow.appendChild(open);
+        // An empty argument BEYOND the first renders BARE — no placeholder
+        // (the owner's B-23 live ruling: the trailing comma carries the
+        // state, the caret anchors at it like a bare op-row cell); the FIRST
+        // argument keeps its □ (T7/S-023 A).
+        const sepEls: (Element | undefined)[] = [];
+        const bareCells: number[] = [];
         fn.args.forEach((arg, i) => {
           if (i > 0) {
             const comma = mo(',', false);
             separators.set(comma, { path, index: i });
+            sepEls[i] = comma;
             mrow.appendChild(comma);
+            if (arg === null) bareCells.push(i);
           }
-          for (const f of rowChild(path, i, arg)) mrow.appendChild(f);
+          if (arg !== null || i === 0) {
+            for (const f of rowChild(path, i, arg)) mrow.appendChild(f);
+          }
         });
+        anchorBareCells(path, mrow, bareCells, sepEls);
         // close = false: the movable closing fence is absent — the row stands
         // open (the missing-close state stays addressable through the map).
         if (fn.close) {
