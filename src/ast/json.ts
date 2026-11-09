@@ -11,7 +11,12 @@
 export type FencePath = readonly (number | string)[];
 
 export type NodeJson =
-  | { type: 'num'; value: number }
+  // dot: the in-progress trailing decimal point (T4/S-012) — the number
+  // renders `5.` and the in-token offsets address the dot (storable; additive,
+  // emitted only when true so balanced states stay byte-unchanged). A dotted
+  // number evaluates as its value (`5.` = 5) — the flag is visual/editing
+  // state only, never evaluation semantics.
+  | { type: 'num'; value: number; dot?: true }
   | { type: 'sym'; name: string }
   // implicit: render/storability marker of glyph-less juxtaposition (a multiply
   // row renders without × glyphs). Rendering/storability only — never written

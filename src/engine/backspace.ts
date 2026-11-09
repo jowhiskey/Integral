@@ -1,5 +1,5 @@
 // Backspace (DOM-arc session 3): decideBackspace — a pure decision function
-// styled after decideAttach/decideSwap — that emits EXISTING mechanical ops.
+// styled after the typing surface — that emits EXISTING mechanical ops.
 // One backspace = at most one op = at most one log entry; a no-op decision
 // applies nothing and logs nothing.
 //

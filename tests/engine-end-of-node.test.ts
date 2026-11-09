@@ -54,18 +54,6 @@ const legalEndState = (s: EditingState): void => {
   expect(caretResolvesIn(env, s.caret)).toBe(true);
 };
 
-/** typeToken throws the typed not-a-typing-point for juxtaposition cases. */
-const expectJuxtapositionReject = (s: EditingState, token: TypedToken): void => {
-  const before = j([envelopeOf(s), s.caret, s.log.length]);
-  let code = '';
-  try {
-    typeToken(s, token);
-  } catch (e) {
-    code = (e as EngineError).code;
-  }
-  expect(code).toBe('not-a-typing-point');
-  expect(j([envelopeOf(s), s.caret, s.log.length])).toBe(before); // rejection changes nothing
-};
 
 describe('digit typing merges at the number’s own end station (node caret on a number)', () => {
   it('expressibility: the token end offset is a legal caret at root, in slots, and in row cells', () => {
@@ -129,9 +117,14 @@ describe('digit typing merges at the number’s own end station (node caret on a
     legalEndState(f);
   });
 
-  it('letters at a node caret on a number stay the juxtaposition rejection; operators keep their surface', () => {
+  it('letters at a node caret on a number juxtapose (T3 rework); operators keep their wrap', () => {
     const s = at(seed(num(50)), node([]));
-    expectJuxtapositionReject(s, letter('x'));
+    const jp = typeToken(s, letter('x'));
+    expect(j(envelopeOf(jp).root)).toBe(
+      j({ type: 'op', op: 'multiply', args: [num(50), sym('x')], implicit: true }),
+    );
+    expect(jp.log.length).toBe(2); // the moveCaret seed + the juxtaposition op
+    legalEndState(jp);
     // a structure token wraps the number as it always did at that station
     const w = typeToken(s, plus);
     expect(j(envelopeOf(w).root)).toBe(j({ type: 'op', op: 'add', args: [num(50), null] }));
@@ -212,11 +205,22 @@ describe('typing at the row-end seam (route to the last operand’s hold / trail
     legalEndState(s);
   });
 
-  it('juxtaposition at the seam stays rejected: digits/letters after a symbol, letters after a number', () => {
-    expectJuxtapositionReject(at(seed({ type: 'op', op: 'add', args: [sym('x'), sym('y')] }), rowc([], 2)), d('3'));
-    expectJuxtapositionReject(at(seed({ type: 'op', op: 'add', args: [sym('x'), num(50)] }), rowc([], 2)), letter('z'));
-    // interior seams keep their typed rejection (the swap owns them)
-    expectJuxtapositionReject(at(seed({ type: 'op', op: 'add', args: [sym('x'), sym('y')] }), rowc([], 1)), d('3'));
+  it('the literal-rework seam rules: digit-glue after a symbol, juxtaposition after a number', () => {
+    // digit at the end seam after a symbol joins the left NAME (digit-glue amendment)
+    const dig = typeToken(at(seed({ type: 'op', op: 'add', args: [sym('x'), sym('y')] }), rowc([], 2)), d('3'));
+    expect(j(envelopeOf(dig).root)).toBe(j({ type: 'op', op: 'add', args: [sym('x'), sym('y3')] }));
+    expect(dig.caret).toEqual(rowc([], 2)); // the seam survives the replace
+    legalEndState(dig);
+    // letter after a number at the end seam: the juxtaposition pair (5z)
+    const jp = typeToken(at(seed({ type: 'op', op: 'add', args: [sym('x'), num(50)] }), rowc([], 2)), letter('z'));
+    expect(j(envelopeOf(jp).root)).toBe(
+      j({ type: 'op', op: 'add', args: [sym('x'), { type: 'op', op: 'multiply', args: [num(50), sym('z')], implicit: true }] }),
+    );
+    legalEndState(jp);
+    // an interior seam after a symbol: the digit joins the left name too
+    const interior = typeToken(at(seed({ type: 'op', op: 'add', args: [sym('x'), sym('y')] }), rowc([], 1)), d('3'));
+    expect(j(envelopeOf(interior).root)).toBe(j({ type: 'op', op: 'add', args: [sym('x3'), sym('y')] }));
+    legalEndState(interior);
   });
 });
 
@@ -251,18 +255,18 @@ describe('relocation carries the end-of-node stations', () => {
   });
 });
 
-describe('the times token at the seam and holds agree (one op, one log entry)', () => {
-  it('× at the end seam of a+b+c| binds like typing on c (nest in the right operand, caret at the pending cell)', () => {
+describe('a different-op glyph at the end seam wraps the whole segment (one op, one log entry)', () => {
+  it('× at the end seam of a+b+c| wraps the row: multiply[add(row), null], caret after the glyph', () => {
     let s = at(seed({ type: 'op', op: 'add', args: [sym('a'), sym('b'), sym('c')] }), rowc([], 3));
     s = typeToken(s, times);
     expect(j(envelopeOf(s).root)).toBe(
       j({
         type: 'op',
-        op: 'add',
-        args: [sym('a'), sym('b'), { type: 'op', op: 'multiply', args: [sym('c'), null] }],
+        op: 'multiply',
+        args: [{ type: 'op', op: 'add', args: [sym('a'), sym('b'), sym('c')] }, null],
       }),
     );
-    expect(s.caret).toEqual({ kind: 'row', path: [2], index: 1 }); // identical to typing on c
+    expect(s.caret).toEqual({ kind: 'row', path: [], index: 1 }); // directly after the × glyph
     expect(s.log.length).toBe(2); // the moveCaret seed + one structural op
     legalEndState(s);
   });

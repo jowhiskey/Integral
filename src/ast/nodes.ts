@@ -162,17 +162,24 @@ const jsonOrNull = (node: MathNode | null): NodeJson | null => (node === null ? 
 
 export class NumberNode extends MathNode {
   readonly type = 'num' as const;
-  constructor(readonly value: number) {
+  /** The in-progress trailing decimal point (T4/S-012): renders `5.`; the
+   *  in-token offsets address the dot. Evaluates as its value — visual/editing
+   *  state only, never evaluation semantics. */
+  readonly dot: boolean;
+  constructor(readonly value: number, dot: boolean = false) {
     super();
+    this.dot = dot;
   }
   toJSON(): NodeJson {
-    return { type: 'num', value: this.value };
+    return this.dot ? { type: 'num', value: this.value, dot: true } : { type: 'num', value: this.value };
   }
   toMathNode(): MathJsNode {
+    // A dotted number evaluates as its value (`5.` = 5) — owner ruling
+    // (math-style projection principle; mathjs parity).
     return new MathConstantNode(this.value);
   }
   protected mathmlContent(): string {
-    return `<mn>${escapeMathml(String(this.value))}</mn>`;
+    return `<mn>${escapeMathml(String(this.value))}${this.dot ? '.' : ''}</mn>`;
   }
 }
 
@@ -210,14 +217,15 @@ export function projectsUnaryRow(args: readonly (MathNode | null)[]): boolean {
 }
 
 /**
- * Glyph-less juxtaposition adjacency (Owner amendment): a pair is legal iff
- * its left cell is a number and its right cell is not — a number before a
- * symbol/group/structure is implicit multiplication; a symbol (or any other
- * non-number) before anything refuses (evaluation annotation, not a typing
+ * Glyph-less juxtaposition adjacency (Owner amendment + the widened pair rule,
+ * session-2a): a pair is legal iff its left cell is a number or a GROUP and
+ * its right cell is not a number — a number before a symbol/group/structure is
+ * implicit multiplication, and (ruled 2026-11-08) a group before X reads the
+ * same way; any other left cell refuses (evaluation annotation, not a typing
  * restriction); number next to number stays forbidden (S-098).
  */
 export function implicitPairLegal(left: MathNode, right: MathNode): boolean {
-  return left.type === 'num' && right.type !== 'num';
+  return (left.type === 'num' || left.type === 'group') && right.type !== 'num';
 }
 
 /** n-ary operator; `op` is a mathjs function name (add, subtract, multiply, unaryMinus, ...).

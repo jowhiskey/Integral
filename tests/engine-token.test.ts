@@ -13,7 +13,6 @@ import {
   applyOp,
   caretResolves,
   caretResolvesIn,
-  decideSwap,
   envelopeOf,
   EngineError,
   initSession,
@@ -54,7 +53,12 @@ describe('token caret validity (caretResolvesIn)', () => {
     expect(caretResolvesIn(env, token([], 4))).toBe(false);
     expect(caretResolvesIn(env, token([], -1))).toBe(false);
     expect(caretResolvesIn(env, token([], 1.5))).toBe(false);
-    expect(caretResolvesIn(envOf(sym('a')), token([], 0))).toBe(false);
+    // rework 2a: symbols are in-token tokens too (T3 glue/split at offsets)
+    expect(caretResolvesIn(envOf(sym('ab')), token([], 1))).toBe(true);
+    expect(caretResolvesIn(envOf(sym('ab')), token([], 2))).toBe(true); // offset len is legal
+    expect(caretResolvesIn(envOf(sym('ab')), token([], 3))).toBe(false);
+    // non-token nodes still carry no in-token offsets
+    expect(caretResolvesIn(envOf({ v: 1, root: { type: 'group', parens: 'always', child: sym('a') } }), token([], 0))).toBe(false);
     expect(caretResolvesIn(envOf({ v: 1, root: null }), token([], 0))).toBe(false);
     expect(caretResolvesIn(envOf({ v: 1, root: { type: 'frac', num: num(12), den: null } }), token(['num'], 2))).toBe(true);
     expect(caretResolvesIn(envOf({ v: 1, root: { type: 'frac', num: num(12), den: null } }), token(['den'], 0))).toBe(false); // null slot
@@ -181,7 +185,7 @@ describe('typing at in-token positions (Task 5)', () => {
     // 12|3 + '+' → 12+3
     let state = typeToken(at(num(123), token([], 2)), { t: 'operator', fn: 'add' });
     expect(j(envelopeOf(state).root)).toBe(j({ type: 'op', op: 'add', args: [num(12), num(3)] }));
-    expect(state.caret).toEqual(node([])); // natural-continue (the replace's dive; the wrapper is full)
+    expect(state.caret).toEqual(row([], 1)); // directly after the inserted glyph (literal insertion)
     expect(state.log.length).toBe(1);
     legal(state);
     // 1|23 + '/' → frac(1, 23)
@@ -212,35 +216,53 @@ describe('typing at in-token positions (Task 5)', () => {
     legal(state);
   });
 
-  it('boundary offsets 0/len degenerate to the existing (node-caret) policy — no split', () => {
-    // offset len: '+' wraps the whole number
-    let state = typeToken(at(num(123), token([], 3)), { t: 'operator', fn: 'add' });
+  it('boundary offsets: len wraps right ([token, null]); 0 leads ([null, token]) — T1/S-003', () => {
+    // offset 0: a leading glyph (`|123` + `+` → `+|123`)
+    let state = typeToken(at(num(123), token([], 0)), { t: 'operator', fn: 'add' });
+    expect(j(envelopeOf(state).root)).toBe(j({ type: 'op', op: 'add', args: [null, num(123)] }));
+    expect(state.caret).toEqual(row([], 1));
+    legal(state);
+    // offset len: the trailing pending cell (`123|` + `+` → `123+|`)
+    state = typeToken(at(num(123), token([], 3)), { t: 'operator', fn: 'add' });
     expect(j(envelopeOf(state).root)).toBe(j({ type: 'op', op: 'add', args: [num(123), null] }));
     expect(state.caret).toEqual(row([], 1));
     legal(state);
-    // offset 0: same existing behavior
-    state = typeToken(at(num(123), token([], 0)), { t: 'operator', fn: 'add' });
-    expect(j(envelopeOf(state).root)).toBe(j({ type: 'op', op: 'add', args: [num(123), null] }));
-    legal(state);
   });
 
-  it('snap: letters / group tokens / swap-owned interior positions apply the existing policy unchanged', () => {
-    // a letter at an in-token position: snaps to the owning station → leaf at a hold → typed rejection
-    expect(() => typeToken(at(num(12), token([], 1)), { t: 'leaf', node: sym('x') })).toThrowError(EngineError);
-    expect(() => typeToken(at(num(12), token([], 1)), { t: 'leaf', node: sym('x') })).toThrowError(
-      /operand-expected position/,
+  it('rework 2a: letters split a number, groups juxtapose-split a token, mid-row glyphs split the cell', () => {
+    // a letter inside a number → S-031's flat number·symbol·number juxtaposition
+    const l = typeToken(at(num(12), token([], 1)), { t: 'leaf', node: sym('x') });
+    expect(j(envelopeOf(l).root)).toBe(
+      j({ type: 'op', op: 'multiply', args: [num(1), sym('x'), num(2)], implicit: true }),
     );
-    // groupOpen at an interior offset: snaps → wraps the WHOLE number (no split)
+    expect(l.caret).toEqual(row([], 2)); // directly after the inserted symbol
+    legal(l);
+    // groupOpen at an interior offset: the T6 group juxtaposes between the halves
     const g = typeToken(at(num(123), token([], 1)), { t: 'groupOpen' });
-    expect(j(envelopeOf(g).root)).toBe(j({ type: 'group', parens: 'always', child: num(123) }));
+    expect(j(envelopeOf(g).root)).toBe(
+      j({
+        type: 'op',
+        op: 'multiply',
+        args: [num(1), { type: 'group', parens: 'always', child: null }, num(23)],
+        implicit: true,
+      }),
+    );
     legal(g);
-    // mid-row num (a swap position): interior '*' snaps → the swap re-folds the whole num, no split
+    // a mid-row number's interior glyph splits its cell (no swap under literal insertion)
     const env = { v: 1, root: { type: 'op', op: 'add', args: [num(123), sym('b')] } };
-    expect(decideSwap(envelopeOf(at(env, node([0]))), node([0]), { t: 'operator', fn: 'multiply' })).not.toBeNull();
-    const s = typeToken(at(env, token([0], 1)), { t: 'operator', fn: 'multiply' });
-    expect(j(envelopeOf(s).root)).toBe(j({ type: 'op', op: 'multiply', args: [num(123), sym('b')] }));
-    expect(s.log.length).toBe(1);
-    legal(s);
+    const sp = typeToken(at(env, token([0], 1)), { t: 'operator', fn: 'multiply' });
+    expect(j(envelopeOf(sp).root)).toBe(
+      j({ type: 'op', op: 'add', args: [{ type: 'op', op: 'multiply', args: [num(1), num(23)] }, sym('b')] }),
+    );
+    expect(sp.log.length).toBe(1);
+    legal(sp);
+    // same-op parent rows extend flat instead (structural rule 3)
+    const flat = typeToken(at(env, token([0], 1)), { t: 'operator', fn: 'add' });
+    expect(j(envelopeOf(flat).root)).toBe(
+      j({ type: 'op', op: 'add', args: [num(1), num(23), sym('b')] }),
+    );
+    expect(flat.caret).toEqual(row([], 1)); // directly after the inserted glyph
+    legal(flat);
   });
 
   it('typing sequences through in-token positions stay legal and undo byte-exactly', () => {

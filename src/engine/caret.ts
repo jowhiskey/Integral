@@ -39,28 +39,53 @@ const SLOTS: Readonly<Record<NodeJson['type'], readonly SlotName[]>> = {
  * The caret, as engine-owned data:
  * - `empty`   — the whole formula is empty (root null); the one defined
  *               empty-formula caret state.
- * - `node`    — on the node at `path` (leaf or container, `[]` = root).
+ * - `node`    — on the node at `path` (leaf or container, `[]` = root). For a
+ *               num/sym leaf it reads as the token's right edge (the station
+ *               a token's continued typing continues from).
  * - `slot`    — in an empty fixed slot of the node at `path`.
  * - `row`     — insertion point into an args row: index 0..args.length
  *               (args.length = after the last arg). A null entry in a row is
  *               not addressed by this — it is an empty slot like any other,
  *               addressed structurally by index when an op targets it.
- * - `token`   — inside a number token only: on the num node at `path`, at
- *               character offset `index` (0..len of the rendered text
- *               String(value)). Identifiers, units, and function names stay
- *               atomic — no in-token positions for them.
+ * - `token`   — inside a num or sym token: on the node at `path`, at
+ *               character offset `index` (0..len of the rendered text). Units,
+ *               subscripts, and function names stay atomic — no in-token
+ *               positions for them. (Rework session 2a: symbols join numbers
+ *               as in-token tokens — T3 glue/split at any caret offset; the
+ *               trailing decimal dot of a `dot`-flagged number is part of the
+ *               text.)
+ * - `boundary` — pure additive flag (on every non-empty kind): armed by the
+ *               Space key at a token edge (S-021/S-022); the NEXT same-type
+ *               input starts a new node instead of gluing; no visible mark,
+ *               never serialized. Any caret relocation or movement produces
+ *               fresh carets without the flag, disarming it.
  */
-export type Caret =
-  | { readonly kind: 'empty' }
-  | { readonly kind: 'node'; readonly path: Path }
-  | { readonly kind: 'slot'; readonly path: Path; readonly slot: SlotName }
-  | { readonly kind: 'row'; readonly path: Path; readonly index: number }
-  | { readonly kind: 'token'; readonly path: Path; readonly index: number };
+export interface CaretBoundary {
+  readonly boundary?: true;
+}
 
-/** The rendered text of a number token (what the editor shows and what the
- *  in-token offset addresses). */
+export type Caret =
+  | ({ readonly kind: 'empty' } & CaretBoundary)
+  | ({ readonly kind: 'node'; readonly path: Path } & CaretBoundary)
+  | ({ readonly kind: 'slot'; readonly path: Path; readonly slot: SlotName } & CaretBoundary)
+  | ({ readonly kind: 'row'; readonly path: Path; readonly index: number } & CaretBoundary)
+  | ({ readonly kind: 'token'; readonly path: Path; readonly index: number } & CaretBoundary);
+
+/**
+ * The rendered text of a number or symbol token (what the editor shows and
+ * what the in-token offset addresses). A `dot`-flagged number's trailing
+ * decimal point is part of the text (`5.` has length 2). Everything else is
+ * not an in-token token (0).
+ */
 export function tokenText(node: NodeJson): string {
-  return node.type === 'num' ? String(node.value) : '';
+  if (node.type === 'num') return String(node.value) + ((node as { dot?: boolean }).dot === true ? '.' : '');
+  if (node.type === 'sym') return node.name;
+  return '';
+}
+
+/** True iff the node is a text-like in-token token (num or sym). */
+export function isTokenNode(node: NodeJson): boolean {
+  return node.type === 'num' || node.type === 'sym';
 }
 
 // ——— Refs: where content sits or will land (the envelope-level analog of a
@@ -176,7 +201,7 @@ export function caretResolvesIn(env: Envelope, caret: Caret): boolean {
     }
     case 'token': {
       const node = nodeAt(env, caret.path);
-      if (node === null || node.type !== 'num') return false;
+      if (node === null || !isTokenNode(node)) return false;
       return Number.isInteger(caret.index) && caret.index >= 0 && caret.index <= tokenText(node).length;
     }
   }

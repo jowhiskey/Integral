@@ -7,9 +7,10 @@
 import type { NavDir, TypedToken } from '../engine/index.js';
 
 /** The pinned keymap: printable single-character keys → typed tokens. Digits
- *  and letters are leaves; `+ - * / ^ ( )` are the structure tokens. Any other
- *  printable key (space, punctuation, …) is outside the keymap — an unknown
- *  token, which the editor treats as a defined no-op. */
+ *  and letters are leaves; `+ - * / ^ ( )` are the structure tokens; `. ,`
+ *  and Space route to the rework-session-2a mechanics (the decimal point, the
+ *  comma arg append, the S-021 boundary). Any other printable key is outside
+ *  the keymap — an unknown token, which the editor treats as a no-op. */
 export const KEYMAP: Readonly<Record<string, TypedToken>> = (() => {
   const map: Record<string, TypedToken> = {};
   for (let d = 0; d <= 9; d++) {
@@ -26,6 +27,9 @@ export const KEYMAP: Readonly<Record<string, TypedToken>> = (() => {
   map['^'] = { t: 'pow' };
   map['('] = { t: 'groupOpen' };
   map[')'] = { t: 'groupClose' };
+  map['.'] = { t: 'dot' };
+  map[','] = { t: 'comma' };
+  map[' '] = { t: 'space' };
   return map;
 })();
 

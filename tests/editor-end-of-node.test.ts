@@ -57,16 +57,19 @@ describe('keyboard: multi-digit typing through the controller', () => {
     expect(controller.getState().log.length).toBe(4); // one key = one op = one log entry
   });
 
-  it('a rejected digit (juxtaposition at the end seam after a symbol) is a defined UI no-op', () => {
+  it('a digit at the end seam after a symbol joins the name (digit-glue, owner amendment)', () => {
     const { controller, container } = make({
       v: 1,
       root: { type: 'op', op: 'add', args: [sym('x'), sym('y')] },
     });
     controller.placeCaret(rowc([], 2));
-    const before = controller.getState();
     const ev = press(container, '3');
-    expect(ev.defaultPrevented).toBe(true); // handled, but rejected
-    expect(controller.getState()).toBe(before); // byte-identical no-op
+    expect(ev.defaultPrevented).toBe(true);
+    expect(j(controller.getEnvelope().root)).toBe(
+      j({ type: 'op', op: 'add', args: [sym('x'), sym('y3')] }),
+    );
+    expect(j(controller.getState().caret)).toBe(j(rowc([], 2))); // the seam survives the replace
+    expect(controller.getState().log.length).toBe(1);
   });
 });
 

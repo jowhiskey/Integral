@@ -1,556 +1,603 @@
-// Insertion policy (arc session 3): precedence-table pins against mathjs,
-// attach-rule pins from realistic typed states, typing-point rejections,
-// caret placement per attach kind, one-op emission + legality, and undo
-// round-trips. The mathjs typing oracle lives in typing-oracle.test.ts.
+// The literal typing surface (rework session 2a, T1–T6 + owner amendments):
+// every pinned starting state of literal operator insertion, the
+// null-cell splice, token mechanics (glue / split / digit-glue / Space),
+// numbers (dot states), paren conversion (T5/T10), groups and fence
+// pairing (T6/S-097), juxtaposition pairing and the widened evaluation
+// rule, the mixed-multiply-row definition, silent no-ops, and the
+// one-op-per-token / undo discipline. Every intermediate state is checked
+// through the fromJSON gate (the contract boundary) with a resolving
+// caret. The old oracle suites (typed insertion vs math.parse, swap) were
+// invalidated wholesale by the rework and were deleted.
 
 import { describe, expect, it } from 'vitest';
-import { parse, type MathNode as MathJsNode, type OperatorNode as MathOperatorNode } from 'mathjs';
-import { fromJSON, type NodeJson } from '../src/ast/index.js';
+import { parse } from 'mathjs';
+import { fromJSON, isEvaluable, toJSON, toMathML, type Envelope, type NodeJson } from '../src/ast/index.js';
 import {
-  EngineError,
-  PRECEDENCE,
   applyOp,
-  caretResolves,
-  decideAttach,
+  caretResolvesIn,
   envelopeOf,
   initSession,
   typeToken,
   undo,
   type Caret,
   type EditingState,
+  type OperatorFn,
   type TypedToken,
 } from '../src/engine/index.js';
-import { CORPUS, lex, typeSource } from './typing-support.js';
 
-const num = (value: number): NodeJson => ({ type: 'num', value });
+const num = (value: number, dot = false): NodeJson =>
+  dot ? { type: 'num', value, dot: true } : { type: 'num', value };
 const sym = (name: string): NodeJson => ({ type: 'sym', name });
+const op = (name: string, ...args: (NodeJson | null)[]): NodeJson => ({ type: 'op', op: name, args });
+const imp = (...args: (NodeJson | null)[]): NodeJson => ({ type: 'op', op: 'multiply', args, implicit: true });
+const fn = (name: string, args: (NodeJson | null)[], close = true): NodeJson =>
+  close ? { type: 'fn', name, args } : { type: 'fn', name, args, close: false };
+const group = (child: NodeJson | null, close = true): NodeJson =>
+  close ? { type: 'group', parens: 'always', child } : { type: 'group', parens: 'always', child, close: false };
+const fence = (): NodeJson => ({ type: 'fence', side: 'close' });
+const frac = (n: NodeJson | null, d: NodeJson | null): NodeJson => ({ type: 'frac', num: n, den: d });
 
-const tok: Record<string, TypedToken> = {
-  plus: { t: 'operator', fn: 'add' },
-  minus: { t: 'operator', fn: 'subtract' },
-  times: { t: 'operator', fn: 'multiply' },
-  modulo: { t: 'operator', fn: 'mod' },
-  divide: { t: 'divide' },
-  pow: { t: 'pow' },
-  open: { t: 'groupOpen' },
-  close: { t: 'groupClose' },
+const plus: TypedToken = { t: 'operator', fn: 'add' };
+const minus: TypedToken = { t: 'operator', fn: 'subtract' };
+const times: TypedToken = { t: 'operator', fn: 'multiply' };
+const open: TypedToken = { t: 'groupOpen' };
+const close: TypedToken = { t: 'groupClose' };
+const comma: TypedToken = { t: 'comma' };
+const dot: TypedToken = { t: 'dot' };
+const space: TypedToken = { t: 'space' };
+const d = (str: string): TypedToken => ({ t: 'leaf', node: { type: 'num', value: Number(str) } });
+const s = (ch: string): TypedToken => ({ t: 'leaf', node: { type: 'sym', name: ch } });
+
+const tree = (state: EditingState): NodeJson | null => envelopeOf(state).root;
+const j = (x: unknown): string => JSON.stringify(x);
+/** Deep-equal against the expected JSON root (byte-stable, key order-insensitive at parse level). */
+const expectTree = (state: EditingState, expected: NodeJson | null): void => {
+  expect(j(tree(state))).toBe(j(expected));
 };
-const leaf = (node: NodeJson): TypedToken => ({ t: 'leaf', node });
-const n = (v: number): TypedToken => leaf(num(v));
-const s = (name: string): TypedToken => leaf(sym(name));
+const node = (path: readonly (number | string)[]): Caret => ({ kind: 'node', path });
+const rowc = (path: readonly (number | string)[], index: number): Caret => ({ kind: 'row', path, index });
+const tokc = (path: readonly (number | string)[], index: number): Caret => ({ kind: 'token', path, index });
 
-/** Type a token sequence from the empty formula. */
+/** A seeded session with the caret placed (unlogged, host-style). */
+const at = (root: NodeJson | null, caret: Caret): EditingState => ({ ...initSession({ v: 1, root }), caret });
+/** Type a sequence from the empty formula. */
 const typeSeq = (tokens: readonly TypedToken[]): EditingState => {
   let state = initSession();
   for (const t of tokens) state = typeToken(state, t);
   return state;
 };
 
-/** A seeded session with the caret placed (host-style moveCaret). */
-const seedAt = (seed: unknown, to: Caret): EditingState => applyOp(initSession(seed), { op: 'moveCaret', to });
-
-const expectReject = (state: EditingState, token: TypedToken, code = 'not-a-typing-point'): void => {
-  const before = JSON.stringify([envelopeOf(state), state.caret, state.log.length]);
-  let threw: unknown;
-  try {
-    typeToken(state, token);
-  } catch (error) {
-    threw = error;
-  }
-  expect(threw).toBeInstanceOf(EngineError);
-  expect((threw as { code?: string }).code).toBe(code);
-  expect(JSON.stringify([envelopeOf(state), state.caret, state.log.length])).toBe(before);
+/** The legality gate: the envelope rebuilds through fromJSON (the contract
+ *  boundary) and the caret resolves in the rebuilt tree. */
+const legal = (state: EditingState): void => {
+  const env = envelopeOf(state);
+  expect(() => initSession(env)).not.toThrow();
+  expect(caretResolvesIn(env, state.caret)).toBe(true);
 };
 
-const treeOf = (state: EditingState): string => JSON.stringify(envelopeOf(state));
-const parsed = (state: EditingState): { v: number; root: NodeJson } => JSON.parse(treeOf(state));
+/** A defined no-op: the same state object, nothing logged. */
+const expectNoop = (state: EditingState, token: TypedToken): void => {
+  const before = j([envelopeOf(state), state.caret, state.log.length]);
+  const after = typeToken(state, token);
+  expect(j([envelopeOf(after), after.caret, after.log.length])).toBe(before);
+};
 
-// ——— Precedence table ↔ mathjs ———
+const expectedEmpty: Envelope = { v: 1, root: null };
 
-describe('precedence table agrees with mathjs binding behavior', () => {
-  const BINARY = [
-    { fn: 'add', src: '+' },
-    { fn: 'subtract', src: '-' },
-    { fn: 'multiply', src: '*' },
-    { fn: 'divide', src: '/' },
-    { fn: 'mod', src: 'mod' },
-    { fn: 'pow', src: '^' },
-  ] as const;
+// ——— T1: literal operator insertion ———
 
-  const rootFn = (node: MathJsNode): string | null =>
-    node.type === 'OperatorNode' ? (node as MathOperatorNode).fn : null;
-
-  it('every interacting operator pair — one probe per pair, matches the table order', () => {
-    for (const A of BINARY) {
-      for (const B of BINARY) {
-        if (A.fn === B.fn) continue;
-        const root = rootFn(parse(`2 ${A.src} 3 ${B.src} 4`));
-        // root A (B nested in A's operands): B binds tighter than A.
-        // root B (A's binding nested as B's left operand): B binds looser
-        // or equal — the pair probes resolve <, >, and = in both directions.
-        expect(PRECEDENCE[B.fn].prec > PRECEDENCE[A.fn].prec).toBe(root === A.fn);
-        expect(PRECEDENCE[B.fn].prec <= PRECEDENCE[A.fn].prec).toBe(root === B.fn);
-      }
+describe('T1 — literal operator insertion (glyphs appear at the caret, nothing restructures)', () => {
+  it('from empty: every glyph creates a bare [null, null] row, caret right after the glyph', () => {
+    for (const [token, name] of [[plus, 'add'], [minus, 'subtract'], [times, 'multiply']] as const) {
+      const state = typeSeq([token as TypedToken]);
+      expectTree(state, op(name as string, null, null));
+      expect(state.caret).toEqual(rowc([], 1));
+      legal(state);
     }
   });
 
-  it('same-operator associativity probes `2 A 3 A 4` — one pin per row', () => {
-    for (const A of BINARY) {
-      const tree = parse(`2 ${A.src} 3 ${A.src} 4`) as MathOperatorNode;
-      const left = tree.args[0] as MathJsNode;
-      const leftNested = left.type === 'OperatorNode' && (left as MathOperatorNode).fn === tree.fn;
-      expect(PRECEDENCE[A.fn].assoc === 'left').toBe(leftNested);
-    }
+  it('row start: a leading operator is allowed (S-003)', () => {
+    // from a lone symbol: `|a` + `+` → `+|a` (the caret sits before the token)
+    const state = typeToken(at(sym('a'), tokc([], 0)), plus);
+    expectTree(state, op('add', null, sym('a')));
+    expect(state.caret).toEqual(rowc([], 1));
+    legal(state);
+    // the row-start seam of an existing row splices the null in front (leading glyph)
+    const seam = typeToken(at(op('add', sym('a'), sym('b')), rowc([], 0)), plus);
+    expectTree(seam, op('add', null, sym('a'), sym('b')));
+    expect(seam.caret).toEqual(rowc([], 1));
+    legal(seam);
   });
 
-  it('unary precedence pins: pow binds tighter than unary minus, unary tighter than multiply', () => {
-    const negPow = parse('-2^2') as MathOperatorNode;
-    expect(negPow.fn).toBe('unaryMinus');
-    expect((negPow.args[0] as MathOperatorNode).fn).toBe('pow');
-    expect(PRECEDENCE.pow.prec).toBeGreaterThan(PRECEDENCE.unaryMinus.prec);
-
-    const negMul = parse('-2*3') as MathOperatorNode;
-    expect(negMul.fn).toBe('multiply');
-    expect((negMul.args[0] as MathOperatorNode).fn).toBe('unaryMinus');
-    expect(PRECEDENCE.unaryMinus.prec).toBeGreaterThan(PRECEDENCE.multiply.prec);
+  it('a token inside its same-op parent row extends the flat chain (leading and trailing glyphs)', () => {
+    // offset len on the row's last operand: `1+2` + `+` → [1, 2, ∅]
+    const tail = typeToken(at(op('add', num(1), num(2)), node([1])), plus);
+    expectTree(tail, op('add', num(1), num(2), null));
+    expect(tail.caret).toEqual(rowc([], 2)); // in the pending cell
+    legal(tail);
+    // offset 0 (before the token): `1+|2` + `+` → [1, ∅, 2], after the new glyph
+    const head = typeToken(at(op('add', num(1), num(2)), tokc([1], 0)), plus);
+    expectTree(head, op('add', num(1), null, num(2)));
+    expect(head.caret).toEqual(rowc([], 2));
+    legal(head);
   });
 
-  it('position pins: minus is unary exactly where mathjs parses it unary', () => {
-    const containsUnaryMinus = (source: string): boolean => {
-      const walk = (node: MathJsNode): boolean => {
-        if (node.type === 'OperatorNode' && (node as MathOperatorNode).fn === 'unaryMinus') return true;
-        if (node.type === 'ParenthesisNode') return walk((node as unknown as { content: MathJsNode }).content);
-        const args = (node as { args?: MathJsNode[] }).args;
-        return args !== undefined ? args.some(walk) : false;
-      };
-      return walk(parse(source));
-    };
-    for (const unaryAt of ['-2', '2*-3', '2--3', '2+-3', '2^-3', '(-2)']) {
-      expect(containsUnaryMinus(unaryAt), unaryAt).toBe(true);
-    }
-    for (const binaryAt of ['2-3', '2+3', '2^3', '2*3', '2 mod 3']) {
-      expect(containsUnaryMinus(binaryAt), binaryAt).toBe(false);
-    }
+  it('mid-row alongside: [a,b,c] `a+b+|c` + `+` → [a,b,∅,c] — the S-001 display a+b++c', () => {
+    const state = typeToken(at(op('add', sym('a'), sym('b'), sym('c')), rowc([], 2)), plus);
+    expectTree(state, op('add', sym('a'), sym('b'), null, sym('c')));
+    expect(state.caret).toEqual(rowc([], 3));
+    legal(state);
+    // the doubled-operator projection still reads it: a+b++c = a+b+c
+    expect(isEvaluable(fromJSON(envelopeOf(state))!)).toBe(true);
+  });
+
+  it('before an existing operator: S-006 `a|*b` + `−` → a−|*b (the glyph inserts before the ×)', () => {
+    const state = typeToken(at(op('multiply', sym('a'), sym('b')), rowc([], 1)), minus);
+    expectTree(state, op('subtract', sym('a'), op('multiply', null, sym('b'))));
+    expect(state.caret).toEqual(rowc([], 1));
+    legal(state);
+    // continued typing lands in the relocated glyph's pending cell:
+    // `2` completes a − 2×b (the math reading of the flat a−2×b text).
+    const after2 = typeToken(state, d('2'));
+    expectTree(after2, op('subtract', sym('a'), op('multiply', num(2), sym('b'))));
+    expect((after2.caret as { kind: string }).kind).toBe('node');
+    legal(after2);
+  });
+
+  it('row end: same-op extends flat with a pending cell; different-op wraps the whole segment', () => {
+    const flat = typeToken(at(op('add', sym('a'), sym('b')), rowc([], 2)), plus);
+    expectTree(flat, op('add', sym('a'), sym('b'), null));
+    expect(flat.caret).toEqual(rowc([], 2)); // in the pending cell — typing 3 continues
+    const wrapped = typeToken(at(op('add', sym('a'), sym('b')), rowc([], 2)), times);
+    expectTree(wrapped, op('multiply', op('add', sym('a'), sym('b')), null));
+    expect(wrapped.caret).toEqual(rowc([], 1));
+    legal(wrapped);
+  });
+
+  it('into empty 2D slots: a typed glyph template lands inside the slot', () => {
+    const state = typeToken(at(frac(null, num(3)), { kind: 'slot', path: [], slot: 'num' }), times);
+    expectTree(state, frac(op('multiply', null, null), num(3)));
+    expect(state.caret).toEqual(rowc(['num'], 1));
+    legal(state);
+  });
+
+  it('at the shared gap (N2): letters glue right, digit-glue joins the left symbol, glyphs splice', () => {
+    // letter glues into the right token
+    const glued = typeToken(at(op('add', sym('x'), sym('y')), rowc([], 1)), s('z'));
+    expectTree(glued, op('add', sym('x'), sym('zy')));
+    expect(glued.caret).toEqual(tokc([1], 1));
+    legal(glued);
+    // a digit joins the left symbol's name (digit-glue amendment)
+    const dig = typeToken(at(op('add', sym('x'), sym('y')), rowc([], 1)), d('3'));
+    expectTree(dig, op('add', sym('x3'), sym('y')));
+    expect(dig.caret).toEqual(rowc([], 1));
+    legal(dig);
+    // an operator splices the pair apart
+    const spliced = typeToken(at(op('add', sym('x'), sym('y')), rowc([], 1)), plus);
+    expectTree(spliced, op('add', sym('x'), null, sym('y')));
+    expect(spliced.caret).toEqual(rowc([], 2));
+    legal(spliced);
+  });
+
+  it('the glyph after a typed number flows into the flat chain (2−−3 builds toward the pinned shape)', () => {
+    const state = typeSeq([d('2'), minus, minus, d('3')]);
+    expectTree(state, op('subtract', num(2), null, num(3)));
+    legal(state);
+    const ast = fromJSON(envelopeOf(state))!;
+    expect(isEvaluable(ast)).toBe(true);
+    expect(ast.toMathNode().evaluate()).toBe(5);
+    expect(parse('2--3').evaluate()).toBe(5);
   });
 });
 
-// ——— Attach-rule pins ———
+// ——— Null-cell splice: leading / interior / trailing nulls all typing-reachable ———
 
-describe('attach-rule pins (wrap / nest / group / chain-extend / chain-wrap / chain-nest)', () => {
-  it('wrap: a token after a value — 5+ becomes op[add](5, null), caret in the pending cell', () => {
-    const state = typeSeq([n(5), tok.plus]);
-    expect(parsed(state)).toEqual({
-      v: 1,
-      root: { type: 'op', op: 'add', args: [num(5), null] },
-    });
-    expect(state.caret).toEqual({ kind: 'row', path: [], index: 1 });
-  });
-
-  it('nest: higher precedence nests in the context right operand — a+b* stays one add row', () => {
-    const state = typeSeq([s('a'), tok.plus, s('b'), tok.times]);
-    expect(parsed(state)).toEqual({
-      v: 1,
-      root: {
-        type: 'op',
-        op: 'add',
-        args: [sym('a'), { type: 'op', op: 'multiply', args: [sym('b'), null] }],
-      },
-    });
-    expect(state.caret).toEqual({ kind: 'row', path: [1], index: 1 });
-  });
-
-  it('group: user parens create a GroupNode; close pops the caret onto it; typing then wraps outside', () => {
-    let state = typeSeq([tok.open, s('a'), tok.plus, s('b'), tok.close]);
-    expect(parsed(state)).toEqual({
-      v: 1,
-      root: {
-        type: 'group',
-        parens: 'always',
-        child: { type: 'op', op: 'add', args: [sym('a'), sym('b')] },
-      },
-    });
-    expect(state.caret).toEqual({ kind: 'node', path: [] });
-    state = typeToken(state, tok.times);
-    expect(parsed(state)).toEqual({
-      v: 1,
-      root: {
-        type: 'op',
-        op: 'multiply',
-        args: [
-          { type: 'group', parens: 'always', child: { type: 'op', op: 'add', args: [sym('a'), sym('b')] } },
-          null,
-        ],
-      },
-    });
-  });
-
-  it('group-open over a typed value wraps it (juxtaposition is unrepresentable)', () => {
-    const state = typeSeq([s('a'), tok.plus, s('b'), tok.open]);
-    expect(parsed(state)).toEqual({
-      v: 1,
-      root: {
-        type: 'op',
-        op: 'add',
-        args: [sym('a'), { type: 'group', parens: 'always', child: sym('b') }],
-      },
-    });
-  });
-
-  it('chain-extend: same-op token at the chain boundary stays flat — a+b+', () => {
-    const state = typeSeq([s('a'), tok.plus, s('b'), tok.plus]);
-    expect(parsed(state)).toEqual({
-      v: 1,
-      root: { type: 'op', op: 'add', args: [sym('a'), sym('b'), null] },
-    });
-    expect(state.caret).toEqual({ kind: 'row', path: [], index: 2 });
-  });
-
-  it('chain-wrap: lower precedence token at the chain end wraps the whole chain — a*b*c+', () => {
-    let state = typeSeq([s('a'), tok.times, s('b'), tok.times, s('c')]);
-    expect(parsed(state)).toEqual({
-      v: 1,
-      root: { type: 'op', op: 'multiply', args: [sym('a'), sym('b'), sym('c')] },
-    });
-    state = typeToken(state, tok.plus);
-    expect(parsed(state)).toEqual({
-      v: 1,
-      root: {
-        type: 'op',
-        op: 'add',
-        args: [{ type: 'op', op: 'multiply', args: [sym('a'), sym('b'), sym('c')] }, null],
-      },
-    });
-    expect(state.caret).toEqual({ kind: 'row', path: [], index: 1 });
-  });
-
-  it('chain-nest: higher precedence at the chain end nests in the rightmost operand — a+b^', () => {
-    const state = typeSeq([s('a'), tok.plus, s('b'), tok.pow]);
-    expect(parsed(state)).toEqual({
-      v: 1,
-      root: { type: 'op', op: 'add', args: [sym('a'), { type: 'pow', base: sym('b'), exp: null }] },
-    });
-    expect(state.caret).toEqual({ kind: 'slot', path: [1], slot: 'exp' });
-  });
-
-  it('equal precedence, different operator climbs: a-b+ becomes add(subtract(a,b), …)', () => {
-    const state = typeSeq([s('a'), tok.minus, s('b'), tok.plus]);
-    expect(parsed(state)).toEqual({
-      v: 1,
-      root: {
-        type: 'op',
-        op: 'add',
-        args: [{ type: 'op', op: 'subtract', args: [sym('a'), sym('b')] }, null],
-      },
-    });
-  });
-
-  it('same-op binary after a complete chain extends it: a-b- stays one subtract row', () => {
-    const state = typeSeq([s('a'), tok.minus, s('b'), tok.minus]);
-    expect(parsed(state)).toEqual({
-      v: 1,
-      root: { type: 'op', op: 'subtract', args: [sym('a'), sym('b'), null] },
-    });
-  });
-
-  it('divide and pow build their structures: / and ^ wrap the candidate in frac/pow', () => {
-    const div = typeSeq([s('a'), tok.divide]);
-    expect(parsed(div)).toEqual({ v: 1, root: { type: 'frac', num: sym('a'), den: null } });
-    expect(div.caret).toEqual({ kind: 'slot', path: [], slot: 'den' });
-    const pw = typeSeq([s('a'), tok.pow]);
-    expect(parsed(pw)).toEqual({ v: 1, root: { type: 'pow', base: sym('a'), exp: null } });
-    expect(pw.caret).toEqual({ kind: 'slot', path: [], slot: 'exp' });
-  });
-
-  it('pow into pow nests (right-associative): a^b^ becomes a^(b^…)', () => {
-    let state = typeSeq([s('a'), tok.pow, s('b'), tok.pow]);
-    expect(parsed(state)).toEqual({
-      v: 1,
-      root: { type: 'pow', base: sym('a'), exp: { type: 'pow', base: sym('b'), exp: null } },
-    });
-    expect(state.caret).toEqual({ kind: 'slot', path: ['exp'], slot: 'exp' });
-    state = typeToken(state, s('c'));
-    expect(parsed(state)).toEqual({
-      v: 1,
-      root: { type: 'pow', base: sym('a'), exp: { type: 'pow', base: sym('b'), exp: sym('c') } },
-    });
-  });
-
-  it('unary attach: − at an operand-expected position is unaryMinus — a+- becomes add(a, unary(□))', () => {
-    let state = typeSeq([s('a'), tok.plus, tok.minus]);
-    expect(parsed(state)).toEqual({
-      v: 1,
-      root: {
-        type: 'op',
-        op: 'add',
-        args: [sym('a'), { type: 'op', op: 'unaryMinus', args: [null] }],
-      },
-    });
-    state = typeToken(state, s('b'));
-    expect(parsed(state)).toEqual({
-      v: 1,
-      root: {
-        type: 'op',
-        op: 'add',
-        args: [sym('a'), { type: 'op', op: 'unaryMinus', args: [sym('b')] }],
-      },
-    });
-  });
-
-  it('fresh pending cells: the operator family repeats as unary forms (a++ → add(a, unaryPlus(□)))', () => {
-    const plus = typeSeq([s('a'), tok.plus, tok.plus]);
-    expect((JSON.parse(treeOf(plus)).root.args[1] as NodeJson).op).toBe('unaryPlus');
-    const minus = typeSeq([s('a'), tok.plus, tok.minus]);
-    expect((JSON.parse(treeOf(minus)).root.args[1] as NodeJson).op).toBe('unaryMinus');
-  });
-
-  it('barriers bind nothing out: fn rows, frac numerators, radicands', () => {
-    // fn row: the wrap replaces the arg cell — it never escapes the fn node
-    const fnSeed = seedAt({ v: 1, root: { type: 'fn', name: 'sin', args: [sym('x')] } }, { kind: 'node', path: [0] });
-    expect(parsed(typeToken(fnSeed, tok.plus))).toEqual({
-      v: 1,
-      root: { type: 'fn', name: 'sin', args: [{ type: 'op', op: 'add', args: [sym('x'), null] }] },
-    });
-    // frac numerator: climbing stops at the frac boundary (num is not den)
-    const fracSeed = seedAt(
-      { v: 1, root: { type: 'frac', num: { type: 'op', op: 'multiply', args: [num(2), num(3)] }, den: num(5) } },
-      { kind: 'node', path: ['num', 1] },
+describe('null-cell splice — null args cells at any index', () => {
+  it('leading, interior, trailing nulls are all reachable by typing (S-003/S-001 flows)', () => {
+    expectTree(typeSeq([plus, s('a')]), op('add', null, sym('a'))); // leading
+    expectTree(
+      typeToken(at(op('add', sym('a'), sym('b'), sym('c')), rowc([], 2)), plus),
+      op('add', sym('a'), sym('b'), null, sym('c')), // interior
     );
-    expect(parsed(typeToken(fracSeed, tok.plus))).toEqual({
-      v: 1,
-      root: {
-        type: 'frac',
-        num: { type: 'op', op: 'add', args: [{ type: 'op', op: 'multiply', args: [num(2), num(3)] }, null] },
-        den: { type: 'num', value: 5 },
-      },
-    });
-    // radicand: a binary wrap nests inside the radicand slot
-    const rootSeed = seedAt({ v: 1, root: { type: 'root', radicand: sym('x') } }, { kind: 'node', path: ['radicand'] });
-    expect(parsed(typeToken(rootSeed, tok.minus))).toEqual({
-      v: 1,
-      root: { type: 'root', radicand: { type: 'op', op: 'subtract', args: [sym('x'), null] } },
-    });
-    // a subscript hold wraps like any typed value (leaf type)
-    const subSeed = seedAt({ v: 1, root: { type: 'sub', base: 'x', sub: 'max' } }, { kind: 'node', path: [] });
-    expect(parsed(typeToken(subSeed, tok.plus))).toEqual({
-      v: 1,
-      root: { type: 'op', op: 'add', args: [{ type: 'sub', base: 'x', sub: 'max' }, null] },
-    });
-    // a unit's value continues inside the unit (value slot is a barrier)
-    const unitSeed = seedAt({ v: 1, root: { type: 'unit', value: num(50), unit: 'mm' } }, { kind: 'node', path: ['value'] });
-    expect(parsed(typeToken(unitSeed, tok.minus))).toEqual({
-      v: 1,
-      root: { type: 'unit', value: { type: 'op', op: 'subtract', args: [num(50), null] }, unit: 'mm' },
-    });
+    expectTree(typeSeq([s('a'), plus, s('b'), plus]), op('add', sym('a'), sym('b'), null)); // trailing
   });
 
-  it('group-close: unbalanced ")" is a defined no-op — nothing logged, state byte-identical', () => {
-    const state = typeSeq([s('a'), tok.plus, s('b')]);
-    const before = JSON.stringify([treeOf(state), state.caret, state.log.length]);
-    const after = typeToken(state, tok.close);
-    expect(JSON.stringify([treeOf(after), after.caret, after.log.length])).toBe(before);
-  });
-
-  it('group-close: one pop per ")" — nested groups close level by level', () => {
-    let state = typeSeq([tok.open, tok.open, s('a'), tok.minus, s('b'), tok.close]);
-    expect(parsed(state)).toEqual({
-      v: 1,
-      root: {
-        type: 'group',
-        parens: 'always',
-        child: {
-          type: 'group',
-          parens: 'always',
-          child: { type: 'op', op: 'subtract', args: [sym('a'), sym('b')] },
-        },
-      },
-    });
-    // after the first close the caret sits on the inner group; the outer
-    // is still the root (closed by a second token below).
-    expect(state.caret).toEqual({ kind: 'node', path: ['child'] });
-    state = typeToken(state, tok.close);
-    expect(state.caret).toEqual({ kind: 'node', path: [] });
-    expect(parsed(state)).toEqual({
-      v: 1,
-      root: {
-        type: 'group',
-        parens: 'always',
-        child: {
-          type: 'group',
-          parens: 'always',
-          child: { type: 'op', op: 'subtract', args: [sym('a'), sym('b')] },
-        },
-      },
-    });
+  it('the pending null pends the next leaf (fill) — one glyph-chasing flow end to end', () => {
+    const state = typeSeq([d('1'), plus, d('2'), plus, d('3'), plus, d('4')]);
+    expectTree(state, op('add', num(1), num(2), num(3), num(4)));
+    expect(state.log.length).toBe(7); // one op per token
+    legal(state);
   });
 });
 
-// ——— Typing points: supported classes and typed rejections ———
+// ——— T3: symbols and numbers are text-like tokens ———
 
-describe('typing-point classes', () => {
-  it('empty formula, empty fixed slot, null args cell, node on content are typing points', () => {
-    expect(decideAttach({ v: 1, root: null }, { kind: 'empty' }, tok.minus).kind).toBe('unary');
-    const denSeed = initSession({ v: 1, root: { type: 'frac', num: num(1), den: null } });
-    expect(decideAttach(envelopeOf(denSeed), { kind: 'slot', path: [], slot: 'den' }, tok.minus).kind).toBe('unary');
-    const cellSeed = initSession({ v: 1, root: { type: 'op', op: 'add', args: [sym('a'), null] } });
-    expect(decideAttach(envelopeOf(cellSeed), { kind: 'row', path: [], index: 1 }, tok.minus).kind).toBe('unary');
-    expect(decideAttach({ v: 1, root: sym('a') }, { kind: 'node', path: [] }, tok.plus).kind).toBe('wrap');
+describe('T3 — letters glue, different-type splits, digit-glue, juxtaposition, Space', () => {
+  it('letters glue onto the symbol from either side at any caret offset', () => {
+    // behind (the post-typing station: node caret on the symbol)
+    expectTree(typeSeq([s('a'), s('b')]), sym('ab'));
+    // front: token caret at offset 0
+    const front = typeToken(at(sym('ab'), tokc([], 0)), s('z'));
+    expectTree(front, sym('zab'));
+    expect(front.caret).toEqual(tokc([], 1));
+    // interior: `a|b` of one symbol
+    const mid = typeToken(at(sym('ab'), tokc([], 1)), s('z'));
+    expectTree(mid, sym('azb'));
+    expect(mid.caret).toEqual(tokc([], 2));
+    legal(mid);
   });
 
-  it('a node caret on a container with an empty cell types into that cell (attach → dive → fill)', () => {
-    const state = seedAt({ v: 1, root: { type: 'op', op: 'unaryMinus', args: [null] } }, { kind: 'node', path: [] });
-    expect(state.caret).toEqual({ kind: 'node', path: [] });
-    const after = typeToken(state, s('x'));
-    expect(parsed(after)).toEqual({ v: 1, root: { type: 'op', op: 'unaryMinus', args: [sym('x')] } });
+  it('different-type input splits a symbol at the caret: `a|b` + `+` → a+|b (S-029)', () => {
+    const state = typeToken(at(sym('ab'), tokc([], 1)), plus);
+    expectTree(state, op('add', sym('a'), sym('b')));
+    expect(state.caret).toEqual(rowc([], 1));
+    legal(state);
   });
 
-  // Arc session 4 carve-out: the typing-point rejections *inside* swap
-  // territory became operator swaps; the session-4 fix session routes the
-  // END seam — previously a typed rejection — to the last operand's hold,
-  // so typing there appends/extends exactly as standing on that operand.
-  it('row seams: the end seam routes to the last operand (its hold), a mid-row seam becomes the operator swap (session 4)', () => {
-    const chain = { v: 1, root: { type: 'op', op: 'add', args: [sym('a'), sym('b'), sym('c')] } };
-    // × at the end seam behaves as typed on c: higher precedence nests a
-    // multiply in the right operand — one op, one log entry.
-    const endState = seedAt(chain, { kind: 'row', path: [], index: 3 });
-    const after = typeToken(endState, tok.times);
-    expect(parsed(after)).toEqual({
-      v: 1,
-      root: {
-        type: 'op',
-        op: 'add',
-        args: [sym('a'), sym('b'), { type: 'op', op: 'multiply', args: [sym('c'), null] }],
-      },
-    });
-    // the dive: the translated station caret rides the replace relocation
-    expect(after.caret).toEqual({ kind: 'row', path: [2], index: 1 }); // the pending cell
-    expect(after.log.length).toBe(endState.log.length + 1); // one op = one new log entry
-    // Seam 1 sits on the first + glyph: × swaps it (higher precedence wraps
-    // the bound pair a,b — the swap suite pins the full semantics).
-    const state = seedAt(chain, { kind: 'row', path: [], index: 1 });
-    const swapped = typeToken(state, tok.times);
-    expect(parsed(swapped)).toEqual({
-      v: 1,
-      root: {
-        type: 'op',
-        op: 'add',
-        args: [{ type: 'op', op: 'multiply', args: [sym('a'), sym('b')] }, sym('c')],
-      },
-    });
-    expect(swapped.log.length).toBe(state.log.length + 1);
+  it('digit-glue (owner amendment, supersedes S-030 A): digits join the symbol NAME wherever letters sit to their left', () => {
+    // `x` + `1` → the one symbol `x1`
+    expectTree(typeSeq([s('x'), d('1')]), sym('x1'));
+    // inside a symbol: `a|b` + `5` → the ONE symbol `a5b`
+    const mid = typeToken(at(sym('ab'), tokc([], 1)), d('5'));
+    expectTree(mid, sym('a5b'));
+    expect(mid.caret).toEqual(tokc([], 2));
+    // at the front of a symbol (no letters to the left) a digit starts a number
+    const before = typeToken(at(sym('ab'), tokc([], 0)), d('5'));
+    expectTree(before, imp(num(5), sym('ab')));
+    expect(before.caret).toEqual(rowc([], 1));
+    legal(before);
   });
 
-  // Arc session 4 carve-out: mid-row complete nodes are swap positions now.
-  // Retyping the row's own operator is the defined byte-identical no-op.
-  it('mid-row nodes are operator positions (session 4): same-op retypes are byte-identical no-ops', () => {
-    const midRow = { v: 1, root: { type: 'op', op: 'add', args: [sym('a'), sym('b'), sym('c')] } };
-    const state = seedAt(midRow, { kind: 'node', path: [1] });
-    const before = JSON.stringify([treeOf(state), state.caret, state.log.length]);
-    const after = typeToken(state, tok.plus);
-    expect(JSON.stringify([treeOf(after), after.caret, after.log.length])).toBe(before);
-    // The operator *ahead* of the node swaps: node-on-b changes the + between b and c.
-    const pending = { v: 1, root: { type: 'op', op: 'add', args: [sym('a'), null] } };
-    const pendingState = seedAt(pending, { kind: 'node', path: [0] });
-    const pendingBefore = JSON.stringify([treeOf(pendingState), pendingState.caret, pendingState.log.length]);
-    const pendingAfter = typeToken(pendingState, tok.plus);
-    expect(JSON.stringify([treeOf(pendingAfter), pendingAfter.caret, pendingAfter.log.length])).toBe(pendingBefore);
+  it('letters before/inside numbers juxtapose/split (S-032/S-031) — number nodes only where no symbol precedes', () => {
+    // S-031 A: a letter inside a number → number·symbol·number (flat 3-cell implicit row)
+    const inner = typeToken(at(num(123), tokc([], 1)), s('x'));
+    expectTree(inner, imp(num(1), sym('x'), num(23)));
+    expect(inner.caret).toEqual(rowc([], 2));
+    legal(inner);
+    // S-032: a letter before a number → the juxtaposed symbol-first pair
+    const before = typeToken(at(num(123), tokc([], 0)), s('x'));
+    expectTree(before, imp(sym('x'), num(123)));
+    expect(before.caret).toEqual(rowc([], 1));
+    // a letter after a number → the evaluating number-first pair (5x)
+    const after = typeToken(at(num(5), node([])), s('x'));
+    expectTree(after, imp(num(5), sym('x')));
+    expect(after.caret).toEqual(rowc([], 2));
+    legal(after);
   });
 
-  it('multiply and mod have no unary form: they reject at operand-expected positions', () => {
-    expectReject(initSession(), tok.times);
-    expectReject(initSession(), tok.modulo);
-    const denSeed = initSession({ v: 1, root: { type: 'frac', num: num(1), den: null } });
-    expectReject(denSeed, tok.times);
+  it('the x3-class adjacency states: typing produces glued names, never symbol-before-number-glue', () => {
+    // symbol-then-digit is ONE symbol (digit-glue), never an adjacency row
+    expectTree(typeSeq([s('x'), d('3')]), sym('x3'));
+    // number-before-symbol evaluates
+    const nx = typeSeq([d('5'), s('x')]);
+    expect(isEvaluable(fromJSON(envelopeOf(nx))!)).toBe(true);
+    expect(fromJSON(envelopeOf(nx))!.toMathNode().evaluate({ x: 4 })).toBe(20);
+    // a letter typed before an existing number juxtaposes → symbol-before-number, refused
+    const xn = typeToken(at(num(123), tokc([], 0)), s('x'));
+    expectTree(xn, imp(sym('x'), num(123)));
+    expect(isEvaluable(fromJSON(envelopeOf(xn))!)).toBe(false);
+    // glyph-less number-before-number (Space-forced, S-098) refuses — pinned below too
   });
 
-  it('divide and pow templates attach at operand-expected positions with both slots blank', () => {
-    expect(decideAttach({ v: 1, root: null }, { kind: 'empty' }, tok.divide).kind).toBe('template');
-    expect(decideAttach({ v: 1, root: null }, { kind: 'empty' }, tok.pow).kind).toBe('template');
-    expect(parsed(typeSeq([tok.divide]))).toEqual({ v: 1, root: { type: 'frac', num: null, den: null } });
-    expect(parsed(typeSeq([tok.pow]))).toEqual({ v: 1, root: { type: 'pow', base: null, exp: null } });
-  });
-
-  it('decideAttach is pure: envelope and caret are unchanged by consultation', () => {
-    const env = { v: 1, root: { type: 'op', op: 'add', args: [sym('a'), sym('b')] } };
-    const before = JSON.stringify(env);
-    decideAttach(env, { kind: 'node', path: [1] }, tok.plus);
-    expect(JSON.stringify(env)).toBe(before);
-  });
-
-  it('unknown op fns in the tree are barriers, not guesses — wrapping stays inside them', () => {
-    // A host-built chain with an fn outside the table: the climb stops at
-    // it; the token wraps the candidate where it sits (inside the row).
-    const foreign = { v: 1, root: { type: 'op', op: 'bitOr', args: [sym('a'), sym('b')] } };
-    const st = seedAt(foreign, { kind: 'node', path: [1] });
-    expect(parsed(typeToken(st, tok.plus))).toEqual({
-      v: 1,
-      root: { type: 'op', op: 'bitOr', args: [sym('a'), { type: 'op', op: 'add', args: [sym('b'), null] }] },
-    });
-    expect(() => typeToken(st, tok.times)).not.toThrow();
+  it('Space inserts a node boundary: splits inside tokens, separates same-type input at edges (S-021/S-022)', () => {
+    // inside a number: the S-098 forced number-number adjacency state
+    const split = typeToken(at(num(12), tokc([], 1)), space);
+    expectTree(split, imp(num(1), num(2)));
+    expect(split.caret).toEqual(rowc([], 1));
+    expect(split.log.length).toBe(1); // the split IS one op
+    legal(split);
+    expect(isEvaluable(fromJSON(envelopeOf(split))!)).toBe(false); // S-098: refuses while it persists
+    // the seam marker renders between the two numbers
+    expect(toMathML(fromJSON(envelopeOf(split))!)).toContain('integral-seam');
+    // inside a symbol: two symbol nodes
+    const ss = typeToken(at(sym('ab'), tokc([], 1)), space);
+    expectTree(ss, imp(sym('a'), sym('b')));
+    legal(ss);
+    // at a token edge: no tree change, no log entry — the boundary flag arms
+    const armed1 = typeToken(at(sym('ab'), node([])), space);
+    expectTree(armed1, sym('ab'));
+    expect(armed1.log.length).toBe(0);
+    expect((armed1.caret as { boundary?: true }).boundary).toBe(true);
+    // the NEXT same-type input starts a new node instead of gluing
+    const sec = typeToken(armed1, s('c'));
+    expectTree(sec, imp(sym('ab'), sym('c')));
+    // continued typing glues into the new node
+    const third = typeToken(sec, s('d'));
+    expectTree(third, imp(sym('ab'), sym('cd')));
+    legal(third);
+    // Space forced number-number adjacency after a number (S-098)
+    const spaced = typeToken(typeToken(typeSeq([d('5')]), space), d('7'));
+    expectTree(spaced, imp(num(5), num(7)));
+    expect(isEvaluable(fromJSON(envelopeOf(spaced))!)).toBe(false);
+    legal(spaced);
   });
 });
 
-// ——— Undo round-trip ———
+// ——— T4: numbers ———
 
-describe('undo round-trip after policy tokens', () => {
-  it('every token is exactly one log entry (a full mixed realisation)', () => {
-    const tokens: TypedToken[] = [
-      n(2), tok.plus, n(3), tok.times, tok.open, s('a'), tok.minus, s('b'), tok.close, tok.pow,
-    ];
-    let state: EditingState = initSession();
+describe('T4 — digits extend, the dot states', () => {
+  it('digits extend at the caret, in-token offsets included', () => {
+    let state = typeSeq([d('1'), d('2')]);
+    expectTree(state, num(12));
+    const off = typeToken(at(num(123), tokc([], 1)), d('9'));
+    expectTree(off, num(1923));
+    expect(off.caret).toEqual(tokc([], 2));
+    legal(off);
+  });
+
+  it('`.` joins a number as its decimal point; a second dot is a silent no-op', () => {
+    const state = typeToken(at(num(5), tokc([], 1)), dot);
+    expectTree(state, num(5, true));
+    expect(state.caret).toEqual(tokc([], 2)); // inside the number, after the dot
+    legal(state);
+    expect(toMathML(fromJSON(envelopeOf(state))!)).toBe('<math><mn>5.</mn></math>');
+    expectJSONRoundTrip(state);
+    expectNoop(state, dot);
+    // a digit completes the decimal and the flag clears
+    const done = typeToken(state, d('3'));
+    expectTree(done, num(5.3));
+    expect(done.caret).toEqual(tokc([], 3));
+    legal(done);
+    // a dot inside a number (interior offset) is the decimal point there
+    const inner = typeToken(at(num(123), tokc([], 1)), dot);
+    expectTree(inner, num(1.23));
+    expect(inner.caret).toEqual(tokc([], 2));
+    legal(inner);
+  });
+
+  it('a `.` that creates a new number auto-prefixes zero — renders `0.`, caret inside after the dot (S-012/S-033)', () => {
+    // from the empty formula
+    const fromEmpty = typeSeq([dot]);
+    expectTree(fromEmpty, num(0, true));
+    expect(fromEmpty.caret).toEqual(tokc([], 2));
+    legal(fromEmpty);
+    // after a symbol: `a` juxtaposed with `0.|` — the ruled S-012 example
+    const afterSym = typeToken(at(sym('a'), node([])), dot);
+    expectTree(afterSym, imp(sym('a'), num(0, true)));
+    expect(afterSym.caret).toEqual(tokc([1], 2));
+    legal(afterSym);
+    // into a pending 2D slot
+    const inSlot = typeToken(at(frac(null, num(3)), { kind: 'slot', path: [], slot: 'num' }), dot);
+    expectTree(inSlot, frac(num(0, true), num(3)));
+    expect(inSlot.caret).toEqual(tokc(['num'], 2));
+    legal(inSlot);
+  });
+
+  it('a digit typed next to a `0.` extends it (0.5)', () => {
+    const state = typeToken(typeSeq([dot]), d('5'));
+    expectTree(state, num(0.5));
+    legal(state);
+  });
+});
+
+// ——— T5/T10: function paren-conversion ———
+
+describe('T5/T10 — paren conversion, bare heads, comma arg append', () => {
+  it('typed letters build an ordinary symbol; `(` after a matching name converts to the atomic head', () => {
+    const state = typeSeq([s('s'), s('i'), s('n'), open]);
+    expectTree(state, fn('sin', [null]));
+    expect(state.caret).toEqual(rowc([], 0)); // inside the first argument
+    expect(state.log.length).toBe(4); // one op per token
+    legal(state);
+    // completing a first argument continues inside the call
+    const filled = typeToken(state, d('3'));
+    expectTree(filled, fn('sin', [num(3)]));
+    legal(filled);
+  });
+
+  it('T10: with elements to the right the head inserts BARE — no fence added', () => {
+    // sin juxtaposed before a number: content stands right → bare head
+    const bare = typeToken(at(imp(sym('sin'), num(5)), node([0])), open);
+    expectTree(bare, imp(fn('sin', [null], false), num(5)));
+    expect(bare.caret).toEqual(rowc([0], 0));
+    legal(bare);
+    // nothing right → the closing fence is added immediately (S-014 B)
+    const closed = typeToken(at(op('add', sym('x'), sym('sin')), node([1])), open);
+    expectTree(closed, op('add', sym('x'), fn('sin', [null], true)));
+    expect(closed.caret).toEqual(rowc([1], 0));
+    legal(closed);
+  });
+
+  it('non-matching names keep the ordinary T6 group path', () => {
+    const state = typeToken(at(sym('ab'), node([])), open);
+    expectTree(state, imp(sym('ab'), group(null, true)));
+    expect(state.caret).toEqual({ kind: 'slot', path: [1], slot: 'child' });
+    legal(state);
+  });
+
+  it('comma appends an argument cell (T5)', () => {
+    const state = typeToken(at(fn('sin', [sym('a')]), node([0])), comma);
+    expectTree(state, fn('sin', [sym('a'), null]));
+    expect(state.caret).toEqual(rowc([], 1));
+    legal(state);
+    expectNoop(at(op('add', sym('a'), sym('b')), rowc([], 1)), comma); // outside a call: no-op
+  });
+});
+
+// ——— T6 / S-097: groups never auto-wrap; the movable close paren ———
+
+describe('T6 — group creation, S-097 close-paren pairing, dangling fences', () => {
+  it('a plain `(` creates a group with BOTH fences at the caret; content to the left stays outside', () => {
+    const fromEmpty = typeSeq([open]);
+    expectTree(fromEmpty, group(null, true));
+    expect(fromEmpty.caret).toEqual({ kind: 'slot', path: [], slot: 'child' });
+    legal(fromEmpty);
+    // content to the left stays outside — the 5(□) juxtaposition
+    const afterNum = typeToken(at(num(5), node([])), open);
+    expectTree(afterNum, imp(num(5), group(null, true)));
+    expect(afterNum.caret).toEqual({ kind: 'slot', path: [1], slot: 'child' });
+    legal(afterNum);
+  });
+
+  it('a typed `)` completes the innermost unclosed open fence (S-097) and lands after it', () => {
+    const state = typeToken(at(group(sym('x'), false), node([])), close);
+    expectTree(state, group(sym('x'), true));
+    expect(state.caret).toEqual(node([]));
+    legal(state);
+    // the function form restores the same call
+    const fnState = typeToken(at(fn('sqrt', [sym('a')], false), node([0])), close);
+    expectTree(fnState, fn('sqrt', [sym('a')], true));
+    legal(fnState);
+    // nested: innermost first
+    const nested = typeToken(at(group(group(sym('x'), false), true), node(['child'])), close);
+    expectTree(nested, group(group(sym('x'), true), true));
+    legal(nested);
+  });
+
+  it('with nothing unclosed, `)` inserts as a literal dangling close — storable, renders, refused by the gate', () => {
+    const fromEmpty = typeSeq([close]);
+    expectTree(fromEmpty, fence());
+    legal(fromEmpty);
+    expect(isEvaluable(fromJSON(envelopeOf(fromEmpty))!)).toBe(false);
+    const afterNum = typeToken(at(num(5), node([])), close);
+    expectTree(afterNum, imp(num(5), fence()));
+    legal(afterNum);
+    expect(isEvaluable(fromJSON(envelopeOf(afterNum))!)).toBe(false);
+  });
+});
+
+// ——— The widened pair rule + the mixed-multiply-row definition ———
+
+describe('juxtaposition evaluation — the widened pair rule (group-before-X ruled 2026-11-08)', () => {
+  it('a GROUP before X evaluates as implicit multiply, like number-before-X', () => {
+    const env = imp(group(op('add', sym('a'), sym('b'))), sym('x'));
+    const ast = fromJSON({ v: 1, root: env })!;
+    const scope = { a: 1, b: 2, x: 4 };
+    expect(isEvaluable(ast)).toBe(true);
+    expect(ast.toMathNode().evaluate(scope)).toBe(12);
+    expect(parse('(a+b)*x').evaluate(scope)).toBe(12);
+  });
+
+  it('number-before-X evaluates; fn/unit-before-X still refuse (ruled unchanged)', () => {
+    const numFirst = fromJSON({ v: 1, root: imp(num(5), sym('x')) })!;
+    expect(isEvaluable(numFirst)).toBe(true);
+    const fnFirst = fromJSON({ v: 1, root: imp(fn('sqrt', [num(4)]), sym('x')) })!;
+    expect(isEvaluable(fnFirst)).toBe(false);
+    expect(() => fnFirst.toMathNode()).toThrow(/implicit adjacency/);
+    const unitFirst = fromJSON({ v: 1, root: imp({ type: 'unit', value: num(5), unit: 'mm' }, sym('x')) })!;
+    expect(isEvaluable(unitFirst)).toBe(false);
+  });
+});
+
+describe('mixed multiply rows — juxtaposition never shares a row with explicit glyphs', () => {
+  it('explicit × after glyph-less 5x nests the implicit subrow: `5x|` + `×` → [implicit{5,x}, null]', () => {
+    const state = typeToken(typeSeq([d('5'), s('x')]), times);
+    expectTree(state, op('multiply', imp(num(5), sym('x')), null));
+    expect(state.caret).toEqual(rowc([], 1));
+    legal(state);
+    // filling the pending cell completes the explicit segment: 5x×3 evaluates 5·x·3
+    const filled = typeToken(state, d('3'));
+    expectTree(filled, op('multiply', imp(num(5), sym('x')), num(3)));
+    expect(fromJSON(envelopeOf(filled))!.toMathNode().evaluate({ x: 2 })).toBe(30);
+    legal(filled);
+  });
+
+  it('a letter after an explicit edge cell nests into it: `2×3|` + `x` → [2, implicit{3,x}]', () => {
+    const state = typeToken(typeSeq([d('2'), times, d('3')]), s('x'));
+    expectTree(state, op('multiply', num(2), imp(num(3), sym('x'))));
+    legal(state);
+    expect(fromJSON(envelopeOf(state))!.toMathNode().evaluate({ x: 4 })).toBe(24);
+  });
+
+  it('required pin (owner-confirmed definition): marker-carrying subrows never flatten into explicit parents — both directions', () => {
+    // typing produces the nested shape only …
+    const typed = typeSeq([d('5'), s('x'), times, d('3')]);
+    expectTree(typed, op('multiply', imp(num(5), sym('x')), num(3)));
+    // … and fromJSON/toJSON round-trips the nesting byte-identically —
+    // the marked subrow survives as its own cell, never flattened away.
+    const env = envelopeOf(typed);
+    const round = toJSON(fromJSON(env)!);
+    expect(j(round)).toBe(j(env));
+    // a seeded explicit row with a marked cell stays nested too (identity)
+    const seeded = op('multiply', imp(num(5), sym('x')), num(3));
+    const seededEnv = { v: 1, root: seeded };
+    expect(j(toJSON(fromJSON(seededEnv)!))).toBe(j(seededEnv));
+    // the marker is what distinguishes the subrow from a flattenable chain:
+    // the same cells WITHOUT the marker are a legal plain explicit row.
+    const plain = op('multiply', num(5), sym('x'), num(3));
+    expect(j(toJSON(fromJSON({ v: 1, root: plain })!))).toBe(j({ v: 1, root: plain }));
+  });
+});
+
+// ——— Rejections are silent no-ops ———
+
+describe('the standing rejection pattern: rejected keys are silent no-ops', () => {
+  it('second dot in a number (S-013), comma outside any call, Space in a void', () => {
+    expectNoop(at(num(5.5), tokc([], 3)), dot);
+    expectNoop(at(op('add', sym('a'), sym('b')), rowc([], 1)), comma);
+    expectNoop(initSession(), space);
+    expectNoop(initSession(), comma);
+  });
+});
+
+// ——— One op per typed token; undo steps one token back ———
+
+describe('discipline: one typed token = one op = one undo step; movement never logs', () => {
+  it('a long mixed sequence logs exactly one op per non-Space token (Space never logs)', () => {
+    const flow: TypedToken[] = [d('5'), plus, s('x'), space, s('y'), times, open, d('2'), close];
+    let state = initSession();
     let ops = 0;
-    for (const t of tokens) {
+    for (const t of flow) {
       const before = state.log.length;
       state = typeToken(state, t);
-      ops += state.log.length - before;
+      const grown = state.log.length - before;
+      expect(grown).toBeLessThanOrEqual(1);
+      ops += grown;
+      // every intermediate state is fromJSON-legal with a resolving caret
+      legal(state);
     }
-    expect(ops).toBe(tokens.length);
+    expect(ops).toBe(flow.length - countSpaces(flow));
+    expect(state.log.length).toBe(ops);
   });
 
-  it('typed tokens then undos restore the seed byte-exactly (tree + caret)', () => {
-    for (const seed of [
-      { v: 1, root: null },
-      { v: 1, root: { type: 'num', value: 42 } },
-      { v: 1, root: { type: 'op', op: 'multiply', args: [sym('a'), sym('b')] } },
-    ]) {
-      const start = seedAt(seed, seed.root === null ? { kind: 'empty' } : { kind: 'node', path: [] });
-      const baseline = start.log.length;
-      const before = JSON.stringify([treeOf(start), start.caret]);
-      let state = start;
-      state = typeToken(state, tok.plus);
-      state = typeToken(state, n(7));
-      state = typeToken(state, tok.times);
-      state = typeToken(state, s('c'));
-      state = typeToken(state, tok.close); // no-op: closes nothing
-      state = typeToken(state, tok.divide);
-      expect(state.log.length).toBe(baseline + 5);
-      while (state.log.length > baseline) state = undo(state);
-      expect(JSON.stringify([treeOf(state), state.caret])).toBe(before);
+  it('undo steps one typed token back, byte-exactly (tree + caret)', () => {
+    const flow: TypedToken[] = [d('5'), plus, s('x'), times, d('2')];
+    const states: EditingState[] = [];
+    let state = initSession();
+    states.push(state);
+    for (const t of flow) {
+      state = typeToken(state, t);
+      states.push(state);
     }
+    for (let i = flow.length; i > 0; i -= 1) {
+      state = undo(state);
+      expectTree(state, tree(states[i - 1]));
+      legal(state);
+    }
+    expect(j(envelopeOf(state))).toBe(j(expectedEmpty));
+    expect(state.caret).toEqual({ kind: 'empty' });
   });
 
-  it('every corpus state undoes op-by-op back to the empty formula', () => {
-    for (const source of CORPUS) {
-      let state = typeSource(source);
-      while (state.log.length > 0) state = undo(state);
-      expect(treeOf(state)).toBe('{"v":1,"root":null}');
-      expect(state.caret).toEqual({ kind: 'empty' });
-    }
+  it('pure caret movement never enters the log (the standing rule)', () => {
+    const state = at(op('add', sym('a'), sym('b')), rowc([], 1));
+    const moved = applyOp(state, { op: 'move', dir: 'right' });
+    expect(moved.log.length).toBe(0);
+    expect(moved.log).toBe(state.log);
   });
 });
 
-// ——— Emitted legality ———
+/** Count of space tokens in a flow (the boundary arming never logs). */
+function countSpaces(flow: readonly TypedToken[]): number {
+  return flow.filter((t) => t.t === 'space').length;
+}
 
-describe('emitted legality: policy states are contract-valid by construction', () => {
-  it('every intermediate corpus state passes the fromJSON gate and carries a resolving caret', () => {
-    for (const source of CORPUS) {
-      let state: EditingState = initSession();
-      for (const t of lex(source)) {
-        state = typeToken(state, t);
-        const env = envelopeOf(state);
-        const rebuilt = fromJSON(env); // the contract gate: no throw, legal tree
-        expect(caretResolves(rebuilt, state.caret)).toBe(true);
-        expect(JSON.stringify(envelopeOf({ ...state, root: rebuilt }))).toBe(JSON.stringify(env));
-      }
+/** fromJSON/toJSON round-trip identity for a state's envelope. */
+function expectJSONRoundTrip(state: EditingState): void {
+  const env = envelopeOf(state);
+  expect(j(toJSON(fromJSON(env)!))).toBe(j(env));
+}
+
+/** Operator-name sanity for the glyph set (× is the multiply row). */
+describe('operator glyph sanity', () => {
+  it('the three T1 glyph ops are add/subtract/multiply rows', () => {
+    const fns: Readonly<[TypedToken, OperatorFn]>[] = [
+      [plus, 'add'],
+      [minus, 'subtract'],
+      [times, 'multiply'],
+    ];
+    for (const [token, name] of fns) {
+      const state = typeSeq([s('a'), token]);
+      expect((tree(state) as unknown as { op: string }).op).toBe(name);
     }
   });
 });

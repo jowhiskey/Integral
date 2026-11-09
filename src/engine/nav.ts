@@ -27,6 +27,7 @@ import {
   caretResolvesIn,
   hasSlot,
   isRowNode,
+  isTokenNode,
   nodeAt,
   rowArgs,
   slotValue,
@@ -355,12 +356,13 @@ export function resolveMove(
     }
 
     case 'token': {
-      // Inside a number token (numbers only — every other leaf stays atomic).
-      // Left/Right step one character; at the ends they exit to the adjacent
-      // structural stations (the climb the node caret would do). Vertical keys
-      // behave like the number's owning structural station for the move itself.
+      // Inside a num or sym token (rework session 2a: symbols join numbers —
+      // N1; every other leaf stays atomic). Left/Right step one character; at
+      // the ends they exit to the adjacent structural stations (the climb the
+      // node caret would do). Vertical keys behave like the token's owning
+      // structural station for the move itself.
       const node = nodeAt(env, caret.path);
-      if (node === null || node.type !== 'num') return null;
+      if (node === null || !isTokenNode(node)) return null;
       const len = tokenText(node).length;
       if (!Number.isInteger(caret.index) || caret.index < 0 || caret.index > len) return null;
       if (dir === 'left') {

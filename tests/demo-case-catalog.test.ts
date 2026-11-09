@@ -43,7 +43,10 @@ describe('demo case catalog — structure and hygiene', () => {
     // References only, NEVER behavior predictions — expected behavior lives in
     // docs/context/interaction.md. Legal refs: T/N/C/D/U/K family IDs,
     // S-scenario IDs, OA-* owner-amendment labels.
-    const RULE_PATTERN = /^(T\d\d?|N\d|C\d|D\d|U\d|K\d|S-\d{3}|OA-(digit-glue|juxtaposition|projection|fence))$/;
+    // session 2a extends the OA set with the two additions ruled/fixed during the session:
+    // OA-dot-eval (a dotted number evaluates as its value) and OA-mixed (the
+    // mixed implicit/explicit multiply-row definition).
+    const RULE_PATTERN = /^(T\d\d?|N\d|C\d|D\d|U\d|K\d|S-\d{3}|OA-(digit-glue|juxtaposition|projection|fence|dot-eval|mixed))$/;
     for (const c of CASES) {
       expect(c.rules.length > 0, `${c.id} carries at least one rule ref`).toBe(true);
       for (const rule of c.rules) {

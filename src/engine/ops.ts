@@ -23,6 +23,7 @@ import {
   entryPath,
   hasSlot,
   isRowNode,
+  isTokenNode,
   nodeAt,
   rowArgs,
   setSlot,
@@ -38,7 +39,6 @@ import { NAV_PROFILES, resolveMove, type NavDir } from './nav.js';
 
 /** Where an op acts — always an explicit path, never a policy decision.
  *
- *  Arc-session-3 additions (insert-only placements; deleteAt rejects them):
  *  `fill` targets a NULL args cell (the operand-expected position a typed
  *  operator leaves behind — filling replaces the null in place, one op);
  *  `replaceRoot` / `replaceSlot` / `replaceCell` target an OCCUPIED root /
@@ -55,18 +55,21 @@ export type Position =
   | { readonly at: 'replaceSlot'; readonly path: Path; readonly slot: SlotName }
   | { readonly at: 'replaceCell'; readonly path: Path; readonly index: number };
 
-/** The occupied-replace placements (swap replaces a whole re-folded row
+/** The occupied-replace placements (typing relocations swap a whole subrow
  *  subtree at one of these, reusing the replace mechanics). */
 export type ReplacePosition =
   | { readonly at: 'replaceRoot' }
   | { readonly at: 'replaceSlot'; readonly path: Path; readonly slot: SlotName }
   | { readonly at: 'replaceCell'; readonly path: Path; readonly index: number };
 
-/** Place the given node at a position: fill the empty root slot, fill an
- *  empty fixed slot, or splice into an args row at an index. */
+/** Insert data: the node to place. `node` is null ONLY for the `row` position
+ *  — the null-cell splice (rework session 2a): a typed glyph extends its
+ *  same-op row by growing a separator slot there, the null cell being the
+ *  glyph's pending operand (leading/interior/trailing all legal, rendered
+ *  bare per the session-1 T7 split). Every other position requires a node. */
 export interface InsertOp {
   readonly op: 'insert';
-  readonly node: NodeJson;
+  readonly node: NodeJson | null;
   readonly at: Position;
 }
 
@@ -93,27 +96,27 @@ export interface MoveOp {
 }
 
 /**
- * Swap an operator mid-row (arc session 4): replace the subtree at `at` with
- * `node` (the re-folded maximal row), landing the caret at `to` — the changed
- * operator's junction in the new shape (a row seam, or the natural dive for
- * frac/pow swaps). The op is pure data: policy computes the restructuring,
- * the reducer is its executor. Reuses the replace placements' mechanics and
- * their occupancy errors; the relocation is the op's own defined rule (the
- * policy never corrects placement with moveCaret).
+ * Place a node at a position with an EXPLICIT result caret (rework session
+ * 2a; the mechanical successor of the swap op). The transform is the insert/
+ * insert-position semantics (root/slot/row/fill/replace*, occupancy errors
+ * included); the relocation is the op's own `to` — validated like every
+ * caret. The typing policy computes both the node and where the caret lands
+ * ("directly after the inserted token"), so one typed token = one op = one
+ * log entry with exact placement.
  */
-export interface SwapOp {
-  readonly op: 'swap';
-  /** The restructured replacement subtree (the whole maximal row node). */
-  readonly node: NodeJson;
-  /** Replace placement for the swapped-out subtree (root/slot/cell). */
-  readonly at: ReplacePosition;
-  /** Caret after the swap; validated against the transformed tree. */
+export interface PlaceOp {
+  readonly op: 'place';
+  /** Null is legal only for the `row` position (the null-cell splice with
+   *  an explicit result caret — the guard in insertInto enforces it). */
+  readonly node: NodeJson | null;
+  readonly at: Position;
+  /** Caret after the op; validated against the transformed tree. */
   readonly to: Caret;
 }
 
 /** The op vocabulary — plain data values (serializable, so op logs can be
  *  persisted, replayed, and property-tested without a DOM). */
-export type Op = InsertOp | DeleteAtOp | MoveCaretOp | MoveOp | SwapOp;
+export type Op = InsertOp | DeleteAtOp | MoveCaretOp | MoveOp | PlaceOp;
 
 /** One applied op. Undo snapshots the full tree + caret state before the op —
  *  mechanics chosen over inverse ops: byte-exact restoration by construction
@@ -185,10 +188,9 @@ export function applyOp(state: EditingState, op: Op): EditingState {
       return applyMoveCaret(state, op);
     case 'move':
       return applyMove(state, op);
-    case 'swap':
-      // Replace mechanics reused: occupancy errors, strict replace semantics,
-      // the fromJSON gate — the only op-owned extra is the junction caret.
-      return applyMutating(state, op, swapInto);
+    case 'place':
+      // Insert-position transform with the op's own explicit result caret.
+      return applyMutating(state, op, placeInto);
     default:
       throw new EngineError('unknown-op', `applyOp: unknown op ${JSON.stringify((op as { op: unknown }).op)}`);
   }
@@ -263,7 +265,7 @@ const cloneEnvelope = (env: Envelope): Envelope => JSON.parse(JSON.stringify(env
 /** One tree-mutating op: serialize + clone, transform the clone at the JSON
  *  level, rebuild through fromJSON (the contract gate), relocate the caret
  *  by the op's defined rule. */
-function applyMutating<T extends InsertOp | DeleteAtOp | SwapOp>(
+function applyMutating<T extends InsertOp | DeleteAtOp | PlaceOp>(
   state: EditingState,
   op: T,
   transform: (env: Envelope, op: T) => void,
@@ -299,6 +301,9 @@ function applyMoveCaret(state: EditingState, op: MoveCaretOp): EditingState {
 
 function insertInto(env: Envelope, op: InsertOp): void {
   const at = op.at;
+  if (op.node === null && at.at !== 'row') {
+    throw new EngineError('unknown-op', `insert: a null cell splice is row-position-only (got '${at.at}')`);
+  }
   switch (at.at) {
     case 'root': {
       if (env.root !== null) {
@@ -406,9 +411,11 @@ function deleteAtFrom(env: Envelope, op: DeleteAtOp): void {
   }
 }
 
-/** The swap transform: the replace placements' own mechanics, nothing more —
- *  the policy handed the reducer a finished replacement subtree. */
-function swapInto(env: Envelope, op: SwapOp): void {
+/** The place transform: the insert-position mechanics (incl. occupancy
+ *  errors) — the typing policy hands the reducer a finished node. A null
+ *  node is legal only for the row position (the null-cell splice with an
+ *  explicit result caret). */
+function placeInto(env: Envelope, op: PlaceOp): void {
   insertInto(env, { op: 'insert', node: op.node, at: op.at });
 }
 
@@ -484,11 +491,11 @@ function diveCaret(inserted: NodeJson, path: Path): Caret {
     : { kind: 'row', path, index: empty.index };
 }
 
-/** A token caret sitting exactly on a replaced number keeps its in-token
+/** A token caret sitting exactly on a replaced num/sym keeps its in-token
  *  offset, clamped to the new length — a shrink (backspace peel) keeps the
- *  offset, a grow (digit merge) advances the caret one position past the
- *  inserted text. Returns null when the rule does not apply (the replace
- *  relocates by the dive rule instead). */
+ *  offset, a grow (digit merge / letter glue) advances the caret one position
+ *  past the inserted text. Returns null when the rule does not apply (the
+ *  replace relocates by the dive rule instead). */
 function preservedTokenCaret(
   caretBefore: Caret,
   replacedPath: Path,
@@ -496,10 +503,10 @@ function preservedTokenCaret(
   before: Envelope,
 ): Caret | null {
   if (caretBefore.kind !== 'token' || !samePath(caretBefore.path, replacedPath)) return null;
-  if (op.node.type !== 'num') return null;
+  if (op.node !== null && !isTokenNode(op.node)) return null;
   const beforeNode = nodeAt(before, caretBefore.path);
-  if (beforeNode === null || beforeNode.type !== 'num') return null;
-  const newLen = tokenText(op.node).length;
+  if (beforeNode === null || !isTokenNode(beforeNode)) return null;
+  const newLen = op.node === null ? 0 : tokenText(op.node).length;
   const index =
     newLen > tokenText(beforeNode).length
       ? Math.min(caretBefore.index + 1, newLen)
@@ -519,10 +526,9 @@ function preservedTokenCaret(
  * - row splice              → coordinates in the spliced row's address space
  *                             shift with the splice (adjustRowCaret); nothing
  *                             else moves.
- * - swap (arc session 4)    → the changed operator's junction in the
- *                             re-folded row: a row seam on the new binding
- *                             for operator swaps, the natural dive for ÷/^
- *                             (structure tokens carry their own empty slot).
+ * - null-cell splice        → the row-plug shift above; the caret plays
+ *                             through adjustRowCaret like any splice (a
+ *                             typed glyph's seam sits directly after it).
  * - fill (null args cell)   → the caret that was in the filled cell, or on
  *                             the row's owner, moves onto the new node
  *                             (owner hop mirrors the slot rule); every
@@ -533,6 +539,9 @@ function preservedTokenCaret(
  *                             or onto the inserted node when it has none.
  *                             Carets outside the replaced content survive
  *                             unchanged — a replace never shifts coordinates.
+ * - place (rework 2a)       → the op's own explicit `to` (validated); the
+ *                             typing policy computes it ("directly after
+ *                             the inserted token").
  * - deleteAt at root        → the empty-formula caret.
  * - deleteAt clearing a slot → the now-empty slot; only a caret whose address
  *                             was inside the removed subtree falls back to it,
@@ -546,14 +555,13 @@ function preservedTokenCaret(
  */
 function relocateCaret(
   caretBefore: Caret,
-  op: InsertOp | DeleteAtOp | SwapOp,
+  op: InsertOp | DeleteAtOp | PlaceOp,
   env: Envelope,
   before: Envelope,
 ): Caret {
-  if (op.op === 'swap') {
-    // The swap's own relocation: the junction caret the policy derived from
-    // the re-folded shape (row seam on the changed operator, or the natural
-    // dive for divide/pow). Validated like every relocation below.
+  if (op.op === 'place') {
+    // The place op's own relocation: the caret the typing policy derived.
+    // Validated like every relocation below.
     return op.to;
   }
   const at = op.at;
@@ -587,7 +595,7 @@ function relocateCaret(
       if (op.op !== 'insert') {
         throw new EngineError('unknown-op', `deleteAt: position '${at.at}' is insert-only`);
       }
-      return preservedTokenCaret(caretBefore, [], op, before) ?? diveCaret(op.node, []);
+      return preservedTokenCaret(caretBefore, [], op, before) ?? diveCaret(op.node!, []);
     }
     case 'replaceSlot':
       if (op.op !== 'insert') {
@@ -596,7 +604,7 @@ function relocateCaret(
       return (
         preservedTokenCaret(caretBefore, [...at.path, at.slot], op, before) ??
         (enteredThrough(caretBefore, at.path, at.slot)
-          ? diveCaret(op.node, [...at.path, at.slot])
+          ? diveCaret(op.node!, [...at.path, at.slot])
           : caretBefore)
       );
     case 'replaceCell':
@@ -606,7 +614,7 @@ function relocateCaret(
       return (
         preservedTokenCaret(caretBefore, [...at.path, at.index], op, before) ??
         (enteredThroughCell(caretBefore, at.path, at.index)
-          ? diveCaret(op.node, [...at.path, at.index])
+          ? diveCaret(op.node!, [...at.path, at.index])
           : caretBefore)
       );
   }

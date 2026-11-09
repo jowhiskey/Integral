@@ -24,6 +24,7 @@ import {
 } from '../src/ast/index.js';
 
 import { caretAnchor } from '../src/editor/caret-overlay.js';
+import { caretResolvesIn } from '../src/engine/index.js';
 import { buildMathML } from '../src/editor/mathml-dom.js';
 import type { Caret } from '../src/engine/index.js';
 import { stubRects } from './editor-support.js';
@@ -403,5 +404,69 @@ describe('op-row projection: leading/doubled operators read unary; trailing/all-
     const plain = fromJSON(env(rowOf('add', num(5), num(3))))!;
     expect(isEvaluable(plain)).toBe(true);
     expect(plain.toMathNode().evaluate()).toBe(8);
+  });
+});
+
+// ——— 6. The in-progress trailing decimal point (T4/S-012, session 2a) ———
+
+describe('the num dot state: storable, renders `5.`, evaluates as its value', () => {
+  const dotted = (value: number): NodeJson => ({ type: 'num', value, dot: true });
+
+  it('renders the trailing dot and round-trips byte-stably (envelope v1, emitted only when set)', () => {
+    expect(mathOf(dotted(5))).toBe('<math><mn>5.</mn></math>');
+    const e = env(dotted(5));
+    expect(toJSON(fromJSON(e)!)).toStrictEqual(e);
+    // balanced v1 output stays byte-unchanged (no dot field when false)
+    expect(toJSON(fromJSON(env(num(5)))!)).toStrictEqual({ v: 1, root: num(5) });
+  });
+
+  it('owner ruling: a dotted number EVALUATES as its numeric value (`5.` = 5) — mathjs parity', () => {
+    const ast = fromJSON(env(dotted(5)))!;
+    expect(isEvaluable(ast)).toBe(true); // isEvaluable unaffected by the flag
+    expect(ast.toMathNode().evaluate()).toBe(5);
+    expect(parse('5.').evaluate()).toBe(5);
+    // the `0.` auto-prefix state evaluates as 0
+    expect(fromJSON(env(dotted(0)))!.toMathNode().evaluate()).toBe(0);
+  });
+
+  it('fromJSON validates the field shape (booleans only)', () => {
+    expect(() => fromJSON(env({ type: 'num', value: 5, dot: 1 } as unknown as NodeJson))).toThrow(/dot/);
+    expect(() => fromJSON(env({ type: 'num', value: 5, dot: 'yes' } as unknown as NodeJson))).toThrow(/dot/);
+  });
+
+  it('the trailing dot is part of the in-token text (caret offsets address it)', () => {
+    // `0.` has length 2 — the T4 caret "inside the number, after the dot"
+    // sits at offset 2, legal token-carry data
+    expect(caretResolvesIn(env(dotted(0)), { kind: 'token', path: [], index: 2 })).toBe(true);
+    expect(caretResolvesIn(env(dotted(0)), { kind: 'token', path: [], index: 3 })).toBe(false);
+  });
+});
+
+// ——— 7. The widened pair rule: group-before-X (ruled 2026-11-08) ———
+
+describe('widened juxtaposition pairing: group-before-X evaluates, like number-before-X', () => {
+  it('(a+b)x evaluates as (a+b)*x; (a+b)(c+d) evaluates too (right side non-num)', () => {
+    const g = fromJSON(env(imp(group(rowOf('add', sym('a'), sym('b'))), sym('x'))))!;
+    const scope = { a: 1, b: 2, x: 4 };
+    expect(isEvaluable(g)).toBe(true);
+    expect(g.toMathNode().evaluate(scope)).toBe(12);
+    const gg = fromJSON(env(imp(group(rowOf('add', sym('a'), sym('b'))), group(rowOf('add', sym('c'), sym('d'))))))!;
+    const scope2 = { a: 2, b: 3, c: 4, d: 5 };
+    expect(isEvaluable(gg)).toBe(true);
+    expect(gg.toMathNode().evaluate(scope2)).toBe(45);
+  });
+
+  it('group-before-NUMBER still refuses (the literal mirror of the number rule: the right cell must not be a number)', () => {
+    const gn = fromJSON(env(imp(group(rowOf('add', sym('a'), sym('b'))), num(3))))!;
+    expect(isEvaluable(gn)).toBe(false);
+    expect(() => gn.toMathNode()).toThrow(/implicit adjacency/);
+  });
+
+  it('the single shared predicate drives gate + fold: symbol-before-X and number-number still refuse', () => {
+    const sx = fromJSON(env(imp(sym('x'), group(rowOf('add', sym('a'), sym('b'))))))!;
+    expect(isEvaluable(sx)).toBe(false);
+    expect(() => sx.toMathNode()).toThrow(/implicit adjacency/);
+    const nn = fromJSON(env(imp(num(5), num(3))))!;
+    expect(isEvaluable(nn)).toBe(false);
   });
 });

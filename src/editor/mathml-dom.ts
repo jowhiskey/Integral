@@ -229,7 +229,7 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
     switch (node.type) {
       case 'num': {
         const mn = el('mn');
-        mn.textContent = String((node as NumberNode).value);
+        mn.textContent = String((node as NumberNode).value) + ((node as NumberNode).dot ? '.' : '');
         return own(path, [mn], mn);
       }
       case 'sym': {

@@ -75,7 +75,9 @@ describe('key classification (pure)', () => {
     expect(KEYMAP['^']).toEqual({ t: 'pow' });
     expect(KEYMAP['(']).toEqual({ t: 'groupOpen' });
     expect(KEYMAP[')']).toEqual({ t: 'groupClose' });
-    expect(KEYMAP[' ']).toBeUndefined(); // space: outside the keymap = unknown token
+    expect(KEYMAP['.']).toEqual({ t: 'dot' });
+    expect(KEYMAP[',']).toEqual({ t: 'comma' });
+    expect(KEYMAP[' ']).toEqual({ t: 'space' }); // S-021/S-022 boundary mechanics
 
     const ev = (key: string, mods: KeyOpts = {}) => ({ key, ctrlKey: !!mods.ctrl, metaKey: !!mods.meta, altKey: !!mods.alt, shiftKey: !!mods.shift });
     expect(classifyKey(ev('z', { ctrl: true })).kind).toBe('undo');
@@ -145,26 +147,28 @@ describe('typing', () => {
     expect(j(controller.getEnvelope().root)).toBe(j({ type: 'op', op: 'add', args: [num(5), num(3)] }));
   });
 
-  it('a mid-row operator-adjacent caret swaps via the existing hook (one key = one swap = one log entry)', () => {
+  it('a mid-row operator-adjacent caret inserts the glyph literally (S-006: before the existing operator)', () => {
     const { controller, container } = make({ v: 1, root: { type: 'op', op: 'add', args: [sym('a'), sym('b')] } });
-    controller.placeCaret(row([], 1)); // seam between a and b: operator-adjacent
+    controller.placeCaret(row([], 1)); // the seam around the + glyph
     container.focus();
     const ev = press(container, '*');
     expect(ev.defaultPrevented).toBe(true);
-    expect(controller.getState().log.length).toBe(1);
-    expect(j(controller.getEnvelope().root)).toBe(j({ type: 'op', op: 'multiply', args: [sym('a'), sym('b')] }));
-    expect(j(controller.getState().caret)).toBe(j(row([], 1))); // junction seam on the new glyph
+    expect(controller.getState().log.length).toBe(1); // one key = one op = one log entry
+    expect(j(controller.getEnvelope().root)).toBe(
+      j({ type: 'op', op: 'multiply', args: [sym('a'), { type: 'op', op: 'add', args: [null, sym('b')] }] }),
+    );
+    expect(j(controller.getState().caret)).toBe(j(row([], 1))); // directly after the new glyph
   });
 
-  it('a rejected token (not-a-typing-point at a row seam) is a defined no-op: no state change, no log growth, no throw', () => {
+  it('a letter at a row seam glues into the right token (N2/T3): one op, caret inside the glued token', () => {
     const { controller, container } = make({ v: 1, root: { type: 'op', op: 'add', args: [sym('a'), sym('b')] } });
     controller.placeCaret(row([], 1));
     container.focus();
-    const before = controller.getState();
-    const ev = press(container, 'x'); // a leaf at a row seam: not a typing point
-    expect(ev.defaultPrevented).toBe(true); // still a handled typing key
-    expect(controller.getState()).toBe(before); // same state object
-    expect(controller.getState().log.length).toBe(0); // no log growth
+    const ev = press(container, 'x');
+    expect(ev.defaultPrevented).toBe(true);
+    expect(controller.getState().log.length).toBe(1);
+    expect(j(controller.getEnvelope().root)).toBe(j({ type: 'op', op: 'add', args: [sym('a'), sym('xb')] }));
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: [1], index: 1 }));
   });
 
   it('an unknown token (space) is a defined no-op', () => {

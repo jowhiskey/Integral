@@ -224,7 +224,9 @@ function parseNode(value: unknown, path: string, allowedUnits: ReadonlySet<strin
   const node = value as Record<string, unknown> & { type: NodeJson['type'] };
   switch (node.type) {
     case 'num':
-      return new NumberNode(requireNumber(node.value, `${path}.value`));
+      // dot: the in-progress trailing decimal point (T4/S-012, additive) —
+      // boolean-validated; a dotted number evaluates as its value.
+      return new NumberNode(requireNumber(node.value, `${path}.value`), optBoolean(node.dot, `${path}.dot`, false));
     case 'sym':
       return new SymbolNode(optString(node.name, `${path}.name`));
     case 'op': {
