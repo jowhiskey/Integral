@@ -6,8 +6,8 @@
 ## Layout
 ```
 src/ast/        # node classes, JSON envelope (versioned, additive-only), toMathNode fold, vocabulary
-src/engine/     # editing engine (since 2026-11-06): ops as values, pure reducer, caret + nav profiles + insertion policy + operator swap, undo/redo, backspace — runtime-agnostic, no DOM
-src/editor/     # DOM layer (since 2026-11-07: rendering + caret overlay + click placement + keyboard + backspace wiring landed; superseded 2026-11-08 by the behavior rework: seven implementation sessions against the owner-authored interaction spec — complete 2026-11-07, mirrored at docs/context/interaction.md (the binding contract); session 1 states & rendering landed 2026-11-08, sessions 2a-5 pending; earlier behavior rulings are void as intent; the dev demo page is the 83-case visual-test catalog case browser) — caret movement lives in src/engine — NOT plain-text input
+src/engine/     # editing engine (since 2026-11-06): ops as values, pure reducer, caret + nav profiles + literal typing surface (rework session 2a, 2026-11-09, supersedes insertion policy + operator swap, both deleted), undo/redo, backspace — runtime-agnostic, no DOM
+src/editor/     # DOM layer (since 2026-11-07: rendering + caret overlay + click placement + keyboard + backspace wiring landed; superseded 2026-11-08 by the behavior rework: seven implementation sessions against the owner-authored interaction spec — complete 2026-11-07, mirrored at docs/context/interaction.md (the binding contract); sessions 1 + 2a landed (states & rendering 2026-11-08; literal insertion core T1–T6 2026-11-09), sessions 2b-5 pending; earlier behavior rulings are void as intent; the dev demo page is the visual-test catalog case browser) — caret movement lives in src/engine — NOT plain-text input
 docs/context/   # editor-spec.md — the frozen AST spec (read before touching node types); interaction.md — the binding interaction contract (read before touching editing behavior)
 ```
 
@@ -32,10 +32,11 @@ CI exists since 2026-11-06: `.github/workflows/ci.yml`, PR-triggered plus a nigh
 | Area | Read first |
 |---|---|
 | Anything AST-related (nodes, JSON, vocabulary, walker) | `docs/context/editor-spec.md` |
-| Editing engine (ops, caret, movement, insertion policy, operator swap, undo/redo, backspace) | `docs/context/editor-spec.md` |
+| Editing engine (ops, caret, movement, typing policy, undo/redo, backspace) | `docs/context/editor-spec.md` |
 | Editor DOM layer (MathML rendering, caret overlay, click placement, keyboard incl. backspace) | `docs/context/editor-spec.md` |
 | Editing behavior contract (typing, navigation, clicks, deletion, undo/redo, special keys) | `docs/context/interaction.md` |
 
 ## History & docs feedback
 - **Recent history:** `git log` — docs commits carry structured session records (what landed, why, impact, friction). Your session brief carries the current state; this file and `docs/context/*` carry the stable reference.
 - **Docs feedback:** the docs are stable reference material; the code is ground truth. If any statement in `AGENTS.md` or `docs/context/*` contradicts what you find in the code, quote the doc line in your session report — never work around a wrong doc silently.
+
