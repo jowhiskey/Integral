@@ -176,7 +176,7 @@ describe('toMathML: incomplete trees render, never throw (display, not evaluatio
   it('empty-string fields render empty (string fields, not slot placeholders)', () => {
     expect(new SymbolNode('').toMathML()).toBe(M`<math><mi></mi></math>`);
     expect(new FunctionNode('', [new NumberNode(1)]).toMathML()).toContain(M`<mi></mi><mo fence="true">(</mo>`);
-    expect(new SubscriptNode('', '').toMathML()).toBe(M`<math><msub><mi></mi><mi></mi></msub></math>`);
+    expect(new SubscriptNode('', '').toMathML()).toBe(M`<math><msub><mi></mi><mi>□</mi></msub></math>`);
     // empty unit: empty upright mi, and no separator (nothing to separate)
     expect(new UnitNode(new NumberNode(50), '').toMathML()).toBe(
       M`<math><mrow><mn>50</mn><mi mathvariant="normal"></mi></mrow></math>`,
@@ -228,7 +228,7 @@ describe('toMathML: incomplete trees render, never throw (display, not evaluatio
       [
         'empty sub labels',
         { v: 1, root: { type: 'sub', base: '', sub: '' } },
-        M`<math><msub><mi></mi><mi></mi></msub></math>`,
+        M`<math><msub><mi></mi><mi>□</mi></msub></math>`,
       ],
       [
         'empty unit name (pinned incomplete-state exception)',

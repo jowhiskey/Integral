@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { fromJSON } from '../src/ast/serialize.js';
+import type { NodeJson } from '../src/ast/json.js';
 
 import {
   backspace,
@@ -96,13 +97,18 @@ describe('D1 — char-wise in tokens (S-063/S-065 A/S-069; the pre-rework number
     legal(state);
   });
 
-  it('an emptied label keeps the incomplete unit; BS at the right edge then eats the value digits', () => {
+  it('an emptied label kills the unit shape — the value promotes bare (the owner\'s B-08 live reading; D1 + the 2b-2 reversion with an empty run)', () => {
+    // `50m|` + BS: the label run empties → the num survives alone, the
+    // caret at the splice side facing the dead label — deletion then
+    // continues into the value digits
     let state = backspace(at(unitNode(num(50), 'm'), tokc([], 1)));
-    expect(j(envelopeOf(state).root)).toBe(j(unitNode(num(50), '')));
-    expect(state.caret).toEqual(tokc([], 0));
+    expect(j(envelopeOf(state).root)).toBe(j(num(50)));
+    expect(state.caret).toEqual(tokc([], 2));
     legal(state);
-    state = backspace(at(unitNode(num(50), ''), node([])));
-    expect(j(envelopeOf(state).root)).toBe(j(unitNode(num(5), '')));
+    // the full B-08 chain: `50mm` + BS ×3 → `m` → (the revert) `50` → `5`
+    state = backspace(backspace(backspace(at(unitNode(num(50), 'mm'), tokc([], 2)))));
+    expect(j(envelopeOf(state).root)).toBe(j(num(5)));
+    expect(state.caret).toEqual(tokc([], 1));
     legal(state);
   });
 
@@ -172,11 +178,39 @@ describe('D2 — backspace at gaps (S-064/S-066 A/S-077)', () => {
     expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('a'), sym('b'))));
     expect(state.caret).toEqual(rowc([], 2));
     legal(state);
-    // `ab+|c` at the interior shared gap: the left token's last letter (the
-    // gluing rules cross glyphs — N2; glyph deletion is the DANGLING case)
-    state = backspace(at(op('add', sym('ab'), sym('c')), rowc([], 1)));
-    expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('a'), sym('c'))));
+    // the glyph-free diverging pair seam (an implicit row): the left cell's
+    // last letter — N2's one-station gap with no glyph in sight
+    state = backspace(at(jmp(sym('ab'), sym('c')), rowc([], 1)));
+    expect(j(envelopeOf(state).root)).toBe(j(jmp(sym('a'), sym('c'))));
     expect(state.caret).toEqual(rowc([], 1));
+    legal(state);
+  });
+
+  it('the BINDING glyph at the station deletes — the operands bond into an implicit pair (S-077 + the owner\'s B-15 live ruling)', () => {
+    // `ab+|c` → ab·c: the glyph dies (never the right cell), the two-cell row
+    // unwraps to the pair at its position
+    let state = backspace(at(op('add', sym('ab'), sym('c')), rowc([], 1)));
+    expect(j(envelopeOf(state).root)).toBe(j(jmp(sym('ab'), sym('c'))));
+    expect(state.caret).toEqual(rowc([], 1)); // the freed glyph's spot — the pair's inner seam
+    expect(state.log.length).toBe(1);
+    legal(state);
+    // `x + |1/2`: NO highlight from the before-side — the plus dies and the
+    // operands juxtapose (`x 1/2`)
+    state = backspace(at(op('add', sym('x'), frac(num(1), num(2))), rowc([], 1)));
+    expect(j(envelopeOf(state).root)).toBe(j(jmp(sym('x'), frac(num(1), num(2)))));
+    legal(state);
+    // the gap before a function deletes the `+` too — never the fn (S-077)
+    state = backspace(at(op('add', sym('x'), fn('sin', [sym('a')])), rowc([], 1)));
+    expect(j(envelopeOf(state).root)).toBe(j(jmp(sym('x'), fn('sin', [sym('a')]))));
+    legal(state);
+    // a longer row keeps its cells: a+b+|c → a + b·c (the pair nests in place)
+    state = backspace(at(op('add', sym('a'), sym('b'), sym('c')), rowc([], 2)));
+    expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('a'), jmp(sym('b'), sym('c')))));
+    expect(state.caret).toEqual(rowc([1], 1));
+    legal(state);
+    // the Ctrl variant keeps the glyph-delete (a one-character glyph has no run)
+    state = backspace(at(op('add', sym('x'), frac(num(1), num(2))), rowc([], 1)), { ctrl: true });
+    expect(j(envelopeOf(state).root)).toBe(j(jmp(sym('x'), frac(num(1), num(2)))));
     legal(state);
   });
 
@@ -229,9 +263,9 @@ describe('D2 — backspace at gaps (S-064/S-066 A/S-077)', () => {
     legal(state);
   });
 
-  it('a token caret at offset 0 IS the shared gap before its cell (D2 through the left edge)', () => {
+  it('a token caret at offset 0 IS the shared gap before its cell (D2 through the left edge — the binding glyph bonds)', () => {
     const state = backspace(at(op('add', sym('ab'), sym('c')), tokc([1], 0)));
-    expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('a'), sym('c'))));
+    expect(j(envelopeOf(state).root)).toBe(j(jmp(sym('ab'), sym('c'))));
     legal(state);
   });
 
@@ -278,8 +312,8 @@ describe('D3 — Ctrl+Backspace (S-067/S-068/S-071)', () => {
     legal(state);
   });
 
-  it('Ctrl at a structure keeps the D5 two-step (the highlight decision; the instant delete is unruled → D5 chain)', () => {
-    const d = decideBackspace(envOf(op('add', sym('x'), frac(num(1), num(2)))), rowc([], 1), { ctrl: true });
+  it('Ctrl+BS at the AFTER-station keeps the D5 two-step (the highlight decision; a structure\'s instant ctrl-delete is unruled)', () => {
+    const d = decideBackspace(envOf(op('add', sym('x'), frac(num(1), num(2)))), rowc([], 2), { ctrl: true });
     expect(d.kind).toBe('highlight');
     expect(d.ops.length).toBe(0);
     expect(d.target).toEqual([1]);
@@ -329,21 +363,23 @@ describe('D5 — highlight-then-delete, fenceless 2D only, outside stations only
   const P = op('add', sym('x'), powNode(sym('a'), num(2)));
 
   it('BS at the station AFTER the structure returns the highlight decision: no op, NOTHING LOGGED (U2)', () => {
-    const d = decideBackspace(envOf(F), rowc([], 1));
+    const d = decideBackspace(envOf(F), rowc([], 2));
     expect(d.kind).toBe('highlight');
     expect(d.target).toEqual([1]);
     expect(d.ops.length).toBe(0);
-    expect(d.caret).toEqual(rowc([], 1));
-    const before = at(F, rowc([], 1));
+    expect(d.caret).toEqual(rowc([], 2));
+    const before = at(F, rowc([], 2));
     const state = backspace(before);
     expect(state).toBe(before); // nothing applied, nothing logged — the same state object
     expect(state.log.length).toBe(0);
   });
 
-  it('BS at the station BEFORE the structure highlights it as well (S-072 "immediately before/after")', () => {
-    const d = decideBackspace(envOf(op('add', frac(num(1), num(2)), sym('x'))), rowc([], 0));
-    expect(d.kind).toBe('highlight');
-    expect(d.target).toEqual([0]);
+  it('BS at the gap BEFORE the structure is NO highlight — the ordinary glyph rule (the owner\'s B-15 live ruling); the node caret on a complete structure reads as the after-station', () => {
+    const d = decideBackspace(envOf(op('add', sym('x'), frac(num(1), num(2)))), rowc([], 1));
+    expect(d.kind).toBe('glyph');
+    expect(d.ops.length).toBe(1);
+    const d0 = decideBackspace(envOf(op('add', frac(num(1), num(2)), sym('x'))), rowc([], 0));
+    expect(d0.kind).toBe('noop'); // nothing stands left — D4's region start
     // the node caret on a complete root structure reads as the after-station
     const d2 = decideBackspace(envOf(frac(num(1), num(2))), node([]));
     expect(d2.kind).toBe('highlight');
@@ -351,31 +387,33 @@ describe('D5 — highlight-then-delete, fenceless 2D only, outside stations only
   });
 
   it('S-044 anchor: a^2| highlights the WHOLE power — never the exponent alone', () => {
-    const d = decideBackspace(envOf(P), rowc([], 1));
+    const d = decideBackspace(envOf(P), rowc([], 2));
     expect(d.kind).toBe('highlight');
     expect(d.target).toEqual([1]);
   });
 
   it('the confirm deletes the structure WITH its content, caret at the freed position; undo restores the whole structure (U2)', () => {
-    const d = decideBackspace(envOf(F), rowc([], 1), { highlighted: [1] });
+    const d = decideBackspace(envOf(F), rowc([], 2), { highlighted: [1] });
     expect(d.kind).toBe('delete-structure');
     expect(d.ops.length).toBe(1);
-    const state = backspace(at(F, rowc([], 1)), { highlighted: [1] });
-    expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('x'))));
-    expect(state.caret).toEqual(rowc([], 1));
+    const state = backspace(at(F, rowc([], 2)), { highlighted: [1] });
+    // B-14: only the fraction dies — the plus keeps dangling over the freed
+    // pending cell (`x + `)
+    expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('x'), null)));
+    expect(state.caret).toEqual(rowc([], 1)); // the freed cell
     expect(state.log.length).toBe(1);
     legal(state);
     const undone = undo(state);
     expect(j(envelopeOf(undone).root)).toBe(j(F));
-    expect(undone.caret).toEqual(rowc([], 1));
+    expect(undone.caret).toEqual(rowc([], 2));
     legal(undone);
     const redone = redo(undone);
-    expect(j(envelopeOf(redone).root)).toBe(j(op('add', sym('x'))));
+    expect(j(envelopeOf(redone).root)).toBe(j(op('add', sym('x'), null)));
     expect(redone.caret).toEqual(rowc([], 1));
   });
 
   it('an armed target at a different station does not confirm — the fresh decision takes over', () => {
-    const d = decideBackspace(envOf(P), rowc([], 1), { highlighted: [7] });
+    const d = decideBackspace(envOf(P), rowc([], 2), { highlighted: [7] });
     expect(d.kind).toBe('highlight');
     expect(d.target).toEqual([1]);
   });
@@ -393,7 +431,7 @@ describe('D5 — highlight-then-delete, fenceless 2D only, outside stations only
   });
 
   it('the op-pow projection shape takes D5 too (a flat ≤2-arg pow row renders as a 2D power)', () => {
-    const d = decideBackspace(envOf(op('add', sym('x'), op('pow', sym('a'), num(2)))), rowc([], 1));
+    const d = decideBackspace(envOf(op('add', sym('x'), op('pow', sym('a'), num(2)))), rowc([], 2));
     expect(d.kind).toBe('highlight');
     expect(d.target).toEqual([1]);
   });
@@ -438,11 +476,46 @@ describe('D6 — BS at a □ unwraps and promotes (S-073/S-074/S-100–S-102/S-1
     legal(state);
   });
 
-  it('S-101: the root — the index-□ promotes the RADICAND (x + ₙ√a → x + a|)', () => {
+  it('S-101: the root — the index-□ promotes the RADICAND, caret in FRONT of it (x + ₙ√a → x + |a — the owner\'s B-18 ruling: the index is a LEFT slot)', () => {
     const state = backspace(at(op('add', sym('x'), mrootNode(sym('a'), null)), slot([1], 'index')));
     expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('x'), sym('a'))));
-    expect(state.caret).toEqual(rowc([], 2));
+    expect(state.caret).toEqual(rowc([], 1));
     legal(state);
+  });
+
+  it('the owner\'s B-18 rulings — three positions inside/at a root: the radicand start strips the glyph; behind the content is char-wise→□→death; behind the whole root highlights', () => {
+    // the FIRST position inside the root — in front of the radicand content:
+    // the radical glyph deletes, the radicand promotes, caret stays in front
+    const strip = backspace(
+      at(op('add', sym('x'), { type: 'root', radicand: sym('a') } as NodeJson), tokc([1, 'radicand'], 0)),
+    );
+    expect(j(envelopeOf(strip).root)).toBe(j(op('add', sym('x'), sym('a'))));
+    expect(strip.caret).toEqual(tokc([1], 0)); // `x + |a`
+    expect(strip.log.length).toBe(1);
+    legal(strip);
+    // a row radicand strips through its seam 0 the same way; the mroot's
+    // index label dies with the glyph (a modifier channel)
+    const stripRow = backspace(
+      at({ type: 'root', radicand: op('add', sym('a'), sym('b')), mroot: true } as NodeJson, rowc(['radicand'], 0)),
+    );
+    expect(j(envelopeOf(stripRow).root)).toBe(j(op('add', sym('a'), sym('b'))));
+    expect(stripRow.caret).toEqual(rowc([], 0));
+    legal(stripRow);
+    // position 1 — directly behind the radicand content: char-wise to the □,
+    // then the whole root dies (both slots empty)
+    let p1 = at({ type: 'root', radicand: sym('a') } as NodeJson, node(['radicand']));
+    p1 = backspace(p1);
+    expect(j(envelopeOf(p1).root)).toBe(j({ type: 'root', radicand: null } as NodeJson));
+    expect(p1.caret).toEqual(slot([], 'radicand'));
+    legal(p1);
+    p1 = backspace(p1);
+    expect(j(envelopeOf(p1).root)).toBe('null');
+    expect(p1.caret).toEqual({ kind: 'empty' });
+    legal(p1);
+    // position 2 — directly behind the whole root: the D5 highlight
+    const d = decideBackspace(envOf(op('add', sym('x'), { type: 'root', radicand: sym('a') } as NodeJson)), rowc([], 2));
+    expect(d.kind).toBe('highlight');
+    expect(d.target).toEqual([1]);
   });
 
   it('S-102: the subscript-□ dies with the base staying as a symbol; a baseless sub dies with nothing promoted; both-empty dies outright', () => {
@@ -483,8 +556,8 @@ describe('D6 — BS at a □ unwraps and promotes (S-073/S-074/S-100–S-102/S-1
   });
 
   it('the D5/D6 asymmetry is INTENDED (S-102: outside deletes with content, inside unwraps and keeps the sibling)', () => {
-    const outside = backspace(at(op('add', sym('x'), frac(num(1), num(2))), rowc([], 1)), { highlighted: [1] });
-    expect(j(envelopeOf(outside).root)).toBe(j(op('add', sym('x'))));
+    const outside = backspace(at(op('add', sym('x'), frac(num(1), num(2))), rowc([], 2)), { highlighted: [1] });
+    expect(j(envelopeOf(outside).root)).toBe(j(op('add', sym('x'), null)));
     const inside = backspace(at(op('add', sym('x'), frac(num(1), null)), slot([1], 'den')));
     expect(j(envelopeOf(inside).root)).toBe(j(op('add', sym('x'), num(1))));
     legal(inside);
@@ -541,7 +614,7 @@ describe('D7 — the function chain + the head swap (S-075/S-077, the S-023 A an
     legal(state);
     // and the freed spot inside a parent row is the parent seam
     state = backspace(at(op('add', sym('x'), fn('sin', [null])), rowc([1], 0)));
-    expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('x'))));
+    expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('x'), null))); // the + dangles (B-14)
     expect(state.caret).toEqual(rowc([], 1));
     legal(state);
   });
@@ -597,12 +670,12 @@ describe('D8/D9 — the group chain + whole-group death at the □ (S-076/S-079 
     legal(state);
     // in a parent row: the freed seam
     state = backspace(at(op('add', sym('x'), group(null)), slot([1], 'child')));
-    expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('x'))));
+    expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('x'), null))); // the + dangles (B-26)
     expect(state.caret).toEqual(rowc([], 1));
     legal(state);
     // close:false + the empty child: the remaining open fence goes too
     state = backspace(at(op('add', sym('x'), group(null, false)), slot([1], 'child')));
-    expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('x'))));
+    expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('x'), null)));
     legal(state);
   });
 
@@ -673,8 +746,8 @@ describe('U2 — one key, one op, one log entry; fromJSON legality at every inte
       expect(redone.caret).toEqual(state.caret);
       legal(redone);
     }
-    // the D5 highlight never logs
-    const d5 = backspace(at(op('add', sym('x'), frac(num(1), num(2))), rowc([], 1)));
+    // the D5 highlight never logs (the AFTER-station arms it)
+    const d5 = backspace(at(op('add', sym('x'), frac(num(1), num(2))), rowc([], 2)));
     expect(d5.log.length).toBe(0);
   });
 

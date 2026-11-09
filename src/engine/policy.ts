@@ -88,6 +88,19 @@ export type TypedToken = StructureToken | { readonly t: 'leaf'; readonly node: N
 const rowImplicit = (node: NodeJson): boolean =>
   node.type === 'op' && (node as { implicit?: boolean }).implicit === true;
 
+/** A head-less re-bind pair (D7's own retyping surface, S-077/S-086): an
+ *  implicit juxtaposition row whose LAST cell is a dangling close-fence
+ *  token — the surviving payload of a head/open-fence delete. Its cells
+ *  are waiting for the re-typed `name(`: letters SEED the head symbol as a
+ *  fresh leading cell (the head-swap workflow, the owner's B-22 live
+ *  check), and `(` then re-heads the content over the waiting fence. */
+const rebindTail = (row: NodeJson): boolean => {
+  if (!rowImplicit(row)) return false;
+  const args = rowArgs(row);
+  return args.length >= 2 && args[args.length - 1] !== null &&
+    (args[args.length - 1] as { type?: string }).type === 'fence';
+};
+
 export const fnJson = (name: string, args: (NodeJson | null)[], close: boolean): NodeJson =>
   close ? { type: 'fn', name, args } : { type: 'fn', name, args, close: false };
 
@@ -603,9 +616,20 @@ function letterKey(ctx: Ctx, station: Station, letters: string): EditingState {
       //    edge waiting for its first operand).
       const filled = seamPendingFill(ctx, station, seam, sym, (path) => ({ kind: 'node', path }));
       if (filled !== null) return filled;
-      // 1. glue into the right symbol's front (N2) — or into a right unit
-      //    label's front (S-104: inside a unit label extends the run).
-      if (seam.right !== null && seam.right.node !== null && !ctx.flagged) {
+      // 0.5 a head-less re-bind pair: letters SEED the future head symbol
+      //     as a fresh leading cell — they never glue into the content that
+      //     is waiting for its head (`|a+b)` + `cos` → [cos, a+b, `)`]);
+      //     its inner seams then grow the standing head (rule 2), with the
+      //     front-glue below suspended inside the pair.
+      if (rebindTail(station.row)) {
+        if (station.index === 0) {
+          return place(ctx, sym, { at: 'row', path: station.path, index: 0 }, {
+            kind: 'row', path: station.path, index: 1,
+          });
+        }
+      } else if (seam.right !== null && seam.right.node !== null && !ctx.flagged) {
+        // 1. glue into the right symbol's front (N2) — or into a right unit
+        //    label's front (S-104: inside a unit label extends the run).
         if (seam.right.node.type === 'sym') {
           return glueFront(ctx, seam.right, letters);
         }
@@ -879,6 +903,32 @@ function contentRightOf(env: Envelope, ref: Ref): boolean {
   return rowArgs(row).slice(ref.index + 1).some((cell) => cell !== null);
 }
 
+/** `(` at the seam directly after a seeded head symbol inside a head-less
+ *  re-bind pair re-heads the content (the ruled D7 swap workflow, S-086;
+ *  the owner's B-22 live check): the WHOLE pair becomes one fenced fn —
+ *  the cells between the symbol and the waiting fence are its single
+ *  argument (the fence token re-binds as the fn's close — the S-097
+ *  completion shape): `|a+b)` + `cos(` → `cos(a+b)`. Non-matching names and
+ *  other seams take the ordinary T5/T6 paths. One op — undo unwinds the
+ *  whole re-heading. */
+function rebindHeadOf(ctx: Ctx, station: SeamStation): EditingState | null {
+  if (!rebindTail(station.row) || station.index !== 1) return null;
+  const args = rowArgs(station.row);
+  const head = args[0];
+  if (head === null || head.type !== 'sym' || !knownFunctions(ctx.state).has(tokenText(head))) return null;
+  const argCells = args.slice(1, -1);
+  const arg: NodeJson | null =
+    argCells.length === 0
+      ? null
+      : argCells.length === 1
+        ? (argCells[0] as NodeJson | null)
+        : ({ type: 'op', op: 'multiply', args: argCells, implicit: true } as NodeJson);
+  const made = fnJson(tokenText(head), argCells.length === 0 ? [null] : [arg], true);
+  return place(ctx, made, replacePosOf(refOfPath(station.path)), {
+    kind: 'row', path: station.path, index: 0,
+  });
+}
+
 function openKey(ctx: Ctx, station: Station): EditingState {
   switch (station.kind) {
     case 'void':
@@ -906,6 +956,8 @@ function openKey(ctx: Ctx, station: Station): EditingState {
       });
     case 'seam': {
       const seam = seamOf(ctx.env, station);
+      const reHead = rebindHeadOf(ctx, station);
+      if (reHead !== null) return reHead;
       // T5 at a glyph-free gap: the left-adjacent symbol converts.
       if (seam.left !== null && seam.left.node !== null && seam.left.node.type === 'sym' &&
           knownFunctions(ctx.state).has(tokenText(seam.left.node))) {

@@ -191,9 +191,9 @@ describe('D5 highlight-then-delete through the keyboard (transient, never logged
   const structureEl = (controller: EditorController, path: readonly (number | string)[]): Element | null =>
     controller.getRendered()?.elementByPath.get(JSON.stringify(path)) ?? null;
 
-  it('the first BS paints the structure red (a transient controller state, NO log growth, NO tree change); the confirming BS deletes WITH its content', () => {
+  it('the first BS paints the structure red (a transient controller state, NO log growth, NO tree change); the confirming BS deletes WITH its content, leaving the plus dangling', () => {
     const { controller, container } = make(SEED);
-    controller.placeCaret(rowc([], 1));
+    controller.placeCaret(rowc([], 2));
     container.focus();
     const before = controller.getState();
     const ev1 = press(container, 'Backspace');
@@ -205,18 +205,18 @@ describe('D5 highlight-then-delete through the keyboard (transient, never logged
     expect(el!.classList.contains('integral-highlight')).toBe(true); // the red paint
     const ev2 = press(container, 'Backspace');
     expect(ev2.defaultPrevented).toBe(true);
-    expect(j(controller.getEnvelope().root)).toBe(j(op('add', sym('x'))));
+    expect(j(controller.getEnvelope().root)).toBe(j(op('add', sym('x'), null))); // B-14: the + dangles
     expect(j(controller.getState().caret)).toBe(j(rowc([], 1)));
     expect(controller.getState().log.length).toBe(1); // the DELETE is the unit (one undo restores the whole structure)
     // undo restores the whole structure with its content AND the caret (U2)
     press(container, 'z', { ctrl: true });
     expect(j(controller.getEnvelope().root)).toBe(j(SEED.root));
-    expect(j(controller.getState().caret)).toBe(j(rowc([], 1)));
+    expect(j(controller.getState().caret)).toBe(j(rowc([], 2)));
   });
 
   it('any input that is not the confirming BS clears the highlight and behaves as if it never happened (the ruled lifecycle judgment)', () => {
     const { controller, container } = make(SEED);
-    controller.placeCaret(rowc([], 1));
+    controller.placeCaret(rowc([], 2));
     container.focus();
     press(container, 'Backspace'); // highlight armed + painted
     expect(structureEl(controller, [1])!.classList.contains('integral-highlight')).toBe(true);
@@ -228,7 +228,7 @@ describe('D5 highlight-then-delete through the keyboard (transient, never logged
 
   it('a caret move clears the paint without logging (the highlight is never a log unit)', () => {
     const { controller, container } = make(SEED);
-    controller.placeCaret(rowc([], 1));
+    controller.placeCaret(rowc([], 2));
     container.focus();
     press(container, 'Backspace');
     expect(structureEl(controller, [1])!.classList.contains('integral-highlight')).toBe(true);
@@ -239,7 +239,7 @@ describe('D5 highlight-then-delete through the keyboard (transient, never logged
 
   it('BS at a DIFFERENT station after an arm highlights the new decision (the confirm never fires cross-station)', () => {
     const { controller, container } = make(SEED);
-    controller.placeCaret(rowc([], 1));
+    controller.placeCaret(rowc([], 2));
     container.focus();
     press(container, 'Backspace'); // arm frac at [1]
     controller.placeCaret(node([0])); // a click-away placement: the placement clears the arm

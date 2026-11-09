@@ -247,3 +247,46 @@ describe('T9 — subscript insertion (v1 label mode)', () => {
     expectLegal(next);
   });
 });
+
+
+// ——— the head-less fence pair: D7's own re-typing surface (session-3 live check, B-22) ———
+
+describe('S-077/S-086 re-binding — letters seed the head symbol, then `(` re-heads the content over the waiting fence', () => {
+  const fenceTok: NodeJson = { type: 'fence', side: 'close' };
+  const openTok: TypedToken = { t: 'groupOpen' };
+
+  it('sin(a+b) after the head swap: |a+b) + c,o,s + ( → cos(a+b) — the whole pair re-binds as ONE fenced fn', () => {
+    // the post-headDelete payload: the implicit pair [a+b, )] with the
+    // caret at the pair's start seam (the D7 ruled re-typing workflow)
+    let state = at(imp(add(sym('a'), sym('b')), fenceTok), { kind: 'row', path: [], index: 0 });
+    state = typeToken(state, s('c')); // SEEDS the head symbol — never glues into the content
+    expectTree(state, imp(sym('c'), add(sym('a'), sym('b')), fenceTok));
+    state = typeToken(state, s('o')); // the inner seam grows the standing head
+    state = typeToken(state, s('s'));
+    expectTree(state, imp(sym('cos'), add(sym('a'), sym('b')), fenceTok));
+    expect(state.caret).toEqual({ kind: 'row', path: [], index: 1 });
+    expect(state.log.length).toBe(3);
+    // the `(` re-heads: the pair becomes one fenced fn over the content,
+    // the fence token re-binding as its close (the S-097 completion shape)
+    state = typeToken(state, openTok);
+    expectTree(state, { type: 'fn', name: 'cos', args: [add(sym('a'), sym('b'))] });
+    expect(state.caret).toEqual({ kind: 'row', path: [], index: 0 });
+    expect(state.log.length).toBe(4);
+    expectLegal(state);
+    // undo unwinds the whole re-heading as one log unit (U2)
+    state = undo(state);
+    expectTree(state, imp(sym('cos'), add(sym('a'), sym('b')), fenceTok));
+    expectLegal(state);
+  });
+
+  it('a single-symbol content re-heads equally (the head swap of sin(x) → x) + cos( → cos(x))', () => {
+    let state = at(imp(sym('x'), fenceTok), { kind: 'row', path: [], index: 0 });
+    state = typeToken(state, s('c'));
+    state = typeToken(state, s('o'));
+    state = typeToken(state, s('s'));
+    expectTree(state, imp(sym('cos'), sym('x'), fenceTok));
+    state = typeToken(state, openTok);
+    expectTree(state, { type: 'fn', name: 'cos', args: [sym('x')] });
+    expectLegal(state);
+  });
+});

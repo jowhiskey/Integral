@@ -9,13 +9,21 @@
 //        a deletion that empties the token removes the NODE, caret in the
 //        freed position. In an args row the freed position is the PENDING
 //        NULL cell (the glyph survives as dangling: `x+y` minus y is `x+`),
-//        at a fixed slot the □, at the root the empty formula.
+//        at a fixed slot the □, at the root the empty formula. A unit label
+//        emptied by the deletion kills the unit shape — the value promotes
+//        bare (the 2b-2 reversion with an empty run; the owner's B-08 live
+//        reading: deletion continues into the value digits).
 //  D2 — at the shared gap the left-adjacent token's LAST character goes
-//        (S-064); a DANGLING operator glyph standing left-adjacent deletes
-//        instead (S-066 A: `−x+|` → `−x|`) — its pending cell splices away
-//        and a one-cell remainder unwraps into that cell; the atomic function
-//        head goes whole; a fenceless structure takes D5, a fenced container
-//        takes the D7/D8 chain.
+//        (S-064 — the glyph-free adjacencies); a DANGLING operator glyph
+//        standing left-adjacent deletes instead (S-066 A: `−x+|` → `−x|`) —
+//        its pending cell splices away and a one-cell remainder unwraps into
+//        that cell — and a BINDING glyph deletes equally at the station
+//        between it and its filled right operand (S-077: "deletes whatever
+//        stands to the left (e.g. the plus)" — ratified as the owner's B-15
+//        live ruling): the two operand cells bond into their own implicit
+//        juxtaposition pair, a two-cell row unwrapping to the pair at its
+//        position. NO before-shadow highlight — the gap before a structure
+//        takes these ordinary gap rules.
 //  D3 — Ctrl+BS deletes everything left of the caret WITHIN the token (the
 //        whole token only at its right edge); at gaps the left-adjacent TEXT
 //        token goes whole (word-delete); the D2 glyph rules and the D5
@@ -23,18 +31,25 @@
 //        the session report). Ctrl+Delete is the forward mirror
 //        (S-067/S-068/S-071).
 //  D4 — BS/Del on the empty formula: silent no-op (S-078).
-//  D5 — BS at an outside station immediately before/after a fenceless 2D
+//  D5 — BS at the outside station immediately AFTER a fenceless 2D
 //        structure (fraction, power, root, subscript — S-072, S-109) returns
 //        a HIGHLIGHT DECISION: no op, nothing logged (U2 — the highlight is
 //        transient controller/UI state); the confirming BS (the armed target
 //        passed back through opts) deletes the structure WITH its content.
-//        It never fires from inside a slot: there BS is char-wise / D6.
+//        It never triggers from inside a slot (there BS is char-wise / D6)
+//        nor from the before-side (the owner's B-15 live ruling: that gap
+//        takes the ordinary D2 glyph rules) — and at an args cell the death
+//        leaves the PENDING NULL behind, so only the structure dies and the
+//        neighboring operator keeps dangling (B-14/B-26).
 //  D6 — BS at a □ of a fenceless structure UNWRAPS and PROMOTES (S-073,
 //        S-100–S-102): the structure goes, the surviving sibling splices
 //        inline at its position, caret at the deleted slot's side of the
 //        promoted content; both slots empty → the structure dies outright.
 //        A subscript whose script label is empty dies with the base surviving
-//        as an ordinary symbol (S-102).
+//        as an ordinary symbol (S-102). The splice caret sits at the promoted
+//        content's side FACING the deleted slot, per slot geometry (the
+//        root's index is a LEFT slot — the owner's B-18 ruling:
+//        `x + ₙ√a` → `x + |a`).
 //  D7 — functions: the movable `)` deletes first (close → false), then the
 //        chain runs char-wise inward; an emptied argument is the □ and BS
 //        there deletes the ENTIRE function (S-075, the S-023 anchor); BS at
@@ -220,6 +235,19 @@ const dfltUnits = (): ReadonlySet<string> => new Set(defaultStaticVocabulary.uni
 
 const samePath = (a: Path, b: Path): boolean => a.length === b.length && a.every((s, i) => s === b[i]);
 
+/** The geometric side a fixed slot occupies on its structure. The splice
+ *  caret's facing follows the DELETED slot's side, not declaration order —
+ *  the owner's B-18 ruling: a root's index is drawn LEFT of the radicand, so
+ *  the index-□ promotes the radicand with the caret in front of it. */
+const SLOT_SIDE: Readonly<Partial<Record<SlotName, 'left' | 'right'>>> = {
+  num: 'left',
+  den: 'right',
+  base: 'left',
+  exp: 'right',
+  radicand: 'right',
+  index: 'left',
+};
+
 /** A fenceless 2D structure for D5: fraction, power (the node and the ≤2-arg
  *  op row alike), root, subscript (S-072, S-109). */
 const isD5Structure = (node: NodeJson): boolean =>
@@ -251,12 +279,31 @@ function spliceStation(after: Envelope, ref: Ref, facing: 'left' | 'right'): Car
 /** The D5 decision for a fenceless structure at `target`: the armed target
  *  (passed back through opts) confirms the deletion WITH content; any other
  *  press arms the highlight. Nothing logs on the highlight (U2). */
-function d5Gate(target: Path, station: Caret, ctx: BsCtx): BackspaceDecision {
+function d5Gate(env: Envelope, target: Path, station: Caret, ctx: BsCtx): BackspaceDecision {
   if (ctx.highlighted !== undefined && ctx.highlighted !== null && samePath(ctx.highlighted, target)) {
-    const ref = refOfPath(target);
-    return { kind: 'delete-structure', ops: [{ op: 'deleteAt', at: posOfRef(ref) }], caret: freedSpot(ref), target };
+    // B-14/B-26: only the structure dies — at an args cell the cell becomes
+    // the PENDING NULL so the neighboring operator keeps dangling.
+    const death = tokenDeath(env, target, station);
+    return { kind: 'delete-structure', ops: death.ops, caret: death.caret, target };
   }
   return { kind: 'highlight', ops: [], caret: station, target };
+}
+
+/** D1/S-104 reverberation (the owner's B-08 live reading): a deletion that
+ *  empties the unit's label run kills the unit shape — an empty label is not
+ *  a stable deletion state (the 2b-2 reversion with an empty run has no
+ *  symbol half left). The value promotes bare at the unit's position, the
+ *  caret at the splice side facing the dead label (right of the value); a
+ *  valueless unit dies whole. One op. */
+function unitStrip(env: Envelope, path: Path): BackspaceDecision {
+  const ref = refOfPath(path);
+  const value = (nodeAt(env, path) as { value: NodeJson | null }).value;
+  if (value === null) {
+    return { kind: 'unwrap', ops: [{ op: 'deleteAt', at: posOfRef(ref) }], caret: freedSpot(ref) };
+  }
+  const after = withRefSet(env, ref, value);
+  const to = spliceStation(after, ref, 'right'); // the label stood right of the value
+  return { kind: 'unwrap', ops: [{ op: 'place', node: value, at: replacePosOfRef(ref), to }], caret: to };
 }
 
 // ——— D1 token surgery ———
@@ -295,7 +342,8 @@ function charDrop(env: Envelope, node: NodeJson, path: Path, drop: number, to: C
     const value = (node as { value: NodeJson | null }).value;
     const text = tokenText(node);
     const next = text.slice(0, drop) + text.slice(drop + 1);
-    if (next === '' || ctx.units.has(next)) {
+    if (next === '') return unitStrip(env, path); // the emptied label kills the unit shape
+    if (ctx.units.has(next)) {
       return { kind: 'char', ops: [{ op: 'place', node: unitOf(value, next), at: replacePosOfRef(ref), to }], caret: to };
     }
     const runPath = [...pathOfRef(ref), 1];
@@ -321,7 +369,8 @@ function ctrlLeftRun(env: Envelope, node: NodeJson, path: Path, index: number, c
   if (node.type === 'unit') {
     const value = (node as { value: NodeJson | null }).value;
     const rest = tokenText(node).slice(index);
-    if (rest === '' || ctx.units.has(rest)) {
+    if (rest === '') return unitStrip(env, path); // the emptied label kills the unit shape
+    if (ctx.units.has(rest)) {
       return { kind: 'char', ops: [{ op: 'place', node: unitOf(value, rest), at: replacePosOfRef(ref), to }], caret: to };
     }
     const runPath = [...pathOfRef(ref), 1];
@@ -387,6 +436,30 @@ function subLabelAtStart(env: Envelope, node: NodeJson, path: Path, label: SubLa
   return noopDecision({ kind: 'token', path, index: 0, label }); // cross-label: unruled
 }
 
+// ——— the root's open glyph (the owner's B-18 live ruling) ———
+
+/** BS at the RADICAND START — the first station inside a root, directly in
+ *  front of its content: the radical glyph deletes (the group open-fence
+ *  analog, D8/S-076's "including the opening parens" — the root's head IS
+ *  the radical), the radicand promotes inline at the root's position, and
+ *  the caret stays in front of the promoted content. The index label is a
+ *  modifier channel and dies with the glyph (a bare □ radicand is D6's
+ *  slot-station territory, not this path). One op. */
+function rootStrip(env: Envelope, rootPath: Path, root: NodeJson, station: Caret): BackspaceDecision {
+  const radicand = slotValue(root, 'radicand');
+  if (radicand === null) return noopDecision(station);
+  const ref = refOfPath(rootPath);
+  const after = withRefSet(env, ref, radicand);
+  const at = pathOfRef(ref);
+  // A promoted ROW is entered at its first seam (in front of the row),
+  // never a dive into its first cell (which reads as that cell's right
+  // edge); a token lands at its offset 0, anything else at its entry.
+  const to: Caret = isRowNode(radicand)
+    ? { kind: 'row', path: at, index: 0 }
+    : (entryStation(after, at, 'left') ?? { kind: 'node', path: at });
+  return { kind: 'open-fence', ops: [{ op: 'place', node: radicand, at: replacePosOfRef(ref), to }], caret: to };
+}
+
 // ——— fenced containers (D7/D8) ———
 
 /** BS at a station whose left-adjacent element is the group/fn at `path`:
@@ -413,22 +486,44 @@ function fencedTail(env: Envelope, path: Path, node: NodeJson, station: Caret, c
   }
   if (node.type === 'group') {
     const child = (node as { child: NodeJson | null }).child;
-    return child === null ? containerDeath(path, station) : tail(env, [...path, 'child'], station, ctx);
+    return child === null ? containerDeath(env, path, station) : tail(env, [...path, 'child'], station, ctx);
   }
   const rowArgs_ = args as (NodeJson | null)[];
   if (rowArgs_.length === 0 || rowArgs_[rowArgs_.length - 1] === null) {
     // The emptied argument is the □ (S-023 A): BS deletes the ENTIRE function.
-    return containerDeath(path, station);
+    return containerDeath(env, path, station);
   }
   return tail(env, [...path, rowArgs_.length - 1], station, ctx);
 }
 
-function containerDeath(path: Path, station: Caret): BackspaceDecision {
-  const ref = refOfPath(path);
-  return { kind: 'container-death', ops: [{ op: 'deleteAt', at: posOfRef(ref) }], caret: freedSpot(ref) };
+function containerDeath(env: Envelope, path: Path, station: Caret): BackspaceDecision {
+  // At an args cell the death leaves the PENDING NULL — the neighboring
+  // operator keeps dangling (B-14/B-26: only the container dies); a one-cell
+  // remainder unwraps through the same tokenDeath placement. One op.
+  const death = tokenDeath(env, path, station);
+  return { kind: 'container-death', ops: death.ops, caret: death.caret };
 }
 
 // ——— D2 glyph / open fence / head ———
+
+/** D2/S-077 (the owner's B-15 live ruling): the BINDING glyph between two
+ *  filled cells deletes — the operands bond into their own implicit
+ *  juxtaposition pair at the left cell's position (`x + frac` → the pair
+ *  `x·frac`); a two-cell row unwraps to the pair at the row's position. The
+ *  caret rests at the freed glyph's spot — the pair's inner seam. One op. */
+function glyphBond(env: Envelope, rowPath: Path, left: number): BackspaceDecision {
+  const row = nodeAt(env, rowPath) as NodeJson;
+  const args = rowArgs(row);
+  const ref = refOfPath(rowPath);
+  const bond = implicitPair(args[left] as NodeJson, args[left + 1] as NodeJson);
+  const cells = [...args.slice(0, left), bond, ...args.slice(left + 2)];
+  const promoted = cells.length === 1;
+  const to: Caret = promoted
+    ? { kind: 'row', path: pathOfRef(ref), index: 1 }
+    : { kind: 'row', path: [...rowPath, left], index: 1 };
+  const node = promoted ? bond : rowClone(row, cells);
+  return { kind: 'glyph', ops: [{ op: 'place', node, at: replacePosOfRef(ref), to }], caret: to };
+}
 
 /** D2/S-066 A: a dangling operator glyph deletes — its pending cell splices
  *  away; a one-cell remainder unwraps into that cell (caret at the promoted
@@ -484,7 +579,7 @@ function headDelete(env: Envelope, fnPath: Path, fn: NodeJson, station: Caret): 
   if (content === null) {
     // No argument content stands: the head goes and only the close fence
     // token survives (nothing at close:false).
-    if (!close) return containerDeath(fnPath, station);
+    if (!close) return containerDeath(env, fnPath, station);
     const to = freedSpot(ref);
     return { kind: 'open-fence', ops: [{ op: 'place', node: fenceToken, at: replacePosOfRef(ref), to }], caret: to };
   }
@@ -500,7 +595,7 @@ function headDelete(env: Envelope, fnPath: Path, fn: NodeJson, station: Caret): 
 function openFenceDelete(env: Envelope, groupPath: Path, group: NodeJson, station: Caret): BackspaceDecision {
   const child = (group as { child: NodeJson | null }).child;
   const ref = refOfPath(groupPath);
-  if (child === null) return containerDeath(groupPath, station);
+  if (child === null) return containerDeath(env, groupPath, station);
   const payload = isClosed(group) ? implicitPair(child, fenceToken) : (child as NodeJson);
   const after = withRefSet(env, ref, payload);
   const to = payloadStartStation(after, ref, payload);
@@ -524,7 +619,7 @@ function tail(env: Envelope, path: Path, station: Caret, ctx: BsCtx): BackspaceD
       if (node.type === 'unit' && tokenText(node) === '') {
         // An empty granular label: the visible tail is the value.
         const value = (node as { value: NodeJson | null }).value;
-        if (value === null) return containerDeath(path, station);
+        if (value === null) return containerDeath(env, path, station);
         return tail(env, [...path, 'value'], station, ctx);
       }
       if (tokenText(node) === '') return noopDecision(station); // nothing visible to take
@@ -535,9 +630,9 @@ function tail(env: Envelope, path: Path, station: Caret, ctx: BsCtx): BackspaceD
     case 'frac':
     case 'pow':
     case 'root':
-      return d5Gate(path, station, ctx);
+      return d5Gate(env, path, station, ctx);
     case 'op': {
-      if ((node as { op: string }).op === 'pow') return d5Gate(path, station, ctx);
+      if ((node as { op: string }).op === 'pow') return d5Gate(env, path, station, ctx);
       const args = rowArgs(node);
       if (!rowIsImplicit(node) && args.length > 0 && args[args.length - 1] === null) {
         return glyphSplice(env, path, args.length - 1, station); // the nested dangling glyph
@@ -573,7 +668,7 @@ function rowSeam(env: Envelope, rowPath: Path, index: number, station: Caret, ct
   // (S-023 A — "the empty-arg chain is explicitly unchanged"); the head swap
   // needs argument content to survive (the ruled example carries `a+b`).
   if (fn && index === 0) {
-    return args.length > 0 && args[0] === null ? containerDeath(rowPath, station) : headDelete(env, rowPath, row, station);
+    return args.length > 0 && args[0] === null ? containerDeath(env, rowPath, station) : headDelete(env, rowPath, row, station);
   }
 
   // Dangling-glyph rules (D2/S-066 A): the station's nearest visible left
@@ -591,10 +686,13 @@ function rowSeam(env: Envelope, rowPath: Path, index: number, station: Caret, ct
     }
   }
 
-  // D5 before-shadow (S-072: "immediately before/after"): a fenceless
-  // structure right of the station highlights.
-  if (index < args.length && args[index] !== null && isD5Structure(args[index] as NodeJson)) {
-    return d5Gate([...rowPath, index], station, ctx);
+  // The binding glyph at the station (D2/S-077 + the owner's B-15 ruling):
+  // both cells around the glyph are filled — the glyph deletes, the cells
+  // bond into an implicit pair. NO before-shadow highlight: the gap before
+  // a structure (or a fn/group/token) takes the ordinary gap rules.
+  if (!fn && !rowIsImplicit(row) && index > 0 && index < args.length &&
+      args[index - 1] !== null && args[index] !== null) {
+    return glyphBond(env, rowPath, index - 1);
   }
 
   // An empty fn argument left of the seam: the argument cell (and its comma) go.
@@ -606,11 +704,14 @@ function rowSeam(env: Envelope, rowPath: Path, index: number, station: Caret, ct
 
   if (index === 0) {
     // Row start: nothing stands left — except the content start of a GROUP's
-    // inlined child row reaches the group's open fence (D8/S-076).
+    // inlined child row reaches the group's open fence (D8/S-076), and the
+    // RADICAND's start strips the root glyph (the owner's B-18 live ruling:
+    // the radical is the container's opening fence, the group's analog).
     const ref = refOfPath(rowPath);
-    if (ref.at === 'slot' && ref.slot === 'child') {
-      const group = nodeAt(env, ref.path) as NodeJson;
-      if (group.type === 'group') return openFenceDelete(env, ref.path, group, station);
+    if (ref.at === 'slot') {
+      const parent = nodeAt(env, ref.path) as NodeJson;
+      if (ref.slot === 'child' && parent.type === 'group') return openFenceDelete(env, ref.path, parent, station);
+      if (ref.slot === 'radicand' && parent.type === 'root') return rootStrip(env, ref.path, parent, station);
     }
     return noopDecision(station); // D4 pattern (region start)
   }
@@ -633,6 +734,11 @@ function stationLeftOf(env: Envelope, caret: Caret, ctx: BsCtx): BackspaceDecisi
       // D8/S-076: the group's content start — the open fence (or the whole
       // group at the empty child).
       return openFenceDelete(env, ref.path, parent, caret);
+    }
+    if (parent.type === 'root' && ref.slot === 'radicand') {
+      // The owner's B-18 live ruling: the RADICAND start strips the root
+      // glyph — the radicand promotes inline, caret still in front of it.
+      return rootStrip(env, ref.path, parent, caret);
     }
   }
   return noopDecision(caret); // D4 pattern (region start)
@@ -664,7 +770,7 @@ function nodeStation(env: Envelope, caret: Extract<Caret, { kind: 'node' }>, ctx
       if (ctx.ctrl) return tokenDeath(env, caret.path, to);
       if (node.type === 'unit' && tokenText(node) === '') {
         const value = (node as { value: NodeJson | null }).value;
-        if (value === null) return containerDeath(caret.path, caret);
+        if (value === null) return containerDeath(env, caret.path, caret);
         return tail(env, [...caret.path, 'value'], caret, ctx);
       }
       if (tokenText(node) === '') return tokenDeath(env, caret.path, to);
@@ -675,7 +781,7 @@ function nodeStation(env: Envelope, caret: Extract<Caret, { kind: 'node' }>, ctx
       return { kind: 'token-death', ops: [{ op: 'deleteAt', at: posOfRef(ref) }], caret: freedSpot(ref) };
     }
     case 'op':
-      if ((node as { op: string }).op === 'pow') return d5Gate(caret.path, caret, ctx); // op-pow renders as a 2D power
+      if ((node as { op: string }).op === 'pow') return d5Gate(env, caret.path, caret, ctx); // op-pow renders as a 2D power
       return rowSeam(env, caret.path, rowArgs(node).length, caret, ctx);
     case 'group':
     case 'fn':
@@ -695,10 +801,10 @@ function slotStation(env: Envelope, caret: Extract<Caret, { kind: 'slot' }>): Ba
     case 'group':
       // D9 (S-079 A, S-103): BS at `(|□)` deletes the ENTIRE group — both
       // fences in one stroke, regardless of the close state.
-      return containerDeath(caret.path, caret);
+      return containerDeath(env, caret.path, caret);
     case 'unit':
       // A valueless unit has no ruled inner chain: the whole token goes.
-      return containerDeath(caret.path, caret);
+      return containerDeath(env, caret.path, caret);
     case 'frac':
     case 'pow':
     case 'root':
@@ -716,7 +822,7 @@ function unwrap(env: Envelope, parentPath: Path, parent: NodeJson, station: Care
   if (station.kind !== 'slot') return noopDecision(station);
   const slot = station.slot;
   const flow = slotsOf(parent); // declaration order == the ruled flow order (frac/pow/root)
-  const siblingSlot = flow.find((s) => s !== slot) ?? null;
+  const siblingSlot = flow.find((s) => s !== slot) ?? null; // a two-slot structure: the one other slot
   const sibling = siblingSlot === null ? null : slotValue(parent, siblingSlot);
   const ref = refOfPath(parentPath);
   if (siblingSlot === null || sibling === null) {
@@ -724,7 +830,7 @@ function unwrap(env: Envelope, parentPath: Path, parent: NodeJson, station: Care
     // nothing promoted (S-073: "both slots empty → the structure dies").
     return { kind: 'unwrap', ops: [{ op: 'deleteAt', at: posOfRef(ref) }], caret: freedSpot(ref) };
   }
-  const facing = flow.indexOf(slot) < flow.indexOf(siblingSlot) ? 'left' : 'right';
+  const facing = SLOT_SIDE[slot] ?? 'left'; // the DELETED slot's geometric side (B-18)
   const after = withRefSet(env, ref, sibling);
   const to = spliceStation(after, ref, facing);
   return { kind: 'unwrap', ops: [{ op: 'place', node: sibling, at: replacePosOfRef(ref), to }], caret: to };
@@ -736,7 +842,7 @@ function rowStationEntry(env: Envelope, caret: Extract<Caret, { kind: 'row' }>, 
   const args = rowArgs(row);
   if (row.type === 'fn' && caret.index < args.length && args[caret.index] === null) {
     // D7a (S-075, S-023 A): the □ argument — BS deletes the ENTIRE function.
-    return containerDeath(caret.path, caret);
+    return containerDeath(env, caret.path, caret);
   }
   return rowSeam(env, caret.path, caret.index, caret, ctx);
 }
@@ -813,7 +919,11 @@ function forwardText(env: Envelope, node: NodeJson, path: Path, keep: string, to
   const ref = refOfPath(path);
   if (node.type === 'unit') {
     const value = (node as { value: NodeJson | null }).value;
-    if (keep === '' || ctx.units.has(keep)) {
+    if (keep === '') {
+      const strip = unitStrip(env, path); // the emptied label kills the unit shape
+      return { kind: 'token-death', ops: strip.ops, caret: strip.caret };
+    }
+    if (ctx.units.has(keep)) {
       return { kind: 'char', ops: [{ op: 'place', node: unitOf(value, keep), at: replacePosOfRef(ref), to }], caret: to };
     }
     const runTo: Caret = { kind: 'token', path: [...pathOfRef(ref), 1], index: 0 };

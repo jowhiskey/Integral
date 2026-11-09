@@ -388,7 +388,10 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
         const base = el('mi');
         base.textContent = sub.base;
         const script = el('mi');
-        script.textContent = sub.sub;
+        // An empty script label carries the standing □ affordance (the
+        // owner's rework-session-3 live note, B-19 — parity with the AST
+        // renderer and the power's exponent slot).
+        script.textContent = sub.sub === '' ? EMPTY_SLOT_TEXT : sub.sub;
         msub.appendChild(base);
         msub.appendChild(script);
         subLabels.set(pathKey(path), { base, script });

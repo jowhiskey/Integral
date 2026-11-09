@@ -514,9 +514,12 @@ export class SubscriptNode extends MathNode {
     return new MathSymbolNode(`${this.base}_${this.sub}`);
   }
   protected mathmlContent(): string {
-    // Label mode: both parts are strings. Empty is the incomplete state and
-    // renders empty, not as a slot placeholder — only null slots are □.
-    return `<msub><mi>${escapeMathml(this.base)}</mi><mi>${escapeMathml(this.sub)}</mi></msub>`;
+    // Label mode: both parts are strings. An empty SCRIPT carries the
+    // standing □ affordance (the owner's rework-session-3 live note, B-19 —
+    // the power's exponent parity; the editor renderer mirrors this); an
+    // empty BASE stays the bare incomplete state: the caret channel carries
+    // its typing and the sub dies as soon as its script fills.
+    return `<msub><mi>${escapeMathml(this.base)}</mi><mi>${this.sub === '' ? '□' : escapeMathml(this.sub)}</mi></msub>`;
   }
 }
 
