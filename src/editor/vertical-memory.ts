@@ -27,8 +27,10 @@ import type { Envelope, NodeJson } from '../ast/json.js';
 import {
   NAV_PROFILES,
   caretResolvesIn,
+  isRowNode,
   nodeAt,
   resolveMove,
+  rowArgs,
   type Caret,
   type NavDir,
   type NavRegistry,
@@ -56,6 +58,76 @@ function hasVerticalEdge(registry: NavRegistry, owner: NodeJson, slot: SlotName)
   return (profile?.vertical ?? []).some((edge) => edge.from === slot);
 }
 
+/** One exited structure's own layer memor(ies): the regions wiped on a
+ *  sideways exit (OA-vmem-nesting) — the structure's own vertical slots. */
+function ownRegions(registry: NavRegistry, env: Envelope, structurePath: Path): MemoryRegion[] {
+  const node = nodeAt(env, structurePath);
+  if (node === null) return [];
+  const profile = registry[node.type];
+  return (profile?.vertical ?? [])
+    .filter((edge) => edge.from !== undefined)
+    .map((edge) => ({ parentPath: structurePath, slot: edge.from }));
+}
+
+/** The structures whose vertical layer `caret` sits strictly INSIDE of:
+ *  every ancestor entered through one of the structure's own vertical
+ *  slots (the parent chain of regionOf, all the way out). */
+function enclosingLayerStructures(env: Envelope, caret: Caret, registry: NavRegistry): Path[] {
+  if (caret.kind === 'empty') return [];
+  const path: readonly (number | SlotName)[] =
+    caret.kind === 'slot' ? [...caret.path, caret.slot] : caret.path;
+  const out: Path[] = [];
+  for (let k = path.length - 1; k >= 0; k -= 1) {
+    const step = path[k];
+    if (typeof step !== 'string') continue;
+    const parentPath = path.slice(0, k) as Path;
+    const parent = nodeAt(env, parentPath);
+    if (parent !== null && hasVerticalEdge(registry, parent, step) && !out.some((p) => samePath(p, parentPath))) {
+      out.push(parentPath);
+    }
+  }
+  return out;
+}
+
+const samePath = (a: Path, b: Path): boolean =>
+  a.length === b.length && a.every((s, i) => s === b[i]);
+
+/**
+ * 4b-1 (OA-vmem-nesting): the structures a ←/→ press EXITS. The ONE
+ * clearing trigger the owner ruled: a horizontal press whose origin lives
+ * inside a structure and whose target is outside it wipes that
+ * structure's LAYER memory (its own region stores); vertical exits and
+ * every other action never clear. A movable/no-op press exits nothing.
+ */
+export function exitedStructures(
+  env: Envelope,
+  from: Caret,
+  to: Caret,
+  registry: NavRegistry = NAV_PROFILES,
+): MemoryRegion[] {
+  const wiped: MemoryRegion[] = [];
+  for (const structure of enclosingLayerStructures(env, from, registry)) {
+    const stillInside = enclosingLayerStructures(env, to, registry).some((p) => samePath(p, structure));
+    if (!stillInside) wiped.push(...ownRegions(registry, env, structure));
+  }
+  return wiped;
+}
+
+/** Apply the sideways-exit wipe (pure: fresh map). */
+export function wipeSideways(
+  env: Envelope,
+  from: Caret,
+  to: Caret,
+  mem: VerticalMemory,
+  registry: NavRegistry = NAV_PROFILES,
+): VerticalMemory {
+  const exited = exitedStructures(env, from, to, registry);
+  if (exited.length === 0) return mem;
+  const next = new Map(mem);
+  for (const region of exited) next.delete(regionKey(region));
+  return next;
+}
+
 /** The region the caret sits in: the deepest slot-entry on the caret's path
  *  whose parent has a vertical edge from that slot. Slot carets address their
  *  region directly; row/node/token carets scan their path from the end.
@@ -77,6 +149,44 @@ export function regionOf(env: Envelope, caret: Caret, registry: NavRegistry = NA
 }
 
 const sameCaret = (a: Caret, b: Caret): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * OA-vmem-nesting (4b-1, owner amendment): a vertical DESCENT whose target
+ * region has no own remembered position follows the chain into remembered
+ * NESTED positions — you can only walk down from the big fraction's
+ * numerator into the nested fraction's NUMERATOR (the num→num-only path
+ * the rendered geometry forces; you cannot skip the smaller numerator and
+ * walk straight into the smaller denominator). The chain fires ONLY while
+ * a remembered position resolves: a never-visited nest keeps the 4a
+ * OA-vertical-default structural rest (the seam at the region content
+ * end), unchanged.
+ */
+const NEST_HOP_CAP = 8;
+
+function nestedNumStore(env: Envelope, target: Caret, mem: VerticalMemory): Caret | null {
+  if (target.kind !== 'row') return null;
+  const row = nodeAt(env, target.path);
+  if (row === null || !isRowNode(row)) return null;
+  const args = rowArgs(row);
+  if (target.index !== args.length || args.length === 0) return null;
+  const tail = args[args.length - 1];
+  if (tail === null || tail.type !== 'frac') return null; // num→num-only
+  const stored = mem.get(regionKey({ parentPath: [...target.path, args.length - 1], slot: 'num' }));
+  if (stored === undefined || !caretResolvesIn(env, stored)) return null;
+  return stored;
+}
+
+function chainedNestedPosition(env: Envelope, target: Caret, mem: VerticalMemory): Caret | null {
+  let chain: Caret | null = null;
+  let at = target;
+  for (let hop = 0; hop < NEST_HOP_CAP; hop += 1) {
+    const step = nestedNumStore(env, at, mem);
+    if (step === null) break;
+    chain = step;
+    at = step;
+  }
+  return chain;
+}
 
 export interface VerticalKeyResult {
   readonly caret: Caret;
@@ -105,6 +215,12 @@ export function applyVerticalKey(env: Envelope, caret: Caret, dir: NavDir, mem: 
       if (caretResolvesIn(env, entry)) return { caret: entry, mem: next, fired: true };
       next.delete(key); // dangling store: discard, structural default wins
     }
+  }
+  // OA-vmem-nesting (4b-1): descents follow the chain into remembered
+  // nested positions when the arrival region has no own store.
+  if (dir === 'down') {
+    const chained = chainedNestedPosition(env, target, next);
+    if (chained !== null) return { caret: chained, mem: next, fired: true };
   }
   return { caret: target, mem: next, fired: false };
 }

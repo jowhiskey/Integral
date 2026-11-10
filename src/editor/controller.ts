@@ -42,7 +42,7 @@ import { updateCaretOverlay } from './caret-overlay.js';
 import { caretFromHit, hitFromMouseEvent } from './click.js';
 import { charFromCode, classifyKey, deadComposedBase, deadCompositionBase, KEYMAP } from './keys.js';
 import { buildMathML, pathKey, type RenderedMath } from './mathml-dom.js';
-import { applyVerticalKey, type VerticalMemory } from './vertical-memory.js';
+import { applyVerticalKey, wipeSideways, type VerticalMemory } from './vertical-memory.js';
 
 export interface EditorControllerOptions {
   /** Initial formula envelope (validated through fromJSON); omitted = empty formula. */
@@ -540,6 +540,12 @@ export class EditorController {
     }
     const next = applyOp(this.state, { op: 'move', dir });
     if (next !== this.state) {
+      // OA-vmem-nesting (4b-1): a ←/→ press that EXITS a structure wipes
+      // that structure's layer memory — the one clearing trigger; horizontal
+      // movement never STORES anything (only vertical presses write).
+      if (dir === 'left' || dir === 'right') {
+        this.vmem = wipeSideways(toJSON(this.state.root), caret, next.caret, this.vmem);
+      }
       this.state = next;
       this.updateCaret();
       this.onCaretChange?.(next.caret);

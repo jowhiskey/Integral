@@ -89,21 +89,34 @@ describe('4a — N2 + the corollary: one shared gap station, no press spent on a
 });
 
 describe('4a — N4: horizontal exits at the visual level (S-039 B)', () => {
-  it('the slot ends exit past the whole structure into the row — never sideways', () => {
+  it('the slot ends exit to the structure flank — the restable outside station in the glyph zone (4b-1 re-pin, OA-flank-stations)', () => {
     const s = seed({ type: 'op', op: 'add', args: [sym('x'), { type: 'frac', num: num(1), den: sym('d') }, sym('y')] });
-    expect(moved(withCaret(s, tok([1, 'num'], 1)), 'right')).toEqual(tok([2], 0)); // the numerator NEVER dives into den
-    expect(moved(withCaret(s, tok([1, 'den'], 1)), 'right')).toEqual(tok([2], 0)); // the denominator (S-041)
+    // 4b-1 (OA-flank-stations): → at a slot end exits the structure and
+    // rests at its right-edge flank — one press per visible position; the
+    // next press crosses the glyph to y. (4a pinned the direct dive to y@0;
+    // the flank ruling supersedes.)
+    expect(moved(withCaret(s, tok([1, 'num'], 1)), 'right')).toEqual(node([1], 'right')); // the numerator NEVER dives into den
+    expect(moved(withCaret(s, tok([1, 'den'], 1)), 'right')).toEqual(node([1], 'right')); // the denominator (S-041)
+    expect(moved(withCaret(s, node([1], 'right')), 'right')).toEqual(tok([2], 0)); // the glyph crossing from the flank
     const pow = seed({ type: 'op', op: 'add', args: [{ type: 'pow', base: sym('a'), exp: num(2) }, sym('y')] });
-    expect(moved(withCaret(pow, tok([0, 'exp'], 1)), 'right')).toEqual(tok([1], 0)); // the exponent (S-044)
+    expect(moved(withCaret(pow, tok([0, 'exp'], 1)), 'right')).toEqual(node([0], 'right')); // the exponent end exits to the flank (S-044)
     const group = seed({ type: 'op', op: 'add', args: [{ type: 'group', parens: 'always', child: sym('b') }, sym('y')] });
-    expect(moved(withCaret(group, tok([0, 'child'], 1)), 'right')).toEqual(tok([1], 0)); // past the fence (S-046)
+    // mid-row group (a glyph zone follows): past the fence the post-`)`
+    // outside station (OA-fence-flank), then the glyph crossing to y.
+    expect(moved(withCaret(group, tok([0, 'child'], 1)), 'right')).toEqual(node([0], 'right')); // past the fence (S-046)
+    expect(moved(withCaret(group, node([0], 'right')), 'right')).toEqual(tok([1], 0));
   });
 });
 
 describe('4a — N5: the ruled horizontal entries/exits (S-042/S-043/S-094/S-095/S-096)', () => {
-  it('S-042: → into a fraction from the left → the numerator start', () => {
+  it('S-042: → into a fraction from the left → the numerator start (4b-1 re-pin: one flank stop in the glyph zone)', () => {
     const s = seed({ type: 'op', op: 'add', args: [sym('x'), { type: 'frac', num: num(12), den: num(3) }] });
-    expect(moved(withCaret(s, tok([0], 1)), 'right')).toEqual(tok([1, 'num'], 0));
+    // 4b-1 (OA-flank-stations): the spot between + and the fraction is a
+    // restable station — → from the x end rests at the LEFT flank; the next
+    // → enters the numerator (S-042's letter preserved one press later).
+    expect(moved(withCaret(s, tok([0], 1)), 'right')).toEqual(node([1], 'left'));
+    expect(moved(withCaret(s, node([1], 'left')), 'right')).toEqual(tok([1, 'num'], 0));
+    expect(moved(withCaret(s, node([1], 'left')), 'left')).toEqual(tok([0], 1)); // back across the glyph
   });
 
   it("S-043: → at a power's base end → the exponent offset 0", () => {
@@ -118,9 +131,13 @@ describe('4a — N5: the ruled horizontal entries/exits (S-042/S-043/S-094/S-095
     expect(moved(withCaret(pow, seam([], 1)), 'left')).toEqual(tok([0, 'exp'], 1)); // the seam right after the power
   });
 
-  it('S-095: ← at the denominator start exits past the whole fraction; at a lone root it rests at the ratified before-station', () => {
+  it('S-095: ← at the denominator start exits to the fraction flank; the re-entry pins stand (4b-1 re-pin, OA-flank-stations)', () => {
     const s = seed({ type: 'op', op: 'add', args: [sym('x'), { type: 'frac', num: num(1), den: sym('d') }] });
-    expect(moved(withCaret(s, tok([1, 'den'], 0)), 'left')).toEqual(tok([0], 1));
+    // 4b-1 (OA-flank-stations): ← out of the denominator rests at the LEFT
+    // flank — the position between + and the fraction — then continues to
+    // the x end ("exits left past the whole fraction", S-095).
+    expect(moved(withCaret(s, tok([1, 'den'], 0)), 'left')).toEqual(node([1], 'left'));
+    expect(moved(withCaret(s, node([1], 'left')), 'left')).toEqual(tok([0], 1));
     const lone = seed({ type: 'frac', num: num(1), den: sym('d') });
     expect(moved(withCaret(lone, tok(['den'], 0)), 'left')).toEqual(node([], 'left'));
   });
@@ -176,7 +193,11 @@ describe('4a — N7/N8: functions and empty slots', () => {
       args: [sym('x'), { type: 'fn', name: 'sin', args: [sym('a'), sym('b')] }, sym('z')],
     });
     expect(moved(withCaret(s, tok([1, 0], 1)), 'right')).toEqual(tok([1, 1], 0)); // one press crosses the comma
-    expect(moved(withCaret(s, tok([1, 1], 1)), 'right')).toEqual(tok([2], 0)); // exits the call into the row
+    // 4b-1 re-pin (OA-fence-flank): the LAST argument exits past the closing
+    // fence to the fn's whole-cell flank — the post-`)` station mid-row —
+    // then one press crosses the glyph to z (S-047's letter preserved).
+    expect(moved(withCaret(s, tok([1, 1], 1)), 'right')).toEqual(node([1], 'right'));
+    expect(moved(withCaret(s, node([1], 'right')), 'right')).toEqual(tok([2], 0));
   });
 
   it('N8: empty slots are normal slots — → exits the structure, the □ stays (S-049)', () => {
@@ -242,9 +263,12 @@ describe('4a — OA-visual-trumps: the pinned geometry distinctions', () => {
     const out = move(withCaret(s, inside), 'right');
     expect(out.caret).toEqual(after);
     expect(move(out, 'right') === out).toBe(true);
-    // both exist and differ; S-046's exit:
+    // both exist and differ; S-046's exit: 4b-1 re-pin (OA-flank-stations +
+    // OA-fence-flank): a MID-row group exits to the post-`)` outside
+    // station (one press), the next press crosses the glyph to z.
     const s3 = seed({ type: 'op', op: 'add', args: [sym('x'), { type: 'group', parens: 'always', child: sym('b') }, sym('z')] });
-    expect(moved(withCaret(s3, tok([1, 'child'], 1)), 'right')).toEqual(tok([2], 0));
+    expect(moved(withCaret(s3, tok([1, 'child'], 1)), 'right')).toEqual(node([1], 'right'));
+    expect(moved(withCaret(s3, node([1], 'right')), 'right')).toEqual(tok([2], 0));
   });
 
   it('radicand end vs whole-root end keep their distinct deletion behaviors (D1/S-109 vs D5)', () => {

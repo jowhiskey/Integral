@@ -293,6 +293,10 @@ interface AfterStation {
   readonly node: NodeJson;
   readonly ref: Ref;
   readonly path: Path;
+  /** 4b-1 OA-flank-stations: typing at the LEFT flank pairs the fresh
+   *  token directly BEFORE the structure (inserts a node directly
+   *  adjacent); absent/`false` = the ordinary after-station pairing. */
+  readonly before?: boolean;
 }
 
 interface VoidStation {
@@ -324,6 +328,19 @@ function stationOf(env: Envelope, caret: Caret): Station {
     }
     case 'node': {
       const node = nodeAt(env, caret.path) as NodeJson;
+      if (caret.side !== undefined) {
+        // 4b-1 OA-flank-stations: the flank is a typing station against the
+        // structure AS A WHOLE — a typed token pairs directly adjacent
+        // (before/after per the side); the void natural-continue never
+        // applies through a flank (the side field wins).
+        return {
+          kind: 'after',
+          node,
+          ref: refOfPath(caret.path),
+          path: caret.path,
+          before: caret.side === 'left',
+        };
+      }
       if (isTokenNode(node)) {
         return { kind: 'tok', node, ref: refOfPath(caret.path), path: caret.path, offset: tokenText(node).length };
       }
@@ -400,6 +417,24 @@ function pairCaret(base: Path, cell: number, newTok: NodeJson): Caret {
     return { kind: 'row', path: base, index: cell + 1 };
   }
   return { kind: 'token', path: [...base, cell], index: tokenText(newTok).length };
+}
+
+/** The shared before/after flag of the flank stations (4b-1 OA-flank-stations):
+ *  true = the LEFT flank pairs a typed token directly BEFORE the structure. */
+interface FlankPair {
+  readonly before?: boolean;
+}
+
+/** Pair the station's node with a freshly typed token (4b-1 OA-flank-stations):
+ *  the ordinary after-station pairs node→token with the caret on the fresh
+ *  token (cell 1); the LEFT flank pairs token→node — typing inserts a node
+ *  directly BEFORE the structure — with the caret on the fresh token
+ *  (cell 0). */
+function pairAgainst(ctx: Ctx, station: { readonly node: NodeJson; readonly ref: Ref } & FlankPair, newTok: NodeJson, caretAt: (cell: number) => Caret): EditingState {
+  const at = replacePosOf(station.ref);
+  return station.before
+    ? place(ctx, implicitPair(newTok, station.node), at, caretAt(0))
+    : place(ctx, implicitPair(station.node, newTok), at, caretAt(1));
 }
 
 /** Juxtapose `newTok` against the token station's node — before, after, or
@@ -503,9 +538,11 @@ function digitKey(ctx: Ctx, station: Station, digits: string): EditingState {
     case 'tok':
       return digitAtToken(ctx, station, digits, num);
     case 'after':
-      return place(ctx, implicitPair(station.node, num), replacePosOf(station.ref), {
-        kind: 'token', path: [...pathOf(station.ref), 1], index: digits.length,
-      });
+      // 4b-1 OA-flank-stations: the left flank pairs the digit directly
+      // BEFORE the structure.
+      return pairAgainst(ctx, station, num, (cell) => ({
+        kind: 'token', path: [...pathOf(station.ref), cell], index: digits.length,
+      }));
     case 'seam': {
       const seam = seamOf(ctx.env, station);
       // 0. a pending null — left of the seam (S-003's `+|a` + `1` → 1+a) or
@@ -624,9 +661,11 @@ function letterKey(ctx: Ctx, station: Station, letters: string): EditingState {
     case 'tok':
       return letterAtToken(ctx, station, letters, sym);
     case 'after':
-      return place(ctx, implicitPair(station.node, sym), replacePosOf(station.ref), {
-        kind: 'token', path: [...pathOf(station.ref), 1], index: letters.length,
-      });
+      // 4b-1 OA-flank-stations: the left flank pairs the letters directly
+      // BEFORE the structure.
+      return pairAgainst(ctx, station, sym, (cell) => ({
+        kind: 'token', path: [...pathOf(station.ref), cell], index: letters.length,
+      }));
     case 'seam': {
       const seam = seamOf(ctx.env, station);
       // 0. a pending null takes the leaf (S-003's leading flow, or a right
@@ -753,9 +792,11 @@ function dotKey(ctx: Ctx, station: Station): EditingState {
       return juxtaposeToken(ctx, station, dotted, offset === 0 ? 'before' : offset === text.length ? 'after' : 'split');
     }
     case 'after':
-      return place(ctx, implicitPair(station.node, dotted), replacePosOf(station.ref), {
-        kind: 'token', path: [...pathOf(station.ref), 1], index: 2,
-      });
+      // 4b-1 OA-flank-stations: the left flank pairs the fresh `0.` directly
+      // BEFORE the structure (caret inside it, after the dot).
+      return pairAgainst(ctx, station, dotted, (cell) => ({
+        kind: 'token', path: [...pathOf(station.ref), cell], index: 2,
+      }));
     case 'seam': {
       const seam = seamOf(ctx.env, station);
       // 0. a pending null births the `0.` there (everywhere a new number
@@ -875,10 +916,17 @@ function opKey(ctx: Ctx, station: Station, fn: OperatorFn): EditingState {
         kind: 'token', path: [...pathOf(ref), 1], index: 0,
       });
     }
-    case 'after':
-      return place(ctx, opRow(fn, [station.node, null]), replacePosOf(station.ref), {
+    case 'after': {
+      // 4b-1 OA-flank-stations: at the left flank the glyph template gets a
+      // null LEFT cell (the structure rides as its right operand, the glyph
+      // directly before it); the caret rests in both shapes' pending cell.
+      const cells = station.before
+        ? [null, station.node as NodeJson | null]
+        : [station.node as NodeJson | null, null];
+      return place(ctx, opRow(fn, cells), replacePosOf(station.ref), {
         kind: 'row', path: pathOf(station.ref), index: 1,
       });
+    }
     case 'seam': {
       const { row, path, index, args } = station;
       const sameOp = row.type === 'op' && !rowImplicit(row) && (row as { op: string }).op === fn;
@@ -989,9 +1037,12 @@ function openKey(ctx: Ctx, station: Station): EditingState {
       return juxtaposeToken(ctx, station, group, offset === 0 ? 'before' : offset === stationText(station).length ? 'after' : 'split');
     }
     case 'after':
-      return place(ctx, implicitPair(station.node, groupJson(null, true)), replacePosOf(station.ref), {
-        kind: 'slot', path: [...pathOf(station.ref), 1], slot: 'child',
-      });
+      // 4b-1 OA-flank-stations: at the left flank the fresh group pairs
+      // directly BEFORE the structure (T6's content-to-the-left reading
+      // mirrored: the structure becomes the group's right content).
+      return pairAgainst(ctx, station, groupJson(null, true), (cell) => ({
+        kind: 'slot', path: [...pathOf(station.ref), cell], slot: 'child',
+      }));
     case 'seam': {
       const seam = seamOf(ctx.env, station);
       const reHead = rebindHeadOf(ctx, station);
@@ -1057,9 +1108,12 @@ function closeKey(ctx: Ctx, station: Station): EditingState {
     case 'tok':
       return juxtaposeToken(ctx, station, fence, station.offset === 0 ? 'before' : station.offset === stationText(station).length ? 'after' : 'split');
     case 'after':
-      return place(ctx, implicitPair(station.node, fence), replacePosOf(station.ref), {
-        kind: 'row', path: pathOf(station.ref), index: 2,
-      });
+      // 4b-1 OA-flank-stations: at the left flank the dangling close token
+      // pairs directly BEFORE the structure (caret on the fence cell's
+      // seam; the ordinary after-station seats it after its pair).
+      return pairAgainst(ctx, station, fence, (cell) => ({
+        kind: 'row', path: pathOf(station.ref), index: cell + 1,
+      }));
     case 'seam': {
       const seam = seamOf(ctx.env, station);
       if (seam.left !== null && seam.left.node !== null && seam.freeLeft) {
@@ -1209,9 +1263,17 @@ function structureKey(ctx: Ctx, station: Station, kind: 'divide' | 'pow'): Editi
       return place(ctx, mk(left, right), replacePosOf(ref), to);
     }
     case 'after':
-      return place(ctx, mk(station.node, null), replacePosOf(station.ref), {
-        kind: 'slot', path: pathOf(station.ref), slot: rightSlot,
-      });
+      // 4b-1 OA-flank-stations: the AFTER station grabs the structure whole
+      // as the left slot (T7's ruled `(a+b)|` grab); the LEFT flank mirrors
+      // it — the structure becomes the RIGHT slot with a □ left slot and
+      // the caret in it (the OA-both-halves uniform reading's edges).
+      return station.before
+        ? place(ctx, mk(null, station.node), replacePosOf(station.ref), {
+            kind: 'slot', path: pathOf(station.ref), slot: leftSlot,
+          })
+        : place(ctx, mk(station.node, null), replacePosOf(station.ref), {
+            kind: 'slot', path: pathOf(station.ref), slot: rightSlot,
+          });
     case 'seam': {
       const seam = seamOf(ctx.env, station);
       if (seam.left !== null && seam.left.node !== null) {
@@ -1355,6 +1417,12 @@ export function insertRoot(state: EditingState, opts: { readonly mroot?: boolean
       });
     }
     case 'after': {
+      if (station.before) {
+        // 4b-1 OA-flank-stations: the structure right of the left flank
+        // goes under the radical (the forward-grab's uniform reading) —
+        // the caret at the radicand's beginning.
+        return grabCell(ctx, station.path, rootOf);
+      }
       const fwd = forwardCellOf(ctx.env, station.ref);
       if (fwd !== null) {
         if (fwd.drop) {
@@ -1424,9 +1492,9 @@ export function insertSubscript(state: EditingState): EditingState {
       return juxtaposeToken(ctx, station, empty, offset === 0 ? 'before' : offset === stationText(station).length ? 'after' : 'split');
     }
     case 'after':
-      return place(ctx, implicitPair(station.node, empty), replacePosOf(station.ref), {
-        kind: 'token', path: [...pathOf(station.ref), 1], index: 0, label: 'base',
-      });
+      return pairAgainst(ctx, station, empty, (cell) => ({
+        kind: 'token', path: [...pathOf(station.ref), cell], index: 0, label: 'base',
+      }));
     case 'seam': {
       const seam = seamOf(ctx.env, station);
       if (seam.left !== null && seam.left.node !== null && seam.left.node.type === 'sym' &&

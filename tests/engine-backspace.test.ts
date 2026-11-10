@@ -191,7 +191,10 @@ describe('D2 — backspace at gaps (S-064/S-066 A/S-077)', () => {
     // unwraps to the pair at its position
     let state = backspace(at(op('add', sym('ab'), sym('c')), rowc([], 1)));
     expect(j(envelopeOf(state).root)).toBe(j(jmp(sym('ab'), sym('c'))));
-    expect(state.caret).toEqual(rowc([], 1)); // the freed glyph's spot — the pair's inner seam
+    // 4b-1 re-pin (OA-visual-trumps, twin elimination): the freed glyph's
+    // spot collapses onto the bonded right operand's left entry — the
+    // pair's inner seam painted exactly where c's offset 0 paints.
+    expect(state.caret).toEqual(tokc([1], 0));
     expect(state.log.length).toBe(1);
     legal(state);
     // `x + |1/2`: NO highlight from the before-side — the plus dies and the
@@ -206,7 +209,8 @@ describe('D2 — backspace at gaps (S-064/S-066 A/S-077)', () => {
     // a longer row keeps its cells: a+b+|c → a + b·c (the pair nests in place)
     state = backspace(at(op('add', sym('a'), sym('b'), sym('c')), rowc([], 2)));
     expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('a'), jmp(sym('b'), sym('c')))));
-    expect(state.caret).toEqual(rowc([1], 1));
+    // 4b-1 re-pin (OA-visual-trumps): the freed spot's canonical state.
+    expect(state.caret).toEqual(tokc([1, 1], 0));
     legal(state);
     // the Ctrl variant keeps the glyph-delete (a one-character glyph has no run)
     state = backspace(at(op('add', sym('x'), frac(num(1), num(2))), rowc([], 1)), { ctrl: true });
@@ -242,17 +246,22 @@ describe('D2 — backspace at gaps (S-064/S-066 A/S-077)', () => {
     // the doubled interior: 2−−|3 → 2−|3 ([2,∅,3] → [2,3], the seam between)
     state = backspace(at(op('subtract', num(2), null, num(3)), rowc([], 2)));
     expect(j(envelopeOf(state).root)).toBe(j(op('subtract', num(2), num(3))));
-    expect(state.caret).toEqual(rowc([], 1));
+    // 4b-1 re-pin (OA-visual-trumps): the freed zone collapses onto the
+    // following cell's left entry (its offset 0) — the raw seam painted
+    // at the same spot.
+    expect(state.caret).toEqual(tokc([1], 0));
     legal(state);
     // and at the void between the −s: the caret's own pending cell splices
     state = backspace(at(op('subtract', num(2), null, num(3)), rowc([], 1)));
     expect(j(envelopeOf(state).root)).toBe(j(op('subtract', num(2), num(3))));
-    expect(state.caret).toEqual(rowc([], 1));
+    expect(state.caret).toEqual(tokc([1], 0));
     legal(state);
     // a longer row keeps its cells: [a,b,∅] → [a,b]
     state = backspace(at(op('add', sym('a'), sym('b'), null), rowc([], 3)));
     expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('a'), sym('b'))));
-    expect(state.caret).toEqual(rowc([], 2));
+    // 4b-1 re-pin (OA-visual-trumps): the freed trailing zone collapses
+    // onto the last cell's in-token end.
+    expect(state.caret).toEqual(tokc([1], 1));
     legal(state);
   });
 
@@ -639,7 +648,10 @@ describe('D7 — the function chain + the head swap (S-075/S-077, the S-023 A an
     // collapses WITH its comma, the caret at the removed cell's seam
     state = backspace(at(fn('sin', [sym('x'), null]), rowc([], 1)));
     expect(j(envelopeOf(state).root)).toBe(j(fn('sin', [sym('x')])));
-    expect(state.caret).toEqual(rowc([], 1)); // sin(x|
+    // 4b-1 re-pin (OA-visual-trumps): sin(x| collapses onto x's in-token
+    // end — the fn row-end seam painted at the same spot (the closed fence
+    // aside, the seat's behavior is char-line identical).
+    expect(state.caret).toEqual(tokc([0], 1));
     expect(state.log.length).toBe(1);
     legal(state);
     // and the freed spot inside a parent row is the parent seam
@@ -652,7 +664,9 @@ describe('D7 — the function chain + the head swap (S-075/S-077, the S-023 A an
   it('an empty argument LEFT of the seam splices away with its comma (the D2 dangling analog in fn rows)', () => {
     const state = backspace(at(fn('sin', [null, sym('y')]), rowc([], 1)));
     expect(j(envelopeOf(state).root)).toBe(j(fn('sin', [sym('y')])));
-    expect(state.caret).toEqual(rowc([], 0));
+    // 4b-1 re-pin (OA-visual-trumps): the freed comma zone collapses onto
+    // the following argument's left entry.
+    expect(state.caret).toEqual(tokc([0], 0));
     legal(state);
   });
 
@@ -663,7 +677,8 @@ describe('D7 — the function chain + the head swap (S-075/S-077, the S-023 A an
     expect(state.caret).toEqual(rowc([], 1)); // sin(x,| — no placeholder renders
     state = backspace(state); // the emptied second argument collapses WITH its comma
     expect(j(envelopeOf(state).root)).toBe(j(fn('sin', [sym('x')])));
-    expect(state.caret).toEqual(rowc([], 1)); // sin(x|
+    // 4b-1 re-pin (OA-visual-trumps): sin(x| collapses onto x's in-token end.
+    expect(state.caret).toEqual(tokc([0], 1));
     state = backspace(state); // x: its only letter
     expect(j(envelopeOf(state).root)).toBe(j(fn('sin', [null])));
     expect(state.caret).toEqual(rowc([], 0)); // sin(|□)
@@ -686,18 +701,21 @@ describe('D7 — the function chain + the head swap (S-075/S-077, the S-023 A an
   it('a mid-row empty argument collapses with its comma from either of its seats (B-23)', () => {
     const inside = backspace(at(fn('sin', [sym('x'), null, sym('z')]), rowc([], 1)));
     expect(j(envelopeOf(inside).root)).toBe(j(fn('sin', [sym('x'), sym('z')])));
-    expect(inside.caret).toEqual(rowc([], 1)); // sin(x,|z
+    // 4b-1 re-pin (OA-visual-trumps): sin(x,|z collapses onto z's left entry.
+    expect(inside.caret).toEqual(tokc([1], 0)); // sin(x,|z
     legal(inside);
     const behind = backspace(at(fn('sin', [sym('x'), null, sym('z')]), rowc([], 2)));
     expect(j(envelopeOf(behind).root)).toBe(j(fn('sin', [sym('x'), sym('z')])));
-    expect(behind.caret).toEqual(rowc([], 1)); // sin(x,|z
+    expect(behind.caret).toEqual(tokc([1], 0)); // sin(x,|z
     legal(behind);
   });
 
   it('BS from BEHIND an open-ended fn whose trailing argument emptied collapses it too (B-23 from the tail side)', () => {
     const state = backspace(at(op('add', sym('x'), fn('sin', [sym('a'), null], false)), node([1])));
     expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('x'), fn('sin', [sym('a')], false))));
-    expect(state.caret).toEqual(rowc([1], 1)); // x + sin(a|
+    // 4b-1 re-pin (OA-visual-trumps): the freed zone collapses onto the
+    // last remaining argument's right end.
+    expect(state.caret).toEqual(tokc([1, 0], 1)); // x + sin(a|
     expect(state.log.length).toBe(1);
     legal(state);
   });

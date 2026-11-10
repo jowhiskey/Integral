@@ -38,6 +38,72 @@ export interface CaretAnchor {
   readonly height: number;
 }
 
+// ——— OA-seam-caret-height (rework 4b-1) ———
+//
+// The seam-station anchor rule, as a PURE selection from (state + tree):
+// a seam station's caret paints at the HEIGHT of its LEFT-ADJACENT
+// element — the separator glyph for a flank/pending station at a glyph
+// zone ("normal text height behind the +"; explicitly unwanted: a caret
+// as tall as the fraction while standing LEFT of it), the last cell for
+// the end-of-row seam (`1+1/2|` → the fraction's full height). Fallback
+// with no left neighbor (the row start, a bare root): the CURRENT
+// element's height (the prototype's offset-0-of-current exception — a
+// row starting with a fraction paints the caret at fraction height).
+
+import { NAV_PROFILES, type NavRegistry } from '../engine/index.js';
+import { refOfPath } from '../engine/caret.js';
+
+/** The element a seam station's caret takes its height from (the pure
+ *  rule; the x coordinate stays the station's own geometry). */
+export type SeamAnchorSpec =
+  | { readonly kind: 'separator'; readonly rowPath: Path; readonly index: number }
+  | { readonly kind: 'element'; readonly path: Path };
+
+/** True iff the node's own left/right edge is a station state (`side`). */
+const hasSide = (env: Envelope, caret: Caret): caret is Extract<Caret, { kind: 'node' }> & { side: 'left' | 'right' } =>
+  caret.kind === 'node' && caret.side !== undefined;
+
+/** The seam-anchor selection (seam state + tree → anchor element path):
+ *  the left-adjacent separator when the station's boundary carries one,
+ *  else the current element (the 4b-1 fallback rule). Row seams anchor
+ *  per the 4a collapse rules: the end seam rides the last cell's extent,
+ *  the start seam and bare cells ride the current element. */
+export function seamAnchorSpec(env: Envelope, caret: Caret, registry: NavRegistry = NAV_PROFILES): SeamAnchorSpec | null {
+  if (caret.kind === 'empty') return null;
+  if (hasSide(env, caret)) {
+    if (caret.side === 'right') return { kind: 'element', path: caret.path };
+    const ref = refOfPath(caret.path);
+    if (ref.at === 'cell') return { kind: 'separator', rowPath: ref.path, index: ref.index };
+    return { kind: 'element', path: caret.path }; // no left neighbor: the current element
+  }
+  if (caret.kind === 'row') {
+    const row = nodeAt(env, caret.path);
+    if (row === null || !isRowNode(row)) return null;
+    const args = rowArgs(row);
+    if (caret.index >= args.length) {
+      return args.length > 0 && args[args.length - 1] !== null
+        ? { kind: 'element', path: [...caret.path, args.length - 1] } // the end seam: the last cell's extent (left-adjacent)
+        : { kind: 'element', path: caret.path };
+    }
+    if (args[caret.index] === null) {
+      return { kind: 'separator', rowPath: caret.path, index: caret.index }; // the bare anchor: the left glyph first
+    }
+    return { kind: 'element', path: [...caret.path, caret.index] }; // the start seam / cell edge: the current element
+  }
+  return null;
+}
+
+/** Resolve the spec against the rendered maps (the anchor element only —
+ *  the caller projects its rect onto the caret's own x). */
+function seamAnchorElement(caret: Caret, spec: SeamAnchorSpec | null, rendered: RenderedMath): Element | null {
+  if (spec === null) return null;
+  if (spec.kind === 'separator') {
+    return rendered.separatorBySeam.get(`${pathKey(spec.rowPath)}/${spec.index}`) ?? null;
+  }
+  void caret;
+  return rendered.elementByPath.get(pathKey(spec.path)) ?? null;
+}
+
 interface RectLike {
   readonly left: number;
   readonly top: number;
@@ -76,6 +142,19 @@ export function caretAnchor(env: Envelope, caret: Caret, rendered: RenderedMath)
       // The 4a border stations: side 'right' is the whole-structure
       // after-station (the extent's right edge — the spot D5 fires from).
       if (caret.side === 'right') return { x: r.right, y: r.top, height: r.height };
+      // 4b-1 OA-seam-caret-height: the LEFT flank paints at its
+      // LEFT-ADJACENT element's height (the separator glyph in a glyph
+      // zone, e.g. normal text height behind the `+`); without one (the
+      // row start, a bare root) the current element's full height (the
+      // offset-0-of-current exception).
+      if (caret.side === 'left') {
+        const anchorEl = seamAnchorElement(caret, seamAnchorSpec(env, caret), rendered);
+        if (anchorEl !== null) {
+          const g = rectOf(anchorEl);
+          return { x: r.left, y: g.top, height: g.height };
+        }
+        return { x: r.left, y: r.top, height: r.height };
+      }
       return { x: r.left, y: r.top, height: r.height };
     }
     case 'slot': {

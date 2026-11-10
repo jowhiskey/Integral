@@ -244,10 +244,12 @@ describe('S-104 — unit label token carets (N1 letter-wise positions)', () => {
     const inLabel: Caret = { kind: 'token', path: [1], index: 1 };
     expect(resolveMove(env, inLabel, 'left')).toEqual({ kind: 'token', path: [1], index: 0 });
     expect(resolveMove(env, inLabel, 'right')).toEqual({ kind: 'token', path: [1], index: 2 });
-    // exits: the label start leaves left, the label end leaves right
-    // 4a re-pin (N1 exit + OA-visual-trumps): the exits cross the glyphs to
-    // the adjacent cells' bench stations — offset 0 of 1, the in-token end of 9
-    expect(resolveMove(env, { kind: 'token', path: [1], index: 0 }, 'left')).toEqual({ kind: 'token', path: [0], index: 1 });
+    // exits: the label start walks back INTO the value's right end (the
+    // granular unit's own text-channel chain); the label end leaves right
+    // 4b-1 re-pin (I-19): the value→label walk link — the old exits skipped
+    // the value digits entirely; the right exit crosses the glyph to 9.
+    expect(resolveMove(env, { kind: 'token', path: [1], index: 0 }, 'left')).toEqual({ kind: 'token', path: [1, 'value'], index: 2 });
+    expect(resolveMove(env, { kind: 'token', path: [1, 'value'], index: 2 }, 'right')).toEqual({ kind: 'token', path: [1], index: 0 });
     expect(resolveMove(env, { kind: 'token', path: [1], index: 2 }, 'right')).toEqual({ kind: 'token', path: [2], index: 0 });
   });
 

@@ -42,16 +42,16 @@ const SLOTS: Readonly<Record<NodeJson['type'], readonly SlotName[]>> = {
  * - `node`    — on the node at `path` (leaf or container, `[]` = root). For a
  *               num/sym leaf it reads as the token's right edge (the station
  *               a token's continued typing continues from).
- *               Additive `side` (rework session 4a, owner-ruled 2026-11-09):
- *               the whole-structure BORDER station of a lone container —
- *               `side: 'left'` = the position before the structure's extent,
- *               `side: 'right'` = after it (the outside station D5 fires
- *               from). Valid only on fenced/fenceless containers
- *               (group/fn/frac/pow/root): a lone token's edges ARE its
- *               in-token ends, and rows carry seams, so guarding them out
- *               keeps one state per visual spot (OA-visual-trumps). Produced
- *               only when the movement climb exhausts at a bare non-row
- *               root; never serialized.
+ *               Additive `side` (rework session 4a, owner-ruled 2026-11-09;
+ *               extended in 4b-1, OA-flank-stations):
+ *               `side: 'left'` = the station directly against the
+ *               structure's left edge (the glyph zone between the preceding
+ *               separator and the structure), `side: 'right'` = the mirror
+ *               against its right edge (the outside station D5 fires
+ *               from). Valid on whole containers (group/fn/frac/pow/root +
+ *               sub, 4b-1). Produced by the movement spine at mid-row
+ *               glyph zones and slot/root boundaries (4a's lone-root
+ *               border ruling); never serialized.
  * - `slot`    — in an empty fixed slot of the node at `path`.
  * - `row`     — insertion point into an args row: index 0..args.length
  *               (args.length = after the last arg). A null entry in a row is
@@ -225,14 +225,15 @@ export function caretResolvesIn(env: Envelope, caret: Caret): boolean {
     case 'node': {
       const node = nodeAt(env, caret.path);
       if (node === null) return false;
-      // The additive border side (4a): guarded to whole containers whose
-      // extent exceeds their content ends — group/fn (fenced) and
-      // frac/pow/root (fenceless 2D). Tokens are addressed in-token, rows
-      // carry their own seams, and sub/unit label ends coincide with their
-      // extents: a side there would duplicate an existing state's spot.
+      // The additive border side (4a, extended in 4b-1): guarded to whole
+      // containers — group/fn (fenced) + frac/pow/root (fenceless 2D) +
+      // `sub` (rework 4b-1, OA-flank-stations: a mid-row subscript's edges
+      // are ruled flank stations; a lone sub never PRODUCES one, so the
+      // 4a lone-root behavior stands). Tokens and rows are addressed
+      // in-token / by their own seams.
       if (caret.side !== undefined) {
         const t = node.type;
-        return t === 'group' || t === 'fn' || t === 'frac' || t === 'pow' || t === 'root';
+        return t === 'group' || t === 'fn' || t === 'frac' || t === 'pow' || t === 'root' || t === 'sub';
       }
       return true;
     }

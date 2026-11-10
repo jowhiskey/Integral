@@ -526,7 +526,11 @@ function containerDeath(env: Envelope, path: Path, station: Caret): BackspaceDec
  *  filled cells deletes — the operands bond into their own implicit
  *  juxtaposition pair at the left cell's position (`x + frac` → the pair
  *  `x·frac`); a two-cell row unwraps to the pair at the row's position. The
- *  caret rests at the freed glyph's spot — the pair's inner seam. One op. */
+ *  caret rests at the freed glyph's spot — the pair's inner seam. One op.
+ *  4b-1 (OA-visual-trumps): the freed spot's CANONICAL state is the bonded
+ *  right operand's left entry (its offset 0 for tokens — the 4a merged-gap
+ *  rule; the content bench for structures) — never the pair's inner seam,
+ *  which paints at the same spot (the eliminated V-16/V-17 twin class). */
 function glyphBond(env: Envelope, rowPath: Path, left: number): BackspaceDecision {
   const row = nodeAt(env, rowPath) as NodeJson;
   const args = rowArgs(row);
@@ -534,10 +538,10 @@ function glyphBond(env: Envelope, rowPath: Path, left: number): BackspaceDecisio
   const bond = implicitPair(args[left] as NodeJson, args[left + 1] as NodeJson);
   const cells = [...args.slice(0, left), bond, ...args.slice(left + 2)];
   const promoted = cells.length === 1;
-  const to: Caret = promoted
-    ? { kind: 'row', path: pathOfRef(ref), index: 1 }
-    : { kind: 'row', path: [...rowPath, left], index: 1 };
   const node = promoted ? bond : rowClone(row, cells);
+  const after = withRefSet(env, ref, node);
+  const bondPath = promoted ? pathOfRef(ref) : [...rowPath, left];
+  const to = entryStation(after, [...bondPath, 1], 'left') ?? { kind: 'row', path: bondPath, index: 1 };
   return { kind: 'glyph', ops: [{ op: 'place', node, at: replacePosOfRef(ref), to }], caret: to };
 }
 
@@ -561,18 +565,48 @@ function glyphSplice(env: Envelope, rowPath: Path, nullIndex: number, station: C
     return { kind: 'glyph', ops: [{ op: 'place', node: cells[0], at: replacePosOfRef(ref), to }], caret: to };
   }
   const to: Caret = { kind: 'row', path: rowPath, index: Math.min(nullIndex, cells.length) };
-  return { kind: 'glyph', ops: [{ op: 'place', node: rowClone(row, cells), at: replacePosOfRef(ref), to }], caret: to };
+  const node = rowClone(row, cells);
+  const after = withRefSet(env, ref, node);
+  // 4b-1 (OA-visual-trumps): the freed spot's canonical state — the
+  // following cell's left entry when one stands there (its offset 0 for
+  // tokens; the row end keeps the last cell's right entry) — never a raw
+  // seam that paints where the neighbor token's own offset already does.
+  const land = spliceLand(after, rowPath, Math.min(nullIndex, cells.length)) ?? to;
+  return { kind: 'glyph', ops: [{ op: 'place', node, at: replacePosOfRef(ref), to: land }], caret: land };
+}
+
+/** The canonical rest state at the freed position after a pending-cell
+ *  splice (4b-1): the cell at `index`'s left entry, or — at the row end —
+ *  the last cell's right entry; null when neither resolves (a null cell
+ *  or an empty row keeps its seam caret). */
+function spliceLand(after: Envelope, rowPath: Path, index: number): Caret | null {
+  const row = nodeAt(after, rowPath) as NodeJson | null;
+  if (row === null || !isRowNode(row)) return null;
+  const args = rowArgs(row);
+  if (index < args.length) {
+    return args[index] === null ? null : (entryStation(after, [...rowPath, index], 'left'));
+  }
+  if (args.length > 0 && args[args.length - 1] !== null) {
+    return entryStation(after, [...rowPath, args.length - 1], 'right');
+  }
+  return null;
 }
 
 /** The owner's B-23 live re-ruling: an empty fn argument BEYOND the first is
  *  no placeholder territory — BS collapses the argument cell WITH its
  *  separator (the comma goes, the remaining arguments close ranks:
- *  `sin(x,□)` → `sin(x)`), the caret at the removed cell's seam. One op. */
+ *  `sin(x,□)` → `sin(x)`), the caret at the removed cell's seam. One op.
+ *  4b-1 (OA-visual-trumps): the freed comma zone collapses onto the
+ *  canonical same-spot state — the following argument's left entry (its
+ *  offset 0), the last argument's right entry at the row end. */
 function argCollapse(env: Envelope, rowPath: Path, drop: number): BackspaceDecision {
   const row = nodeAt(env, rowPath) as NodeJson;
   const cells = rowArgs(row).filter((_, i) => i !== drop);
   const to: Caret = { kind: 'row', path: rowPath, index: Math.min(drop, cells.length) };
-  return { kind: 'glyph', ops: [{ op: 'place', node: rowClone(row, cells), at: replacePosOfRef(refOfPath(rowPath)), to }], caret: to };
+  const node = rowClone(row, cells);
+  const after = withRefSet(env, refOfPath(rowPath), node);
+  const land = spliceLand(after, rowPath, Math.min(drop, cells.length)) ?? to;
+  return { kind: 'glyph', ops: [{ op: 'place', node, at: replacePosOfRef(refOfPath(rowPath)), to: land }], caret: land };
 }
 
 /** The landing station after an open-fence/head delete: content + close-fence
@@ -790,22 +824,35 @@ function nodeStation(env: Envelope, caret: Extract<Caret, { kind: 'node' }>, ctx
   const node = nodeAt(env, caret.path) as NodeJson;
   const to: Caret = { kind: 'node', path: caret.path };
   if (caret.side !== undefined) {
-    // The lone-root whole-structure border stations (4a, owner-ruled
-    // 2026-11-09): BS from the AFTER-station fires D5 for a fenceless 2D
-    // structure (highlight, then delete WITH content — S-109/D5 at root);
-    // the before-station has nothing left of it (D4), and a fenced
-    // container's outside mirrors are the session-3 named no-ops.
-    if (caret.side === 'left') return noopDecision(caret);
+    // The flank/border stations of a whole container (4a at lone roots,
+    // 4b-1 OA-flank-stations mid-row): BS from the AFTER-station fires D5
+    // for a fenceless 2D structure (highlight, then delete WITH content —
+    // S-109/D5, the subscript included) and removes the movable closing
+    // fence for a fenced container (OA-fence-flank: `1/(a+b)|` + BS →
+    // `1/(a+b` — the two spots collapse once the fence is gone). The
+    // BEFORE-station takes the ORDINARY left-consume rules (D2 — the
+    // binding-glyph delete at a glyph zone; the owner's example: nothing
+    // to its left at a bare region = the D4 no-op, as it behaves now).
+    if (caret.side === 'left') {
+      const ref = refOfPath(caret.path);
+      return ref.at === 'cell'
+        ? rowSeam(env, ref.path, ref.index, caret, ctx)
+        : noopDecision(caret);
+    }
     switch (node.type) {
       case 'frac':
       case 'pow':
       case 'root':
+      case 'sub':
         return d5Gate(env, caret.path, caret, ctx);
+      case 'group':
+      case 'fn':
+        return fencedTail(env, caret.path, node, caret, ctx);
       case 'op':
         if ((node as { op: string }).op === 'pow') return d5Gate(env, caret.path, caret, ctx); // op-pow renders as a 2D power
         return noopDecision(caret);
       default:
-        return noopDecision(caret); // group/fn outside: unruled (named default)
+        return noopDecision(caret);
     }
   }
   switch (node.type) {
@@ -947,7 +994,13 @@ export interface DeleteOpts {
   readonly units?: ReadonlySet<string>;
 }
 
-export type DeleteKind = 'noop' | 'char' | 'token-death';
+export type DeleteKind =
+  | 'noop'
+  | 'char'
+  | 'token-death'
+  | 'close-fence' // OA-fence-flank: the movable close glyph removed (Del at a fenced content end)
+  | 'open-fence' // OA-fence-flank: the opening fence removed (Del at a group's left flank)
+  | 'container-death'; // an empty fenced container dies whole (D9's reading via the fence-flank Del)
 
 export interface DeleteDecision {
   readonly kind: DeleteKind;
@@ -1034,10 +1087,36 @@ export function decideDelete(env: Envelope, caret: Caret, opts: DeleteOpts = {})
       }
       return forwardGap(env, caret, ctx); // the token's right edge: the gap right of it
     }
-    case 'node':
+    case 'node': {
       // node-on-token = the right edge; anything larger is the after-station:
-      // in both cases the forward action starts past the node.
+      // in both cases the forward action starts past the node. The 4b-1
+      // flank stations (OA-fence-flank) are side-aware: Del at the LEFT
+      // flank faces the structure's OPEN glyph — a fenced group loses its
+      // opening fence (the content promotes, the surviving close becomes a
+      // fence token; `1/|(a+b)` + Del removes the `(`); against a fn head
+      // (atomic) or a fenceless structure Del keeps the named no-op (the
+      // session-3 parked Del-vs-structure defaults). Del at the RIGHT
+      // flank faces the separator glyph — the forward-glyph mirror is the
+      // PARKED session-3 named default (no-op), except past a slot/root
+      // end, which keeps the ordinary forward action.
+      const node = nodeAt(env, caret.path) as NodeJson;
+      if (caret.side === 'left') {
+        if (node.type === 'group') {
+          // OA-fence-flank: Del removes the OPENING fence — the content
+          // promotes, the surviving close becomes a fence token (C4); an
+          // empty group dies whole (D9's reading).
+          const fwd = openFenceDelete(env, caret.path, node, caret);
+          const kind: DeleteKind = fwd.kind === 'container-death' ? 'container-death' : 'open-fence';
+          return { kind, ops: fwd.ops, caret: fwd.caret };
+        }
+        return delNoop(caret); // fn head atomic / fenceless structure: named no-op
+      }
+      if (caret.side === 'right') {
+        const ref = refOfPath(caret.path);
+        if (ref.at === 'cell') return delNoop(caret); // the glyph zone ahead: parked asymmetry (named)
+      }
       return forwardGap(env, caret, ctx);
+    }
     case 'slot':
       return delNoop(caret); // Del at a □ inside a structure: unruled (D4 pattern)
     case 'row': {
@@ -1063,17 +1142,60 @@ export function decideDelete(env: Envelope, caret: Caret, opts: DeleteOpts = {})
 const isTokenNodeLeft = (node: NodeJson): boolean =>
   node.type === 'sym' || node.type === 'num' || node.type === 'unit';
 
+/** OA-fence-flank's Del at a closed fenced container: the movable close
+ *  glyph deletes (close → false), the caret stays at the content end —
+ *  `1/(a+b|)` + Del → `1/(a+b|`. One op. */
+function flipCloseFwd(env: Envelope, containerPath: Path, container: NodeJson, caret: Caret): DeleteDecision {
+  const rebuilt =
+    container.type === 'group'
+      ? groupJson((container as { child: NodeJson | null }).child, false)
+      : fnJson((container as { name: string }).name, rowArgs(container), false);
+  return {
+    kind: 'close-fence',
+    ops: [{ op: 'place', node: rebuilt, at: replacePosOfRef(refOfPath(containerPath)), to: caret }],
+    caret,
+  };
+}
+
 /** The forward gap right of the caret's own node: the next right-adjacent
- *  args cell — its first character (D1 mirror) / the whole token (D3). */
+ *  args cell — its first character (D1 mirror) / the whole token (D3). At
+ *  the content end of a CLOSED fenced container the 4b-1 OA-fence-flank
+ *  Del applies instead: the movable `)` glyph deletes (close → false, the
+ *  caret stays at the content end — `1/(a+b|)` + Del → `1/(a+b|`). */
 function forwardGap(env: Envelope, caret: Caret, ctx: { ctrl: boolean; units: ReadonlySet<string> }): DeleteDecision {
   if (caret.kind === 'empty') return delNoop(caret);
   const path = caret.path as Path;
   const ref = refOfPath(path);
-  if (ref.at !== 'cell') return delNoop(caret); // root/slot content ends past the tree edge — N3-mirror
+  if (ref.at !== 'cell') {
+    // Root/slot content ends sit past the tree edge (the N3 mirror) —
+    // except a closed group's single-token child: its content end IS the
+    // pre-fence position (OA-fence-flank's Del).
+    if (ref.at === 'slot' && ref.slot === 'child') {
+      const group = nodeAt(env, ref.path) as NodeJson;
+      if (group.type === 'group' && isClosed(group)) {
+        return flipCloseFwd(env, ref.path, group, caret);
+      }
+    }
+    return delNoop(caret);
+  }
   const row = nodeAt(env, ref.path) as NodeJson;
   const args = rowArgs(row);
   const next = ref.index + 1;
   if (next >= args.length || args[next] === null) {
+    // A pending cell / plain row end is the unruled forward mirror (named)
+    // — but a fenced content end takes the OA-fence-flank Del first: the
+    // row may be a group's hosted child row, or the row IS an fn (then the
+    // caret sits at the LAST argument's end), with the close fence present.
+    if (row.type === 'fn') {
+      return isClosed(row) ? flipCloseFwd(env, ref.path, row, caret) : delNoop(caret);
+    }
+    const rowRef = refOfPath(ref.path);
+    if (rowRef.at === 'slot' && rowRef.slot === 'child') {
+      const group = nodeAt(env, rowRef.path) as NodeJson;
+      if (group.type === 'group' && isClosed(group)) {
+        return flipCloseFwd(env, rowRef.path, group, caret);
+      }
+    }
     return delNoop(caret); // a pending cell / row end — the forward glyph mirror is unruled (named)
   }
   const target = args[next] as NodeJson;

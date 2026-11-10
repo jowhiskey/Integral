@@ -174,9 +174,12 @@
     {/if}
     <div class="vocab-ops">
       <span class="label">T9 insertion vocabulary (the palette/suggestion surface):</span>
-      <button type="button" data-insert-root onclick={() => controller?.insertRoot()}>√ insert</button>
-      <button type="button" data-insert-mroot onclick={() => controller?.insertRoot({ mroot: true })}>ⁿ√ insert</button>
-      <button type="button" data-insert-sub onclick={() => controller?.insertSubscript()}>x₍₎ insert</button>
+      <!-- 4b-1 (I-20/I-21): the vocabulary buttons keep the EDITOR focused —
+           a button click moves focus to the button and every keydown would
+           die at the controller's focus gate ("no key moves the caret"). -->
+      <button type="button" data-insert-root onclick={() => { controller?.insertRoot(); caseContainer?.focus(); }}>√ insert</button>
+      <button type="button" data-insert-mroot onclick={() => { controller?.insertRoot({ mroot: true }); caseContainer?.focus(); }}>ⁿ√ insert</button>
+      <button type="button" data-insert-sub onclick={() => { controller?.insertSubscript(); caseContainer?.focus(); }}>x₍₎ insert</button>
     </div>
     <div class="caret-readout" data-caret>caret {caretText}</div>
     {#if activeCase}

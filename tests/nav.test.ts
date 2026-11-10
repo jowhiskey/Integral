@@ -168,7 +168,11 @@ describe('nav profile registry', () => {
       const flow = profile.flow ?? [];
       expect(flow.length).toBeGreaterThan(0);
       for (const slot of flow) expect(slotsOf(node)).toContain(slot);
-      for (const slot of profile.filledOnly ?? []) expect(flow).toContain(slot);
+      // 4b-1 (OA-index-horizontal): `filledOnly` entries may carry the
+      // mroot □-index exception; their slot stays in flow.
+      for (const rule of profile.filledOnly ?? []) {
+        expect(flow).toContain(typeof rule === 'string' ? rule : rule.slot);
+      }
       for (const edge of [...(profile.horizontal ?? []), ...(profile.vertical ?? [])] as NavEdge[]) {
         expect(flow).toContain(edge.from);
         expect(flow).toContain(edge.to);
@@ -402,11 +406,15 @@ describe('the fraction pin: enter the numerator, flow down, never sideways', () 
     expect(resolveMove(env, nodeCaret(['den']), 'down')).toBe(null);
   });
 
-  it('right from the numerator exits past the fraction to the parent right, not into den', () => {
+  it('right from the numerator exits to the fraction flank in a glyph zone, never into den (4b-1 re-pin, OA-flank-stations)', () => {
     const rowEnv = envOf(SEEDS.fracInRow); // b * (1/2) * c — frac is cell 1
-    // 4a re-pin (N2/N1 merged spots): the dive lands the next/prev cells' bench ends
-    expect(resolveMove(rowEnv, nodeCaret([1, 'num']), 'right')).toEqual({ kind: 'token', path: [2], index: 0 });
-    expect(resolveMove(rowEnv, nodeCaret([1, 'den']), 'left')).toEqual({ kind: 'token', path: [0], index: 1 });
+    // 4b-1 (OA-flank-stations): the exits rest at the frac's edge stations —
+    // the spots directly against the structure in the glyph zones — before
+    // the neighbor cells' bench ends.
+    expect(resolveMove(rowEnv, nodeCaret([1, 'num']), 'right')).toEqual({ kind: 'node', path: [1], side: 'right' });
+    expect(resolveMove(rowEnv, { kind: 'node', path: [1], side: 'right' }, 'right')).toEqual({ kind: 'token', path: [2], index: 0 });
+    expect(resolveMove(rowEnv, nodeCaret([1, 'den']), 'left')).toEqual({ kind: 'node', path: [1], side: 'left' });
+    expect(resolveMove(rowEnv, { kind: 'node', path: [1], side: 'left' }, 'left')).toEqual({ kind: 'token', path: [0], index: 1 });
   });
 
   it('backward traversal enters the fraction at the NUMERATOR end (4a re-pin: N5/S-094)', () => {
@@ -480,9 +488,15 @@ describe('root: the index participates only when the tree carries one', () => {
     expect(resolveMove(env, nodeCaret(['radicand']), 'down')).toBe(null);
   });
 
-  it('an n-th root: radicand is the entry, the index a vertical and backward target', () => {
+  it('an n-th root: the index is a horizontal position at the root head (4b-1, OA-index-horizontal)', () => {
     const env = envOf(SEEDS.nthRoot);
-    expect(resolveMove(env, nodeCaret(), 'right')).toEqual({ kind: 'token', path: ['radicand'], index: 0 });
+    // 4b-1 re-pin (OA-index-horizontal): entering from the left benches at
+    // the root's leftmost horizontal position — the index's offset 0; →
+    // at the index's end crosses into the radicand's start; ← at the
+    // radicand's start steps back into the index's end.
+    expect(resolveMove(env, nodeCaret(), 'right')).toEqual({ kind: 'token', path: ['index'], index: 0 });
+    expect(resolveMove(env, { kind: 'token', path: ['index'], index: 1 }, 'right')).toEqual({ kind: 'token', path: ['radicand'], index: 0 });
+    expect(resolveMove(env, { kind: 'token', path: ['radicand'], index: 0 }, 'left')).toEqual({ kind: 'token', path: ['index'], index: 1 });
     // 4a re-pin (S-094 right-entry): the right boundary rides the RADICAND,
     // never the front-top index.
     expect(resolveMove(env, nodeCaret(), 'left')).toEqual({ kind: 'token', path: ['radicand'], index: 1 });
@@ -529,10 +543,13 @@ describe('deep climbs and jumps through nested structures', () => {
   it('horizontal flow walks continuously into nested containers; slot barriers rest the overflow at the innermost row seam', () => {
     expect(resolveMove(env, nodeCaret(), 'right')).toEqual({ kind: 'token', path: ['num', 'child', 0], index: 0 });
     expect(resolveMove(env, nodeCaret(['num', 'child', 0]), 'right')).toEqual({ kind: 'token', path: ['num', 'child', 1, 0], index: 0 });
-    // 4a re-pin (N4/S-046): the group's parens stop nothing — the content
-    // end exits past the close fence out to the fraction's after-station
-    // (the ratified bare-root border; the session-4 dead-end seam is void).
-    expect(resolveMove(env, { kind: 'token', path: ['num', 'child', 1, 1], index: 1 }, 'right')).toEqual({ kind: 'node', path: [], side: 'right' });
+    // 4b-1 re-pin (OA-flank-stations/OA-fence-flank): the group's parens
+    // stop nothing — the content end exits to the post-`)` station INSIDE
+    // the numerator (the slot-level flank; the 4a note's "distinct from the
+    // after-) position" — that position now exists), one press per visible
+    // spot; the next exit leaves the fraction to its after-station.
+    expect(resolveMove(env, { kind: 'token', path: ['num', 'child', 1, 1], index: 1 }, 'right')).toEqual({ kind: 'node', path: ['num'], side: 'right' });
+    expect(resolveMove(env, { kind: 'node', path: ['num'], side: 'right' }, 'right')).toEqual({ kind: 'node', path: [], side: 'right' });
     // S-094 + OA-vertical-default: ← into the fraction reaches the
     // numerator's INTERIOR end — inside the fences, after the last content
     // char (the `1/(a+b|)` station, distinct from the after-`)` position).
@@ -560,11 +577,16 @@ describe('leaf and string-channel types are exit-only', () => {
     for (const dir of DIRS) expect(resolveMove(env, nodeCaret(), dir)).toBe(null);
   });
 
-  it('unit: the value is the left entry, the unit block itself is exit-only', () => {
+  it('unit: the value is the left entry; value end → the label front (4b-1 re-pin, I-19/OA granular units)', () => {
     const filled = envOf({ v: 1, root: { type: 'unit', value: num(50), unit: 'mm' } });
     // 4a re-pin: entry benches at the value's in-token offset 0
     expect(resolveMove(filled, nodeCaret(), 'right')).toEqual({ kind: 'token', path: ['value'], index: 0 });
-    expect(resolveMove(filled, nodeCaret(['value']), 'right')).toBe(null);
+    // 4b-1 re-pin (I-19): the granular unit walks value → label — the
+    // value end continues into the label's offset 0 (the old right exit
+    // skipped the label letters entirely); the label's offset 0 walks
+    // back into the value's right end.
+    expect(resolveMove(filled, nodeCaret(['value']), 'right')).toEqual({ kind: 'token', path: [], index: 0 });
+    expect(resolveMove(filled, { kind: 'token', path: [], index: 0 }, 'left')).toEqual({ kind: 'token', path: ['value'], index: 2 });
     expect(resolveMove(filled, nodeCaret(['value']), 'down')).toBe(null);
   });
 });

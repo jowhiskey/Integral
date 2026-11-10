@@ -196,9 +196,12 @@ describe('T9 — subscript insertion (v1 label mode)', () => {
     expect(resolveMove(env, { kind: 'token', path: [0], index: 0, label: 'sub' }, 'left')).toEqual(baseEnd);
     // 4a re-pin (N3 + OA-visual-trumps): the row's left border collapses — the
     // sub cell's base-start IS the formula start (the origin's own state; the op
-    // clamps it to the no-op); the right exit crosses the glyph to the 9's offset 0
+    // clamps it to the no-op); the right exit rests at the R-flank
     expect(resolveMove(env, { kind: 'token', path: [0], index: 0, label: 'base' }, 'left')).toEqual({ kind: 'token', path: [0], index: 0, label: 'base' });
-    expect(resolveMove(env, { kind: 'token', path: [0], index: 4, label: 'sub' }, 'right')).toEqual({ kind: 'token', path: [1], index: 0 });
+    // 4b-1 re-pin (OA-flank-stations): the script end IS the sub's right
+    // edge — the glyph zone's R-flank station rests there, then crosses.
+    expect(resolveMove(env, { kind: 'token', path: [0], index: 4, label: 'sub' }, 'right')).toEqual({ kind: 'node', path: [0], side: 'right' });
+    expect(resolveMove(env, { kind: 'node', path: [0], side: 'right' } as Caret, 'right')).toEqual({ kind: 'token', path: [1], index: 0 });
   });
 
   it('the seam-left symbol converts (the row path); elsewhere the template places/fills per the T7 branches', () => {

@@ -670,7 +670,9 @@ export const CASES: readonly CatalogCase[] = [
     label: 'the as-typed letter run `50·mm` before any leave',
     stress: 'The S-051 pre-conversion state (exactly what 2b-2 typing produces): leave the run — a non-letter key (e.g. `+`), an arrow, or a click elsewhere — then compare against T-13; letters left alone keep extending the run.',
     envelope: env(jmp(num(50), sym('mm'))),
-    caret: rw([], 2),
+    // 4b-1 reseed (OA-visual-trumps, twin elimination): the end seam
+    // painted where the run's own end paints.
+    caret: tk([1], 2),
   },
   {
     id: 'I-19',
@@ -1185,6 +1187,42 @@ export const CASES: readonly CatalogCase[] = [
     envelope: env(op('add', sym('abc'), sym('de'))),
     caret: tk([0], 0),
   },
+  {
+    id: 'M-15',
+    rules: ['OA-flank-stations', 'S-042', 'S-094', 'OA-visual-trumps'],
+    category: 'M',
+    label: 'x + 1/2 + y, caret after the x — the flank stations',
+    stress: 'The mid-row fraction-edge stations: Right (stop against the fraction), Right again (into the numerator), hold Right through the denominator exit, the right-edge flank, and y; Backspace from the right-edge flank, then from the left-edge flank.',
+    envelope: env(op('add', sym('x'), frac(num(1), num(2)), sym('y'))),
+    caret: tk([0], 1),
+  },
+  {
+    id: 'M-16',
+    rules: ['OA-fence-flank', 'C4', 'OA-seam-caret-height', 'OA-visual-trumps'],
+    category: 'M',
+    label: 'x + (a+b) + y, caret after the b — the fence flanks',
+    stress: 'The outside stations flanking a fenced group: Right (the post-paren station), Right again (over the glyph), Delete at the group content end, then reload and Backspace at the left-of-paren station (reach it from the x end).',
+    envelope: env(op('add', sym('x'), group(op('add', sym('a'), sym('b'))), sym('y'))),
+    caret: tk([1, 'child', 1], 1),
+  },
+  {
+    id: 'M-17',
+    rules: ['OA-vmem-nesting', 'N6', 'S-040', 'OA-vertical-default'],
+    category: 'M',
+    label: '1/(2+(3/4)), caret after the 2 — nested vertical memory',
+    stress: "Up, Down (back at the plus); then Right into the nested 3/4, Up, Down (the nested layer's own memory); reload, Right into the nested fraction, Left back out (the sideways exit clears), Up, Down.",
+    envelope: env(frac(num(1), group(op('add', num(2), frac(num(3), num(4)))))),
+    caret: tk(['den', 'child', 0], 1),
+  },
+  {
+    id: 'M-18',
+    rules: ['OA-index-horizontal', 'N4', 'T9', 'OA-root-grab'],
+    category: 'M',
+    label: 'x + ⁿ√a with an empty index slot, caret in the radicand row',
+    stress: 'Left from the radicand start (into the empty index), Right back out, Up into the index — the index joined the horizontal step-through.',
+    envelope: env(op('add', sym('x'), { type: 'root', radicand: sym('a'), mroot: true } as NodeJson)),
+    caret: tk([1, 'radicand'], 1),
+  },
 
   // ——— K: click placement (seed + precise click target in `stress`) ———
   {
@@ -1563,12 +1601,14 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'V-16',
-    rules: ['T1', 'OA-juxtaposition', 'OA-mixed'],
+    rules: ['T1', 'OA-juxtaposition', 'OA-mixed', 'OA-visual-trumps'],
     category: 'V',
     label: '5x×3 (a mixed multiply row: an implicit subrow cell in an explicit row)',
     stress: 'The session-2a mixed-row definition: the glyph-less 5x pair lives as its own implicit subrow; the outer explicit row carries the × — probe rendering and evaluation.',
     envelope: env(op('multiply', jmp(num(5), sym('x')), num(3))),
-    caret: rw([], 2),
+    // 4b-1 reseed (OA-visual-trumps, twin elimination): the row-end seam
+    // painted exactly where 3's in-token end paints — the canonical state.
+    caret: tk([1], 1),
   },
   {
     id: 'V-17',
@@ -1577,7 +1617,9 @@ export const CASES: readonly CatalogCase[] = [
     label: 'the number 12 split by Space: 1·2 glyph-less adjacency',
     stress: 'The Space-forced number-number editing state: storable, renders the subtle S-098 seam marker, refused at evaluation while it persists.',
     envelope: env(jmp(num(1), num(2))),
-    caret: rw([], 1),
+    // 4b-1 reseed (OA-visual-trumps, twin elimination): the pair's inner
+    // seam painted exactly where 2's offset 0 paints — the canonical state.
+    caret: tk([1], 0),
   },
   {
     id: 'V-18',

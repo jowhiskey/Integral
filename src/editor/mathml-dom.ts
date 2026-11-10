@@ -97,6 +97,10 @@ export interface RenderedMath {
   readonly placeholderByCaret: ReadonlyMap<string, Element>;
   /** row separator <mo> element (operator glyphs, fn commas) → the seam it sits on. */
   readonly separators: ReadonlyMap<Element, { readonly path: Path; readonly index: number }>;
+  /** 4b-1 (OA-seam-caret-height): seam key (`pathKey(rowPath)/index`) → the
+   *  separator element rendered AT that boundary — the left-adjacent
+   *  element whose height a seam station's caret paints at. */
+  readonly separatorBySeam: ReadonlyMap<string, Element>;
   /** caret key → the bare-cell anchor (op-row null cells — no placeholder element). */
   readonly bareAnchors: ReadonlyMap<string, BareAnchor>;
   /** path key → a sub node's two label <mi> elements (T9: label token carets
@@ -132,6 +136,7 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
   const placeholders = new Map<Element, Caret>();
   const placeholderByCaret = new Map<string, Element>();
   const separators = new Map<Element, { path: Path; index: number }>();
+  const separatorBySeam = new Map<string, Element>();
   const bareAnchors = new Map<string, BareAnchor>();
   const subLabels = new Map<string, { base: Element; script: Element }>();
   const fenceGlyphs = new Map<Element, { path: Path; side: 'open' | 'close' }>();
@@ -225,6 +230,7 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
       if (i > 0 && !node.implicit) {
         const sep = mo(display, false);
         separators.set(sep, { path, index: i });
+    separatorBySeam.set(`${pathKey(path)}/${i}`, sep);
         sepEls[i] = sep;
         out.push(sep);
       }
@@ -272,6 +278,7 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
           const mrow = el('mrow');
           const lead = mo(display, false);
           separators.set(lead, { path, index: 0 });
+          separatorBySeam.set(`${pathKey(path)}/0`, lead);
           mrow.appendChild(lead);
           const sepEls: (Element | undefined)[] = [lead];
           const bareCells: number[] = [];
@@ -321,6 +328,7 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
           if (i > 0) {
             const comma = mo(',', false);
             separators.set(comma, { path, index: i });
+            separatorBySeam.set(`${pathKey(path)}/${i}`, comma);
             sepEls[i] = comma;
             mrow.appendChild(comma);
             if (arg === null) bareCells.push(i);
@@ -458,5 +466,5 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
     }
   }
 
-  return { math, uidByPath, pathByUid, elementByPath, extents, placeholders, placeholderByCaret, separators, bareAnchors, subLabels, fenceGlyphs, fencesMissingClose };
+  return { math, uidByPath, pathByUid, elementByPath, extents, placeholders, placeholderByCaret, separators, separatorBySeam, bareAnchors, subLabels, fenceGlyphs, fencesMissingClose };
 }

@@ -29,6 +29,7 @@ import {
   isRowNode,
   isTokenNode,
   nodeAt,
+  refOfPath,
   rowArgs,
   slotValue,
   subLabelText,
@@ -51,6 +52,21 @@ export interface NavEdge {
   readonly to: SlotName;
 }
 
+/** A `filledOnly` entry: a plain slot name keeps the original meaning
+ *  (active only when the slot is filled); `{ slot, unlessNodeFlag }` adds
+ *  rework-4b-1's exception (OA-index-horizontal): the slot is REAL
+ *  geography whenever the node carries the additive flag, even when empty
+ *  (`mroot: true` marks the empty □ index — without the flag an omitted
+ *  index is a complete square root with no index geography). */
+export interface FilledOnlyRule {
+  readonly slot: SlotName;
+  readonly unlessNodeFlag?: string;
+}
+
+/** A `filledOnly` slot that is geography only when filled — conditionally,
+ *  per `FilledOnlyRule`. */
+export type FilledOnly = SlotName | FilledOnlyRule;
+
 /** The caret geography of one node type — pure data. */
 export interface NavProfile {
   /** How children are addressed and traversed:
@@ -64,10 +80,10 @@ export interface NavProfile {
    *  enters flow[0], from the right the last active flow slot. For stacked
    *  layouts this is the vertical/reading layout order. */
   readonly flow?: readonly SlotName[];
-  /** Flow slots that are part of the geography only when filled — a square
-   *  root's omitted index is a complete tree with no index geography (an
-   *  unfilled slot here is skipped everywhere: entry, edges). */
-  readonly filledOnly?: readonly SlotName[];
+  /** Flow slots that are part of the geography only when filled (`FilledOnly`
+   *  rules) — a square root's omitted index is a complete tree with no index
+   *  geography; an mroot's □ index IS geography (OA-index-horizontal). */
+  readonly filledOnly?: readonly FilledOnly[];
   /** Left/right adjacency between slots. No edge for a slot: horizontal
    *  flow out of that slot exits the whole node into the parent's flow. */
   readonly horizontal?: readonly NavEdge[];
@@ -127,13 +143,20 @@ export const NAV_PROFILES: NavRegistry = {
     ],
   },
   // Stacked layout: the radicand is the main content; the (raised, front)
-  // index participates only when the tree actually carries one. The RIGHT
-  // boundary rides the radicand — the index is a front-top script, so ←
-  // into a root lands at the radicand's end (S-094's right-entry pin).
+  // index is a HORIZONTAL position too (OA-index-horizontal, 4b-1): it sits
+  // at the root's LEFT boundary, so ← at the radicand's start steps back
+  // into the index and → out of the index crosses into the radicand (the
+  // index only where it is real geography — a filled slot or the mroot □).
+  // The RIGHT boundary rides the radicand — the index is a front-top
+  // script, so ← into a root lands at the radicand's end (S-094).
   root: {
     children: 'slots',
-    flow: ['radicand', 'index'],
-    filledOnly: ['index'],
+    flow: ['index', 'radicand'],
+    filledOnly: [{ slot: 'index', unlessNodeFlag: 'mroot' }],
+    horizontal: [
+      { from: 'index', dir: 'right', to: 'radicand' },
+      { from: 'radicand', dir: 'left', to: 'index' },
+    ],
     enterRight: 'radicand',
     vertical: [
       { from: 'radicand', dir: 'up', to: 'index' },
@@ -151,13 +174,28 @@ export const NAV_PROFILES: NavRegistry = {
 const profileFor = (registry: NavRegistry, node: NodeJson): NavProfile =>
   registry[node.type] ?? LEAF_PROFILE;
 
+/** True iff `slot` is an ACTIVE flow/geography slot of `node` under the
+ *  profile's `filledOnly` rules — filled when required, real geography for
+ *  a `FilledOnlyRule` whenever the node carries its exception flag (the
+ *  mroot □ index, OA-index-horizontal). Slots without a rule are always
+ *  active. */
+function slotActive(profile: NavProfile, node: NodeJson, slot: SlotName): boolean {
+  if (!hasSlot(node, slot)) return false;
+  for (const rule of profile.filledOnly ?? []) {
+    if (typeof rule === 'string' ? rule === slot : rule.slot === slot) {
+      if (typeof rule !== 'string' && rule.unlessNodeFlag !== undefined) {
+        if ((node as unknown as Record<string, unknown>)[rule.unlessNodeFlag] === true) return true;
+      }
+      return slotValue(node, slot) !== null;
+    }
+  }
+  return true;
+}
+
 /** The traversal-flow slots of `node` that are active: owned by the type and
- *  filled when required (`filledOnly`). */
+ *  filled when required (`filledOnly`, incl. the mroot □-index exception). */
 function activeFlow(profile: NavProfile, node: NodeJson): SlotName[] {
-  const filledOnly = profile.filledOnly ?? [];
-  return (profile.flow ?? []).filter(
-    (slot) => hasSlot(node, slot) && (!filledOnly.includes(slot) || slotValue(node, slot) !== null),
-  );
+  return (profile.flow ?? []).filter((slot) => slotActive(profile, node, slot));
 }
 
 /** Arrival at a slot target of the owner at `ownerPath`:
@@ -190,8 +228,7 @@ function arriveAtSlot(
 function edgeTo(profile: NavProfile, owner: NodeJson, from: SlotName, dir: NavDir): SlotName | null {
   for (const edge of (dir === 'up' || dir === 'down' ? profile.vertical : profile.horizontal) ?? []) {
     if (edge.from !== from || edge.dir !== dir) continue;
-    if (!hasSlot(owner, edge.to)) continue;
-    if ((profile.filledOnly ?? []).includes(edge.to) && slotValue(owner, edge.to) === null) continue;
+    if (!slotActive(profile, owner, edge.to)) continue;
     return edge.to;
   }
   return null;
@@ -207,9 +244,84 @@ function edgeTo(profile: NavProfile, owner: NodeJson, from: SlotName, dir: NavDi
 
 type Side = 'left' | 'right';
 
-/** True iff the node's TEXT-addressed channel ends at its visual right
- *  edge (num/sym tokens, sub label runs, unit labels): its in-token end
- *  IS its whole end (OA-visual-trumps — no seam/station beyond it). */
+// ——— Flank stations (rework 4b-1 — OA-flank-stations) ———
+//
+// The positions directly against a whole container's left/right edges in
+// mid-row glyph zones are restable, insertable stations (owner amendment,
+// binding): crossing a separator glyph INTO a container cell rests at the
+// flank instead of diving; exiting a container through a glyph zone rests
+// there before the neighbor's content continues. Slot/root boundaries
+// carry the same station (4a's OA-lone-root-stations at the root). Row
+// starts/ends keep their existing seam stations: a structure cell at the
+// row border has no glyph zone of its own, and end-of-row
+// after-structures keep the seam (the M-09 D5 pin). Implicit rows render
+// no glyphs: their glyph-less adjacency zones stay merged (N2 — no flank
+// states there).
+
+/** Whole containers that own flank stations: fenced group/fn, the
+ *  fenceless 2D frac/pow/root, and the subscript (OA-flank-stations names
+ *  every structure kind; `sub` widened in 4b-1 — a LONE sub never produces
+ *  one, so the 4a lone-root behavior stands there). */
+function isFlankable(node: NodeJson): boolean {
+  const t = node.type;
+  return t === 'group' || t === 'fn' || t === 'frac' || t === 'pow' || t === 'root' || t === 'sub';
+}
+
+/** True iff the args row draws a separator at the boundary on `side` of
+ *  cell `i` (explicit op glyphs and fn commas; implicit rows and the row
+ *  borders have none). */
+function hasSeparatorAt(row: NodeJson, i: number, side: Side): boolean {
+  if (row.type !== 'op' && row.type !== 'fn') return false;
+  if (row.type === 'op' && (row as { implicit?: boolean }).implicit === true) return false;
+  const args = rowArgs(row);
+  return side === 'left' ? i > 0 && i < args.length : i >= 0 && i < args.length - 1;
+}
+
+/** The side station of the args cell at `cellPath`, when its boundary on
+ *  `side` carries a visible separator (the mid-row glyph zone); null
+ *  otherwise (the row border keeps its seam station). */
+function cellFlank(env: Envelope, cellPath: Path, side: Side): Caret | null {
+  const ref = refOfPath(cellPath);
+  if (ref.at !== 'cell') return null;
+  const row = nodeAt(env, ref.path);
+  const cell = nodeAt(env, cellPath);
+  if (row === null || cell === null || !isFlankable(cell)) return null;
+  if (!hasSeparatorAt(row, ref.index, side)) return null;
+  return { kind: 'node', path: cellPath, side };
+}
+
+/** The container-exit flank of 4b-1: a horizontal exit whose slot has no
+ *  further edge leaves the container and rests at its flank when a glyph
+ *  zone or slot/root boundary stands on the exit side. Row-border cells
+ *  (no separator) keep the climb (the end-of-row seam, the N3 ends).
+ *  At a bare root the 4a lone-root stations govern, with one 4b-1 fix for
+ *  OA-visual-trumps (the T-11 twin elimination): the pow's before-station
+ *  painted exactly at its in-line base's start, so it is retired — ← out
+ *  of a lone power's base is the N3 no-op; `sub` stays out (leaf ends). */
+function containerExitFlank(env: Envelope, owner: NodeJson, ownerPath: Path, dir: Side): Caret | null {
+  if (!isFlankable(owner)) return null;
+  if (ownerPath.length === 0) {
+    const t = owner.type;
+    if (dir === 'right') {
+      return t === 'group' || t === 'fn' || t === 'frac' || t === 'pow' || t === 'root'
+        ? { kind: 'node', path: [], side: 'right' }
+        : null;
+    }
+    return t === 'group' || t === 'fn' || t === 'frac' || t === 'root'
+      ? { kind: 'node', path: [], side: 'left' }
+      : null;
+  }
+  // A slot boundary carries its own flank (a slot holds exactly one node —
+  // its content edge IS the slot edge; the M-12 group's pre-/post-fence
+  // stations, OA-fence-flank); an args cell only when its boundary glyph
+  // zone exists (the mid-row flanks), else the climb continues.
+  const ref = refOfPath(ownerPath);
+  if (ref.at === 'slot') return { kind: 'node', path: ownerPath, side: dir };
+  return cellFlank(env, ownerPath, dir);
+}
+
+/** True iff the node is a text-like in-token token (num/sym tokens, sub label runs, unit labels): its in-token end
+ *  IS its visual right edge (OA-visual-trumps — no seam/station beyond it). */
 function textLikeEnd(node: NodeJson): boolean {
   return node.type === 'num' || node.type === 'sym' || node.type === 'sub';
 }
@@ -293,12 +405,10 @@ function enterFromSide(env: Envelope, path: Path, side: Side, registry: NavRegis
   return bench(env, path, side, registry);
 }
 
-/** The enterRight lookup with the filledOnly semantics (an inactive
- *  override slot degrades to the flow default). */
+/** The enterRight lookup with the filledOnly rules (an inactive override
+ *  slot degrades to the flow default). */
 function edgeTargetSlot(profile: NavProfile, owner: NodeJson, slot: SlotName): SlotName | null {
-  if (!hasSlot(owner, slot)) return null;
-  if ((profile.filledOnly ?? []).includes(slot) && slotValue(owner, slot) === null) return null;
-  return slot;
+  return slotActive(profile, owner, slot) ? slot : null;
 }
 
 /**
@@ -420,13 +530,22 @@ function climb(env: Envelope, path: Path, dir: NavDir, registry: NavRegistry): C
     // (owner ruling 2026-11-09 — "add the two positions"). Root rows and
     // fn roots handle their own ends in the row-overflow branch below;
     // a lone token's in-token end IS its end; vertical keys never step
-    // out (N6).
+    // out (N6). 4b-1 (OA-visual-trumps, the T-11 twin elimination): a
+    // lone power's BEFORE-station painted exactly at its in-line base's
+    // start — it is retired; base@0's ← is the N3 no-op (the side:'right'
+    // after-station stands: the D5/S-094/N3 rules of 4a keep it).
     if (dir !== 'left' && dir !== 'right') return null;
     const node = env.root;
     if (node === null) return null;
     const t = node.type;
-    if (t === 'group' || t === 'fn' || t === 'frac' || t === 'pow' || t === 'root') {
-      return { kind: 'node', path: [], side: dir === 'right' ? 'right' : 'left' };
+    if (dir === 'right') {
+      if (t === 'group' || t === 'fn' || t === 'frac' || t === 'pow' || t === 'root') {
+        return { kind: 'node', path: [], side: 'right' };
+      }
+      return null;
+    }
+    if (t === 'group' || t === 'fn' || t === 'frac' || t === 'root') {
+      return { kind: 'node', path: [], side: 'left' };
     }
     return null;
   }
@@ -464,10 +583,25 @@ function climb(env: Envelope, path: Path, dir: NavDir, registry: NavRegistry): C
         const side: Side = dir === 'right' ? 'right' : 'left';
         return rowEndStation(env, ownerPath, side, registry);
       }
+      // 4b-1 (OA-fence-flank): leaving an FN row horizontally crosses its
+      // closing fence — the whole-cell flank (the post-`)` station) rests
+      // there first when the fn sits mid-row; a plain op row has no flank,
+      // the overflow climbs (4a).
+      if (dir === 'left' || dir === 'right') {
+        const flank = containerExitFlank(env, owner, ownerPath, dir);
+        if (flank !== null) return flank;
+      }
       return climb(env, ownerPath, dir, registry);
     }
     if (args[next] === null) return { kind: 'row', path: ownerPath, index: next };
-    return enterFromSide(env, [...ownerPath, next], dir === 'right' ? 'left' : 'right', registry);
+    // 4b-1 OA-flank-stations: crossing the separator glyph INTO a whole
+    // container cell rests at its flank — the station directly against the
+    // structure's edge (typing inserts directly adjacent, D5 fires from
+    // the right edge) — instead of diving.
+    const enterSide: Side = dir === 'right' ? 'left' : 'right';
+    const flank = cellFlank(env, [...ownerPath, next], enterSide);
+    if (flank !== null) return flank;
+    return enterFromSide(env, [...ownerPath, next], enterSide, registry);
   }
 
   if (typeof step === 'string') {
@@ -475,6 +609,21 @@ function climb(env: Envelope, path: Path, dir: NavDir, registry: NavRegistry): C
     if (to !== null) {
       const arrival = arriveAtSlot(env, owner, ownerPath, to, dir, registry);
       if (arrival !== null) return arrival;
+    }
+    // 4b-1 (I-19): a unit's value slot flows right into its LABEL — the
+    // granular unit's own text channel chain (S-104): the value→label walk
+    // link that was missing (out of the value, into the label letters).
+    if (owner.type === 'unit' && step === 'value' && dir === 'right') {
+      const label = tokenText(owner);
+      if (label.length > 0) return { kind: 'token', path: ownerPath, index: 0 };
+    }
+    // 4b-1 OA-flank-stations: a horizontal slot exit with no further edge
+    // leaves the container and rests at its flank when a glyph zone / slot
+    // boundary stands on the exit side (mid-row and slot containers; the
+    // bare-root rules of 4a above).
+    if (dir === 'left' || dir === 'right') {
+      const flank = containerExitFlank(env, owner, ownerPath, dir);
+      if (flank !== null) return flank;
     }
     return climb(env, ownerPath, dir, registry);
   }
@@ -528,14 +677,21 @@ export function resolveMove(
       const node = nodeAt(env, caret.path);
       if (node === null) return null;
       if (caret.side !== undefined) {
-        // The whole-structure border station of a lone non-row root (4a):
-        // a press outward is the N3 no-op; a press inward re-enters at the
-        // ruled interface (← into the fraction's num end, S-094; → at
-        // the before-station enters the flow head, S-042).
+        // The flank/border station of a whole container (4a at lone roots,
+        // 4b-1 everywhere else): a press inward re-enters at the ruled
+        // interface (← into the fraction's num end, S-094; → at the
+        // left-side station enters the flow head); a press outward leaves
+        // it — at a bare root that is the N3 no-op, elsewhere the climb
+        // continues to the neighbor cell. Vertical keys climb the
+        // container's cell position (the parent's geography), never the
+        // flank's horizontal rules.
+        if (dir === 'up' || dir === 'down') return climb(env, caret.path, dir, registry);
         if (caret.side === 'right') {
-          return dir === 'left' ? enterFromSide(env, caret.path, 'right', registry) : null;
+          if (dir === 'left') return enterFromSide(env, caret.path, 'right', registry);
+          return caret.path.length === 0 ? null : climb(env, caret.path, 'right', registry);
         }
-        return dir === 'right' ? bench(env, caret.path, 'left', registry) : null;
+        if (dir === 'right') return bench(env, caret.path, 'left', registry);
+        return caret.path.length === 0 ? null : climb(env, caret.path, 'left', registry);
       }
       const profile = profileFor(registry, node);
       if (dir === 'left' || dir === 'right') {
@@ -556,7 +712,11 @@ export function resolveMove(
         const arrival = arriveAtSlot(env, owner, caret.path, to, dir, registry);
         if (arrival !== null) return arrival;
       }
-      return climb(env, caret.path, dir, registry);
+      // 4b-1: the empty slot IS the region's station (N8) — its climb hands
+      // the direction up THROUGH the slot (the container's own exit rules
+      // apply: exiting a structure horizontally rests at its flank before
+      // the neighbor cell rides on).
+      return climb(env, [...caret.path, caret.slot], dir, registry);
     }
 
     case 'row': {
@@ -601,11 +761,20 @@ export function resolveMove(
           if (label === 'sub') {
             return { kind: 'token', path: caret.path, index: subLabelText(node, 'base').length, label: 'base' };
           }
+          // The base label's offset 0 IS the sub's left edge (4b-1): a
+          // glyph zone to its left rests at the L-flank station, else the
+          // climb out (OA-flank-stations).
+          const baseFlank = cellFlank(env, caret.path, 'left');
+          if (baseFlank !== null) return baseFlank;
           return climb(env, caret.path, 'left', registry);
         }
         if (dir === 'right') {
           if (caret.index < len) return { kind: 'token', path: caret.path, index: caret.index + 1, label };
           if (label === 'base') return { kind: 'token', path: caret.path, index: 0, label: 'sub' };
+          // The script label's end IS the sub's right edge (4b-1): a glyph
+          // zone to its right rests at the R-flank station, else the climb.
+          const scriptFlank = cellFlank(env, caret.path, 'right');
+          if (scriptFlank !== null) return scriptFlank;
           return climb(env, caret.path, 'right', registry);
         }
         return climb(env, caret.path, dir, registry);
@@ -620,9 +789,16 @@ export function resolveMove(
       const len = tokenText(node).length;
       if (!Number.isInteger(caret.index) || caret.index < 0 || caret.index > len) return null;
       if (dir === 'left') {
-        return caret.index > 0
-          ? { kind: 'token', path: caret.path, index: caret.index - 1 }
-          : climb(env, caret.path, 'left', registry);
+        if (caret.index > 0) return { kind: 'token', path: caret.path, index: caret.index - 1 };
+        // 4b-1 (I-19): a unit label's offset 0 continues back into the
+        // VALUE's right end — the granular unit walks value→label (S-104);
+        // the ← exit used to skip the value digits entirely.
+        if (node.type === 'unit') {
+          if (slotValue(node, 'value') === null) return { kind: 'slot', path: caret.path, slot: 'value' };
+          const into = bench(env, [...caret.path, 'value'], 'right', registry);
+          if (into !== null) return into;
+        }
+        return climb(env, caret.path, 'left', registry);
       }
       if (dir === 'right') {
         return caret.index < len
