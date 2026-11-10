@@ -208,6 +208,18 @@ export function applyVerticalKey(env: Envelope, caret: Caret, dir: NavDir, mem: 
   const from = regionOf(env, caret);
   if (from !== null) next.set(regionKey(from), caret);
   const to = regionOf(env, target);
+  // OA-vmem-nesting (4b-1) + the M-17 fix (consolidated cleanup): on a
+  // DESCENT the nesting chain is consulted FIRST — a remembered nested
+  // numerator position wins over the arrival region's own store (the nested
+  // layer's memory is the more specific position: "the nested layer's own
+  // memory doing its job"). The own store fires when no chained nested
+  // position resolves; without the chain-first order a previously stored
+  // parent-region position shadows the chain and the retrace never fires
+  // live (the 4b-1 live check, M-17).
+  if (dir === 'down') {
+    const chained = chainedNestedPosition(env, target, next);
+    if (chained !== null) return { caret: chained, mem: next, fired: true };
+  }
   if (to !== null && (from === null || regionKey(to) !== regionKey(from))) {
     const key = regionKey(to);
     const entry = next.get(key);
@@ -215,12 +227,6 @@ export function applyVerticalKey(env: Envelope, caret: Caret, dir: NavDir, mem: 
       if (caretResolvesIn(env, entry)) return { caret: entry, mem: next, fired: true };
       next.delete(key); // dangling store: discard, structural default wins
     }
-  }
-  // OA-vmem-nesting (4b-1): descents follow the chain into remembered
-  // nested positions when the arrival region has no own store.
-  if (dir === 'down') {
-    const chained = chainedNestedPosition(env, target, next);
-    if (chained !== null) return { caret: chained, mem: next, fired: true };
   }
   return { caret: target, mem: next, fired: false };
 }

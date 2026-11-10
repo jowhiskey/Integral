@@ -390,9 +390,9 @@ describe('4b-2 — C5: background snap (S-061)', () => {
     );
     const math = f.rendered.math;
     f.stub.setMath({ left: 0, top: 0, width: 40, height: 20 });
-    clickF(math, 0.96); // past the end → formula end (the row-end seam)
-    expect(f.controller.getState().caret).toEqual(row(2));
-    clickF(math, 0.04); // the start edge → the row-start seam
+    clickF(math, 0.96); // past the end → formula end — via the nearest element (K-08 fix), landing on the canonical collapsed end station (twin collapse: y's in-token end, not the raw row-end seam)
+    expect(f.controller.getState().caret).toEqual(tok([1], 1));
+    clickF(math, 0.04); // the start edge → the row-start seam (a leading structure keeps the seam)
     expect(f.controller.getState().caret).toEqual(row(0));
   });
 });

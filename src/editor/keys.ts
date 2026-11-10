@@ -46,17 +46,19 @@ export type KeyAction =
   | { readonly kind: 'deadPow' }
   | { readonly kind: 'ignore' };
 
-/** U1 coalescing class (rework session 5): the tokens that may extend an open
- *  typing run. The T7/T8 structure keys (`/`, `^`, the dead-key power) are
- *  NOT in this class — they close the run and form their own undo unit.
- *  Parens ARE in the class: a `(` that merely creates a group or re-binds a
- *  head-less fence pair (OA-rehead, S-086) coalesces with the run; the T5
- *  function conversion splits it — the engine forces that split at the
- *  conversion emission sites (S-085: the `(`-press + conversion is one unit
- *  of its own). */
+/** U1 coalescing class (rework session 5 + OA-undo-burst, ruled 2026-11-10):
+ *  the tokens that may extend an open typing run. The T7/T8 structure keys
+ *  (`/`, `^`, the dead-key power) are NOT in this class — they close the run
+ *  and form their own undo unit. OPERATORS are NOT in the class either
+ *  (OA-undo-burst): every operator press is its OWN undo unit — consecutive
+ *  operators never coalesce (`a++b` = two operator units); parens/comma/
+ *  dot/space keep coalescing into the text run. Parens stay in the class: a
+ *  `(` that merely creates a group or re-binds a head-less fence pair
+ *  (OA-rehead, S-086) coalesces with the run; the T5 function conversion
+ *  splits it — the engine forces that split at the conversion emission sites
+ *  (S-085: the `(`-press + conversion is one unit of its own). */
 export const isTypingToken = (token: TypedToken): boolean =>
   token.t === 'leaf' ||
-  token.t === 'operator' ||
   token.t === 'dot' ||
   token.t === 'space' ||
   token.t === 'comma' ||

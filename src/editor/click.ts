@@ -54,6 +54,7 @@ import {
   nodeAt,
   resolveMove,
   rowArgs,
+  rowEndStation,
   subLabelText,
   tokenText,
   type Caret,
@@ -68,7 +69,7 @@ import { pathKey, type RenderedMath } from './mathml-dom.js';
 export type ClickHit =
   | { readonly kind: 'none'; readonly fraction: number }
   | { readonly kind: 'placeholder'; readonly caret: Caret }
-  | { readonly kind: 'separator'; readonly path: Path; readonly index: number }
+  | { readonly kind: 'separator'; readonly path: Path; readonly index: number; readonly fraction: number }
   | { readonly kind: 'fence'; readonly path: Path; readonly side: 'open' | 'close'; readonly fraction: number }
   | { readonly kind: 'fnHead'; readonly path: Path }
   | { readonly kind: 'subLabel'; readonly path: Path; readonly label: SubLabel; readonly fraction: number }
@@ -100,12 +101,12 @@ const fractionOf = (clientX: number, el: Element): number => {
 export function hitFromMouseEvent(event: MouseEvent, rendered: RenderedMath): ClickHit {
   const target = event.target;
   if (!(target instanceof Element)) {
-    return { kind: 'none', fraction: fractionOf(event.clientX, rendered.math) };
+    return nearestBackgroundHit(event.clientX, rendered) ?? { kind: 'none', fraction: fractionOf(event.clientX, rendered.math) };
   }
   const ph = rendered.placeholders.get(target);
   if (ph) return { kind: 'placeholder', caret: ph };
   const sep = rendered.separators.get(target);
-  if (sep) return { kind: 'separator', path: sep.path, index: sep.index };
+  if (sep) return { kind: 'separator', path: sep.path, index: sep.index, fraction: fractionOf(event.clientX, target) };
   // Fence glyphs of containers (group/fn parens) are recognized as fence hits
   // even when the mo carries a uid — a group with an inlined flat row child
   // stamps the OPEN paren with the child row's uid, but the element is still
@@ -139,7 +140,71 @@ export function hitFromMouseEvent(event: MouseEvent, rendered: RenderedMath): Cl
       return { kind: 'node', path, fraction: fractionOf(event.clientX, idEl) };
     }
   }
-  return { kind: 'none', fraction: fractionOf(event.clientX, rendered.math) };
+  // background (the <math> element, id-less wrappers): snap to the nearest
+  // rendered element (K-08 fix) — the pure none-hit stays as the fallback when
+  // nothing is rendered (the empty formula).
+  return nearestBackgroundHit(event.clientX, rendered) ?? { kind: 'none', fraction: fractionOf(event.clientX, rendered.math) };
+}
+
+/** The nearest rendered element to a background click's x — deepest containing
+ *  element wins (smallest width at distance 0), otherwise the nearest edge.
+ *  A background click snaps to it (C5/S-061's nearest legal position) instead
+ *  of the coarse whole-math 50/50 split — the 4b-2 K-08 live finding: clicking
+ *  "in front of sin" in `x + sin(a) + y` resolved to the formula start and
+ *  typing there landed at the start; the head's left-edge zone already maps
+ *  to the flank correctly, and the background now feeds the same per-element
+ *  rules. Zero-width (unstubbed/invisible) elements never win. */
+function nearestBackgroundHit(clientX: number, rendered: RenderedMath): ClickHit | null {
+  interface Candidate {
+    readonly fractionEl: Element;
+    readonly d: number;
+    readonly width: number;
+    readonly make: (fraction: number) => ClickHit;
+  }
+  const candidates: Candidate[] = [];
+  const consider = (left: number, right: number, fractionEl: Element, make: (fraction: number) => ClickHit): void => {
+    const width = right - left;
+    if (width <= 0) return;
+    const d = clientX < left ? left - clientX : clientX > right ? clientX - right : 0;
+    candidates.push({ fractionEl, d, width, make });
+  };
+  for (const [el, caret] of rendered.placeholders) {
+    const r = el.getBoundingClientRect();
+    consider(r.left, r.right, el, () => ({ kind: 'placeholder', caret }));
+  }
+  for (const [el, sep] of rendered.separators) {
+    const r = el.getBoundingClientRect();
+    consider(r.left, r.right, el, (f) => ({ kind: 'separator', path: sep.path, index: sep.index, fraction: f }));
+  }
+  for (const [el, f] of rendered.fenceGlyphs) {
+    const r = el.getBoundingClientRect();
+    consider(r.left, r.right, el, (fr) => ({ kind: 'fence', path: f.path, side: f.side, fraction: fr }));
+  }
+  for (const [el, path] of rendered.fnHeads) {
+    const r = el.getBoundingClientRect();
+    consider(r.left, r.right, el, () => ({ kind: 'fnHead', path }));
+  }
+  for (const [key, labels] of rendered.subLabels) {
+    const path = JSON.parse(key) as Path;
+    const rb = labels.base.getBoundingClientRect();
+    consider(rb.left, rb.right, labels.base, (f) => ({ kind: 'subLabel', path, label: 'base', fraction: f }));
+    const rs = labels.script.getBoundingClientRect();
+    consider(rs.left, rs.right, labels.script, (f) => ({ kind: 'subLabel', path, label: 'sub', fraction: f }));
+  }
+  for (const [key, ext] of rendered.extents) {
+    const own = rendered.elementByPath.get(key);
+    if (own === undefined) continue;
+    const path = JSON.parse(key) as Path;
+    const a = ext.first.getBoundingClientRect();
+    const b = ext.last.getBoundingClientRect();
+    consider(Math.min(a.left, b.left), Math.max(a.right, b.right), own, (f) => ({ kind: 'node', path, fraction: f }));
+  }
+  let best: Candidate | null = null;
+  for (const c of candidates) {
+    if (best === null || c.d < best.d || (c.d === best.d && c.width < best.width)) best = c;
+  }
+  if (best === null) return null;
+  return best.make(fractionOf(clientX, best.fractionEl));
 }
 
 /** Entering a container from `side` = its flow-end station on that side. Reuses the
@@ -171,11 +236,23 @@ export function caretFromHit(env: Envelope, hit: ClickHit, registry: NavRegistry
       // sits before the □
       caret = hit.caret;
       break;
-    case 'separator':
+    case 'separator': {
       // C1/S-053 (the N2 corollary): an operator glyph/comma element maps to
-      // the ONE shared gap station it sits on
-      caret = { kind: 'row', path: hit.path, index: hit.index };
+      // the ONE shared gap station it sits on. OA-glyph-click-halves (ruled
+      // 2026-11-10): the glyph's LEFT half resolves to the position BEFORE
+      // the glyph — the left-adjacent cell's own right-edge station (the
+      // in-token end for tokens, the right flank for mid-row structures —
+      // all existing restable/insertable states, no new caret kind); the
+      // right half keeps today's behind-the-glyph shared gap.
+      if (hit.index > 0 && hit.fraction < 0.5) {
+        const leftPath = [...hit.path, hit.index - 1] as Path;
+        const before = edgeStation(env, leftPath, 'right') ?? entryStation(env, leftPath, 'right', registry);
+        caret = firstResolving(env, [before, { kind: 'row', path: hit.path, index: hit.index }]) ?? fallback;
+      } else {
+        caret = { kind: 'row', path: hit.path, index: hit.index };
+      }
       break;
+    }
     case 'fnHead':
       // C4/S-054: the head's name area → right after the open paren (the first
       // argument's start — the □ row caret when the first argument is empty)
@@ -201,15 +278,26 @@ export function caretFromHit(env: Envelope, hit: ClickHit, registry: NavRegistry
       break;
     }
     case 'none': {
-      // C5/S-061: background snap. In the outer edge zones around an op/fn
-      // root row the caret parks at the row's border seam — the visible
-      // start/end of the formula — instead of diving into the far flow
-      // end; the middle zones keep the enter-from-side dive. Non-row roots
-      // have no border seam to express: they keep the dive unchanged.
+      // C5/S-061: background snap. In the outer edge zones around a root row
+      // the caret parks at the row's CANONICAL border station (rowEndStation —
+      // the OA-visual-trumps collapse: a text/pair border cell's in-token
+      // edge, a structure cell's seam — the raw `row [] #0` twin producer is
+      // gone; an fn root parks at its fence-past border station) instead of
+      // diving into the far flow end; the middle zones keep the
+      // enter-from-side dive. Non-row roots keep the dive unchanged.
       const root = env.root;
-      if (root !== null && isRowNode(root) && (hit.fraction <= EDGE_ZONE || hit.fraction >= 1 - EDGE_ZONE)) {
-        caret = { kind: 'row', path: [], index: hit.fraction >= 1 - EDGE_ZONE ? rowArgs(root).length : 0 };
-        break;
+      if (root !== null && (hit.fraction <= EDGE_ZONE || hit.fraction >= 1 - EDGE_ZONE)) {
+        const side: 'left' | 'right' = hit.fraction >= 1 - EDGE_ZONE ? 'right' : 'left';
+        if (root.type === 'fn') {
+          caret = { kind: 'node', path: [], side };
+          break;
+        }
+        if (isRowNode(root)) {
+          caret =
+            rowEndStation(env, [], side, registry) ??
+            { kind: 'row', path: [], index: side === 'right' ? rowArgs(root).length : 0 };
+          break;
+        }
       }
       caret =
         env.root === null
@@ -266,6 +354,10 @@ export function caretFromHit(env: Envelope, hit: ClickHit, registry: NavRegistry
         const side = hit.fraction >= 1 - EDGE_ZONE ? ('right' as const) : ('left' as const);
         caret =
           firstResolving(env, [
+            // a row's own edge zone parks at its canonical border seam
+            // (rowEndStation — the OA-visual-trumps border collapse) before
+            // the exit/dive fallbacks
+            ...(isRowNode(node) && node.type === 'op' && hit.path.length === 0 ? [rowEndStation(env, hit.path, side, registry)] : []),
             edgeStation(env, hit.path, side),
             exitStation(env, hit.path, side, registry),
             enterSide(env, hit.path, hit.fraction < 0.5 ? 'left' : 'right', registry),

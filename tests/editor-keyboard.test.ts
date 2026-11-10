@@ -150,15 +150,16 @@ describe('typing', () => {
     expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: [], index: 1 }));
 
     press(container, '+');
-    // U1/S-080: `+` is a typing-class key after a typing action — same unit
-    expect(controller.getState().log.length).toBe(1);
-    expect(controller.getState().log[0].ops.length).toBe(2);
+    // OA-undo-burst (ruled 2026-11-10): every operator press is its OWN undo
+    // unit — the `+` closes the `5` run and logs its own entry
+    expect(controller.getState().log.length).toBe(2);
+    expect(controller.getState().log[1].ops.length).toBe(1);
     expect(j(controller.getEnvelope().root)).toBe(j({ type: 'op', op: 'add', args: [num(5), null] }));
     expect(j(controller.getState().caret)).toBe(j(row([], 1)));
 
     press(container, '3');
-    expect(controller.getState().log.length).toBe(1); // still the one open run
-    expect(controller.getState().log[0].ops.length).toBe(3);
+    expect(controller.getState().log.length).toBe(3); // the `+` closed the run — `3` starts a new one
+    expect(controller.getState().log[2].ops.length).toBe(1);
     expect(j(controller.getEnvelope().root)).toBe(j({ type: 'op', op: 'add', args: [num(5), num(3)] }));
   });
 
@@ -394,21 +395,31 @@ describe('undo / redo via keyboard', () => {
     container.focus();
     press(container, '5');
     press(container, '+');
-    // U1 re-pin (session 5, S-080): the `5`,`+` typing run is ONE unit
-    expect(controller.getState().log.length).toBe(1);
-    expect(controller.getState().log[0].ops.length).toBe(2);
+    // OA-undo-burst re-pin (2026-11-10): the units are [5] and [+] — the
+    // operator press is its own unit, so one undo unwinds ONLY the `+`
+    expect(controller.getState().log.length).toBe(2);
+    expect(controller.getState().log.map((e) => e.ops.length)).toEqual([1, 1]);
     const before = j([controller.getEnvelope(), controller.getState().caret, controller.getState().log.length]);
 
     const z = press(container, 'z', { ctrl: true });
     expect(z.defaultPrevented).toBe(true);
-    expect(controller.getState().log.length).toBe(0); // the whole run unwinds in one undo
+    expect(controller.getState().log.length).toBe(1); // only the `+` unit unwound
+    expect(j(controller.getEnvelope().root)).toBe(j(num(5)));
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: [], index: 1 }));
+    expect(controller.getState().redo.length).toBe(1);
+    expect(controller.getState().redo[0].ops.length).toBe(1);
+
+    const z2 = press(container, 'z', { ctrl: true });
+    expect(z2.defaultPrevented).toBe(true);
+    expect(controller.getState().log.length).toBe(0); // the `5` run unwinds now
     expect(j(controller.getEnvelope().root)).toBe('null');
     expect(j(controller.getState().caret)).toBe(j({ kind: 'empty' }));
-    expect(controller.getState().redo.length).toBe(1);
-    expect(controller.getState().redo[0].ops.length).toBe(2);
+    expect(controller.getState().redo.length).toBe(2);
 
     const y = press(container, 'y', { ctrl: true });
     expect(y.defaultPrevented).toBe(true);
+    const y2 = press(container, 'y', { ctrl: true });
+    expect(y2.defaultPrevented).toBe(true);
     expect(j([controller.getEnvelope(), controller.getState().caret, controller.getState().log.length])).toBe(before);
     expect(controller.getState().redo.length).toBe(0);
   });
@@ -418,13 +429,16 @@ describe('undo / redo via keyboard', () => {
     container.focus();
     press(container, '5');
     press(container, '+');
-    // U1 re-pin (session 5): one coalesced run unit
-    expect(controller.getState().log.length).toBe(1);
+    // OA-undo-burst re-pin (2026-11-10): two units — [5], [+]
+    expect(controller.getState().log.length).toBe(2);
     const before = j([controller.getEnvelope(), controller.getState().caret, controller.getState().log.length]);
+    press(container, 'z', { ctrl: true });
+    expect(controller.getState().log.length).toBe(1); // the `+` unit unwound
     press(container, 'z', { ctrl: true });
     expect(controller.getState().log.length).toBe(0);
     const zShift = press(container, 'Z', { ctrl: true, shift: true });
     expect(zShift.defaultPrevented).toBe(true);
+    press(container, 'Z', { ctrl: true, shift: true });
     expect(j([controller.getEnvelope(), controller.getState().caret, controller.getState().log.length])).toBe(before);
   });
 

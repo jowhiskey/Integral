@@ -160,16 +160,14 @@ describe('click: the row-end seam is placeable', () => {
     expect(controller.getState().log.length).toBe(0); // placement never logs
   });
 
-  it('a background click beyond the row content parks at start/end seams; mid gaps keep the dive', () => {
+  it('a background click snaps to the nearest rendered element (K-08 fix, C5/S-061); beyond the content it parks at the border seams', () => {
     const { controller } = make(xFrac, layout);
-    const math = controller.getRendered()!.math; // the <math> element carries no uid → a none hit
-    click(math, 110); // fraction (110-100)/300 ≈ 0.033 ≤ 0.25 → the start seam
-    expect(j(controller.getState().caret)).toBe(j(rowc([], 0)));
-    click(math, 250); // fraction 0.5 — the middle zone: not < 0.5, so the right side: enter at the right flow end
-    // 4a re-pin (OA-visual-trumps bench + S-094 enterRight): the fraction's
-    // NUMERATOR end is its horizontal right interface
-    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: [1, 'num'], index: 1 }));
-    click(math, 390); // fraction (390-100)/300 ≈ 0.967 ≥ 0.75 → the end seam
+    const math = controller.getRendered()!.math; // the <math> element carries no uid → background
+    click(math, 110); // at x's right edge → the nearest element is x itself → its in-token end (C1 nearest edge)
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: [0], index: 1 }));
+    click(math, 250); // beyond the row content → the row's canonical end seam (rowEndStation; a trailing structure keeps the seam)
+    expect(j(controller.getState().caret)).toBe(j(rowc([], 2)));
+    click(math, 390); // far past the end → the same end seam
     expect(j(controller.getState().caret)).toBe(j(rowc([], 2)));
   });
 });

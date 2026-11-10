@@ -157,16 +157,18 @@ describe('the ruled chains through the keyboard', () => {
     expect(controller.getState().log.length).toBe(2);
   });
 
-  it('Delete + Ctrl+Delete act forward at gaps (x + |abc → x + bc; the Ctrl mirror takes the whole token)', () => {
+  it('Delete at an operator gap removes the binding glyph (OA-del-glyph, 2026-11-10); Ctrl+Delete then takes the whole right-adjacent token', () => {
     const env = { v: 1, root: op('add', sym('x'), sym('abc')) };
     const { controller, container } = make(env);
     controller.placeCaret(rowc([], 1));
     container.focus();
     press(container, 'Delete');
-    expect(j(controller.getEnvelope().root)).toBe(j(op('add', sym('x'), sym('bc'))));
-    expect(j(controller.getState().caret)).toBe(j(rowc([], 1)));
+    // OA-del-glyph: the `+` glyph deletes, the cells bond into the implicit pair
+    expect(j(controller.getEnvelope().root)).toBe(j({ type: 'op', op: 'multiply', args: [sym('x'), sym('abc')], implicit: true }));
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: [1], index: 0 }));
     press(container, 'Delete', { ctrl: true });
-    expect(j(controller.getEnvelope().root)).toBe(j(op('add', sym('x'), null)));
+    expect(j(controller.getEnvelope().root)).toBe(j({ type: 'op', op: 'multiply', args: [sym('x'), null], implicit: true }));
+    expect(j(controller.getState().caret)).toBe(j(rowc([], 1)));
     expect(controller.getState().log.length).toBe(2);
   });
 

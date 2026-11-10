@@ -329,6 +329,22 @@ function textLikeEnd(node: NodeJson): boolean {
   return node.type === 'num' || node.type === 'sym' || node.type === 'sub';
 }
 
+/** The edge cell of an args cell that is itself an op row — op rows are
+ *  transparent at their flanks: descend to the first/last non-op cell (the
+ *  same transparency policy.ts's edgeCell applies at row edges). */
+function edgeCellOf(env: Envelope, from: Path, side: 'first' | 'last'): { node: NodeJson | null; path: Path } {
+  let path = from;
+  for (;;) {
+    const node = nodeAt(env, path);
+    if (node === null || node.type !== 'op') return { node, path };
+    const args = rowArgs(node);
+    if (args.length === 0) return { node: null, path };
+    const idx = side === 'last' ? args.length - 1 : 0;
+    if (args[idx] === null) return { node: null, path };
+    path = [...path, idx];
+  }
+}
+
 /**
  * The station reached entering the node at `path` from the given side: the
  * leftmost/rightmost rest position of its content.
@@ -492,6 +508,19 @@ export function rowEndStation(env: Envelope, ownerPath: Path, dir: Side, registr
   const i = dir === 'right' ? args.length - 1 : 0;
   const cell = args[i];
   if (cell === null) return { kind: 'row', path: ownerPath, index: i };
+  // OA-visual-trumps twin collapse (consolidated cleanup): an op-row BORDER
+  // cell is transparent at the row's edge — the row's border seam IS the
+  // nested row's edge-cell station, so a text-like/unit edge cell collapses
+  // onto its in-token/bench station (the `row [] #0` vs `token [0] @0` and
+  // `row [0] #0` vs `row [] #0` pairs — glyph-less pairs included). A nested
+  // row ending in a structure keeps the outer seam (same rule as a direct
+  // structure cell below).
+  if (cell.type === 'op') {
+    const edge = edgeCellOf(env, [...ownerPath, i], dir === 'right' ? 'last' : 'first');
+    if (edge.node !== null && (textLikeEnd(edge.node) || edge.node.type === 'unit')) {
+      return bench(env, edge.path, dir, registry);
+    }
+  }
   if (textLikeEnd(cell) || cell.type === 'unit') {
     return bench(env, [...ownerPath, i], dir, registry);
   }
@@ -814,13 +843,34 @@ export function resolveMove(
       if (!isTokenNode(node)) return null;
       const len = tokenText(node).length;
       if (!Number.isInteger(caret.index) || caret.index < 0 || caret.index > len) return null;
+      // OA-unit-single-seam (ruled live 2026-11-10): walking right out of a
+      // unit's VALUE channel at its last interior offset crosses directly
+      // into the label's offset 0 — the value's own end stop merges with the
+      // label start into ONE seam (`50|mm`), no separate value-end rest.
+      if (dir === 'right') {
+        const ref = refOfPath(caret.path);
+        if (ref.at === 'slot' && ref.slot === 'value' && caret.index >= len - 1) {
+          const owner = nodeAt(env, ref.path);
+          if (owner !== null && owner.type === 'unit' && tokenText(owner).length > 0) {
+            return { kind: 'token', path: ref.path, index: 0 };
+          }
+        }
+      }
       if (dir === 'left') {
         if (caret.index > 0) return { kind: 'token', path: caret.path, index: caret.index - 1 };
         // 4b-1 (I-19): a unit label's offset 0 continues back into the
-        // VALUE's right end — the granular unit walks value→label (S-104);
-        // the ← exit used to skip the value digits entirely.
+        // VALUE (the granular unit walks value→label, S-104). Amended by
+        // OA-unit-single-seam (ruled live 2026-11-10): the label's offset 0
+        // IS the one value/label seam — ← from it steps to the value's last
+        // INTERIOR offset (the value's end stop is the seam's twin, no
+        // separate rest): `|50 mm` `5|0 mm` `50|mm` `50 m|m` `50 mm|`.
         if (node.type === 'unit') {
-          if (slotValue(node, 'value') === null) return { kind: 'slot', path: caret.path, slot: 'value' };
+          const value = slotValue(node, 'value');
+          if (tokenText(node).length > 0 && value !== null && isTokenNode(value)) {
+            const vlen = tokenText(value).length;
+            return { kind: 'token', path: [...caret.path, 'value'], index: Math.max(vlen - 1, 0) };
+          }
+          if (value === null) return { kind: 'slot', path: caret.path, slot: 'value' };
           const into = bench(env, [...caret.path, 'value'], 'right', registry);
           if (into !== null) return into;
         }

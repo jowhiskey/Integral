@@ -100,8 +100,10 @@ describe('session 5 — U1: the ruled undo traces through the keyboard path', ()
     fwd.push(snap(controller)); // a+sin(|□)
     press(container, 'a');
     fwd.push(snap(controller)); // a+sin(a|)
-    expect(controller.getState().log.length).toBe(4);
-    expect(controller.getState().log.map((e) => e.ops.length)).toEqual([2, 3, 1, 1]);
+    // OA-undo-burst (ruled 2026-11-10): every operator press is its OWN undo
+    // unit — the units are [a], [+], [sin], [(+conversion], [a-arg]
+    expect(controller.getState().log.length).toBe(5);
+    expect(controller.getState().log.map((e) => e.ops.length)).toEqual([1, 1, 3, 1, 1]);
     expect(j(controller.getEnvelope().root)).toBe(
       j({ type: 'op', op: 'add', args: [sym('a'), { type: 'fn', name: 'sin', args: [sym('a')] }] }),
     );
@@ -114,8 +116,12 @@ describe('session 5 — U1: the ruled undo traces through the keyboard path', ()
     expect(snap(controller)).toBe(fwd[1]); // a+sin| — the `(`+conversion unit reverts to the BARE SYMBOL (no leftover empty group)
     expect(j(controller.getEnvelope().root)).toBe(j({ type: 'op', op: 'add', args: [sym('a'), sym('sin')] }));
     press(container, 'z', { ctrl: true });
-    expect(snap(controller)).toBe(fwd[0]); // a+|
+    expect(snap(controller)).toBe(fwd[0]); // a+| — the `sin` run undone
     expect(j(controller.getEnvelope().root)).toBe(j({ type: 'op', op: 'add', args: [sym('a'), null] }));
+    press(container, 'z', { ctrl: true }); // OA-undo-burst: the `+` operator unit unwinds on its own
+    expect(j(controller.getEnvelope().root)).toBe(j(sym('a')));
+    expect(j(controller.getState().caret)).toBe(j(tok([], 1)));
+    expect(controller.getState().log.length).toBe(1);
     press(container, 'z', { ctrl: true });
     expect(j(controller.getEnvelope().root)).toBe('null');
   });
@@ -348,26 +354,25 @@ describe('session 5 — K2/K3: Enter/Tab/Escape commit + blur', () => {
   });
 });
 
-describe('session 5 — rider: ValidationError catch classification (the mroot □-index shape)', () => {
-  it('typing at an mroot empty index is a classified no-op on the tree, reported via getLastRejection', () => {
+describe('session 5 rider — RESOLVED in the consolidated cleanup: the mroot □-index typing fills the index and drops the flag', () => {
+  it('typing at an mroot empty index sticks (the flag drops) — no rejection is recorded', () => {
     const seed = { v: 1, root: { type: 'root', radicand: num(5), mroot: true } };
     const { controller, container } = make(seed);
     controller.placeCaret(sl([], 'index')); // the □ index slot
     container.focus();
     const ev = press(container, '5');
-    expect(ev.defaultPrevented).toBe(true); // the key is handled...
-    expect(j(controller.getEnvelope())).toBe(j(seed)); // ...but the tree is UNCHANGED (the gate rejected the op)
-    expect(controller.getState().log.length).toBe(0); // nothing logged
-    const rej = controller.getLastRejection();
-    expect(rej).not.toBeNull();
-    expect(rej!.kind).toBe('validation');
-    expect(rej!.name).toBe('ValidationError');
-    expect(rej!.message).toContain('mroot');
-    expect(rej!.token).toEqual({ t: 'leaf', node: { type: 'num', value: 5 } });
-    // a later valid typing key clears the rejection record
+    expect(ev.defaultPrevented).toBe(true); // the key is handled
+    // the flag-drop fix: the index fills, `mroot: true` drops, the op applies
+    expect(j(controller.getEnvelope())).toBe(
+      j({ v: 1, root: { type: 'root', radicand: num(5), index: num(5) } }),
+    );
+    expect(controller.getState().log.length).toBe(1); // one logged unit
+    expect(controller.getState().caret).toEqual(tok(['index'], 1));
+    expect(controller.getLastRejection()).toBeNull(); // nothing was rejected
+    // a later typing key elsewhere still applies cleanly
     controller.placeCaret(tok(['radicand'], 1));
     press(container, '2');
-    expect(j(controller.getEnvelope().root)).toBe(j({ type: 'root', radicand: num(52), mroot: true }));
+    expect(j(controller.getEnvelope().root)).toBe(j({ type: 'root', radicand: num(52), index: num(5) }));
     expect(controller.getLastRejection()).toBeNull();
   });
 });

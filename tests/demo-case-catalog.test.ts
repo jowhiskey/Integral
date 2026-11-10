@@ -56,7 +56,11 @@ describe('demo case catalog — structure and hygiene', () => {
     // rework 4b-1 adds the five geometry rulings of the owner amendments:
     // OA-flank-stations, OA-fence-flank, OA-seam-caret-height,
     // OA-vmem-nesting, OA-index-horizontal.
-    const RULE_PATTERN = /^(T\d\d?|N\d|C\d|D\d|U\d|K\d|S-\d{3}|OA-(digit-glue|juxtaposition|projection|fence|dot-eval|mixed|root-grab|sub-label|visual-trumps|token-end|vertical-default|flank-stations|fence-flank|seam-caret-height|vmem-nesting|index-horizontal))$/;
+    // the consolidated cleanup session (2026-11-10) adds the seven ruled
+    // labels of its scoping chat: OA-del-glyph, OA-closeparen-exit,
+    // OA-sinarg-merge, OA-glyph-click-halves, OA-unit-single-seam,
+    // OA-after-structure-shift, OA-undo-burst.
+    const RULE_PATTERN = /^(T\d\d?|N\d|C\d|D\d|U\d|K\d|S-\d{3}|OA-(digit-glue|juxtaposition|projection|fence|dot-eval|mixed|root-grab|sub-label|visual-trumps|token-end|vertical-default|flank-stations|fence-flank|seam-caret-height|vmem-nesting|index-horizontal|del-glyph|closeparen-exit|sinarg-merge|glyph-click-halves|unit-single-seam|after-structure-shift|undo-burst))$/;
     for (const c of CASES) {
       expect(c.rules.length > 0, `${c.id} carries at least one rule ref`).toBe(true);
       for (const rule of c.rules) {

@@ -226,7 +226,8 @@ describe('caretFromHit + hitFromMouseEvent: the pure resolver and the event adap
   const env: Envelope = { v: 1, root: { type: 'op', op: 'add', args: [sym('a'), sym('b')] } };
 
   it('caretFromHit: separator / placeholder / none / leaf-root / unresolvable hits', () => {
-    expect(caretFromHit(env, { kind: 'separator', path: [], index: 1 })).toEqual(row(1));
+    // OA-glyph-click-halves (2026-11-10): the hit carries the click fraction; the right half (>= 0.5) keeps the shared gap
+    expect(caretFromHit(env, { kind: 'separator', path: [], index: 1, fraction: 0.5 })).toEqual(row(1));
 
     const slotCaret: Caret = { kind: 'slot', path: [], slot: 'num' };
     expect(
@@ -234,14 +235,15 @@ describe('caretFromHit + hitFromMouseEvent: the pure resolver and the event adap
     ).toEqual(slotCaret);
 
     expect(caretFromHit({ v: 1, root: null }, { kind: 'none', fraction: 0.2 })).toEqual({ kind: 'empty' });
-    // background border zones park at the root row's border seams (amended
-    // session 4: the start/end of the formula are stations); the middle
-    // zones keep the enter-from-side dive
-    expect(caretFromHit(env, { kind: 'none', fraction: 0.04 })).toEqual(row(0));
+    // background border zones park at the root row's CANONICAL border
+    // stations (rowEndStation — the cleanup twin collapse: a text border
+    // cell's in-token edge, so the raw `row [] #0` producer is gone); the
+    // middle zones keep the enter-from-side dive
+    expect(caretFromHit(env, { kind: 'none', fraction: 0.04 })).toEqual({ kind: 'token', path: [0], index: 0 });
     // 4a re-pin (OA-visual-trumps): the enter-from-side dives are in-token benches
     expect(caretFromHit(env, { kind: 'none', fraction: 0.4 })).toEqual({ kind: 'token', path: [0], index: 0 });
     expect(caretFromHit(env, { kind: 'none', fraction: 0.6 })).toEqual({ kind: 'token', path: [1], index: 1 });
-    expect(caretFromHit(env, { kind: 'none', fraction: 0.96 })).toEqual(row(2));
+    expect(caretFromHit(env, { kind: 'none', fraction: 0.96 })).toEqual({ kind: 'token', path: [1], index: 1 });
 
     // 4b-2 re-pin (C1): a root num leaf clicks character-wise → its offset 0
     expect(caretFromHit({ v: 1, root: num(7) }, { kind: 'node', path: [], fraction: 0.2 })).toEqual({ kind: 'token', path: [], index: 0 });
@@ -264,7 +266,7 @@ describe('caretFromHit + hitFromMouseEvent: the pure resolver and the event adap
     expect(nodeHit.fraction).toBe(0.5); // zero-width stub rect → the defined 0.5
 
     const sep = [...rendered.separators.keys()][0];
-    expect(hitFromMouseEvent(fake(sep, 5), rendered)).toEqual({ kind: 'separator', path: [], index: 1 });
+    expect(hitFromMouseEvent(fake(sep, 5), rendered)).toEqual({ kind: 'separator', path: [], index: 1, fraction: 0.5 }); // zero-width stub → the defined 0.5 (OA-glyph-click-halves)
 
     const phRendered = buildMathML(fromJSON({ v: 1, root: { type: 'frac', num: null, den: num(2) } }), document);
     const phCaret: Caret = { kind: 'slot', path: [], slot: 'num' };

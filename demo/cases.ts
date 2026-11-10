@@ -701,6 +701,15 @@ export const CASES: readonly CatalogCase[] = [
     envelope: env(sym('x')),
     caret: tk([], 1), // 4a reseed (OA-token-end)
   },
+  {
+    id: 'I-22',
+    rules: ['OA-unit-single-seam', 'S-104', 'S-051', 'N1'],
+    category: 'I',
+    label: 'the attached unit `50 mm`, caret at the label end',
+    stress: 'Left/Right walk (one stop at 50|mm — no double step); type a digit at 50|mm and at 50 mm| (continues the value); type a letter at 50|mm (the label channel); type a digit inside the label; Backspace and Delete at 50|mm.',
+    envelope: env(unit(num(50), 'mm')),
+    caret: tk([], 2),
+  },
 
   // ——— S: operator token at mid-row positions ———
   {
@@ -1059,6 +1068,15 @@ export const CASES: readonly CatalogCase[] = [
     envelope: env(op('add', sym('x'), root(null))),
     caret: sl([1], 'radicand'),
   },
+  {
+    id: 'B-33',
+    rules: ['OA-del-glyph', 'D2', 'S-077'],
+    category: 'B',
+    label: 'x + 1/2 + y, caret on the first + gap — forward Delete at an operator gap',
+    stress: 'Delete at the seam (the binding + goes, the cells bond); reload and Delete at the fraction’s right-edge flank (the second + goes). Compare with Backspace at the same stations.',
+    envelope: env(op('add', sym('x'), frac(num(1), num(2)), sym('y'))),
+    caret: rw([], 1),
+  },
 
   // ——— M: navigation (horizontal + vertical) ———
   {
@@ -1223,6 +1241,15 @@ export const CASES: readonly CatalogCase[] = [
     envelope: env(op('add', sym('x'), { type: 'root', radicand: sym('a'), mroot: true } as NodeJson)),
     caret: tk([1, 'radicand'], 1),
   },
+  {
+    id: 'M-19',
+    rules: ['OA-closeparen-exit', 'S-097', 'C4', 'OA-token-end'],
+    category: 'M',
+    label: "1/(a+b with the closing fence missing, caret after the b — the retyped `)`",
+    stress: 'Type `)` — the fence completes and the caret lands at the group’s right flank INSIDE the denominator (never right of the whole fraction); walk Right/Left from there.',
+    envelope: env(frac(num(1), group(op('add', sym('a'), sym('b')), false))),
+    caret: tk(['den', 'child', 1], 1),
+  },
 
   // ——— K: click placement (seed + precise click target in `stress`) ———
   {
@@ -1375,10 +1402,28 @@ export const CASES: readonly CatalogCase[] = [
     id: 'K-17',
     rules: ['T9', 'OA-index-horizontal'],
     category: 'K',
-    label: 'ⁿ√5 with an empty □ index — the rejection readout',
-    stress: 'With the caret in the □ index, type a digit: the op is rejected by the validation gate — the tree is unchanged and the rejection readout under the editor names it (session-5 rider).',
+    label: 'ⁿ√5 with an empty □ index — type into the □ index',
+    stress: 'With the caret in the □ index, type a digit: the index fills and the mroot flag drops (typed index content sticks); then arrows between index and radicand.',
     envelope: env({ type: 'root', radicand: num(5), mroot: true }),
     caret: sl([], 'index'),
+  },
+  {
+    id: 'K-18',
+    rules: ['OA-glyph-click-halves', 'C1', 'S-053', 'N2'],
+    category: 'K',
+    label: 'x + 1/2 + y — operator glyph halves',
+    stress: 'Click the LEFT half and the RIGHT half of each `+` separator glyph; type a letter at each result.',
+    envelope: env(op('add', sym('x'), frac(num(12), num(34)), sym('y'))),
+    caret: rw([], 1),
+  },
+  {
+    id: 'K-19',
+    rules: ['C5', 'S-061', 'C4'],
+    category: 'K',
+    label: 'x + sin(a) + y — background clicks near the head',
+    stress: 'Click the math background just left of sin (the + glyph zone and the fn mrow’s left edge zone); type a letter at each result.',
+    envelope: env(op('add', sym('x'), fn('sin', sym('a')), sym('y'))),
+    caret: tk([1, 0], 1),
   },
 
   // ——— U: undo/redo walk-backs ———
@@ -1439,6 +1484,16 @@ export const CASES: readonly CatalogCase[] = [
     stress: 'Backspace (the head dies), type `cos(` (re-binds the pair), then Ctrl+Z ×2: the typed `cos(` head goes in one undo, the `sin(` head is restored by the next — the swap is two ordinary edits.',
     envelope: env(fn('sin', op('add', sym('a'), sym('b')))),
     caret: rw([], 0),
+  },
+  {
+    id: 'U-07',
+    rules: ['OA-undo-burst', 'U1', 'S-081'],
+    category: 'U',
+    label: 'type `a++b`, then undo/redo',
+    stress: 'Ctrl+Z ×4 walks the four units one by one (the b run, the second +, the first +, the a run); Ctrl+Y ×4 forward.',
+    keys: 'a++b',
+    envelope: EMPTY_ENV,
+    caret: EMPTY,
   },
 
   // ——— R: real-world formulas ———

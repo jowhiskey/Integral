@@ -38,6 +38,13 @@ export interface CaretAnchor {
   readonly height: number;
 }
 
+/** OA-after-structure-shift (ruled live 2026-11-10, the M-18 case): the
+ *  after-structure station's overlay anchor shifts a small distance to the
+ *  right, so it stays visually distinguishable from the structure's inner
+ *  content end sharing the same horizontal space. Overlay anchor rule only —
+ *  no engine state change. */
+export const AFTER_STRUCTURE_SHIFT_PX = 2;
+
 // ——— OA-seam-caret-height (rework 4b-1) ———
 //
 // The seam-station anchor rule, as a PURE selection from (state + tree):
@@ -88,7 +95,16 @@ export function seamAnchorSpec(env: Envelope, caret: Caret, registry: NavRegistr
     if (args[caret.index] === null) {
       return { kind: 'separator', rowPath: caret.path, index: caret.index }; // the bare anchor: the left glyph first
     }
-    return { kind: 'element', path: [...caret.path, caret.index] }; // the start seam / cell edge: the current element
+    // 4b-2 amendment to OA-seam-caret-height (K-07, ruled live 2026-11-10) +
+    // M-15 #5: an INTERIOR row seam with a separator glyph on its left
+    // anchors at that glyph (its height; the overlay puts x at its right
+    // edge) — never the following cell's full extent (a caret as tall as the
+    // fraction while standing LEFT of it at the flank's x is the ruled-out
+    // shape).
+    if (caret.index > 0 && ((row.type === 'op' && (row as { implicit?: boolean }).implicit !== true) || row.type === 'fn')) {
+      return { kind: 'separator', rowPath: caret.path, index: caret.index };
+    }
+    return { kind: 'element', path: [...caret.path, caret.index] }; // the row start: the current element (the offset-0-of-current exception)
   }
   return null;
 }
@@ -140,8 +156,9 @@ export function caretAnchor(env: Envelope, caret: Caret, rendered: RenderedMath)
       const r = extentRect(rendered, caret.path);
       if (r === null) return null;
       // The 4a border stations: side 'right' is the whole-structure
-      // after-station (the extent's right edge — the spot D5 fires from).
-      if (caret.side === 'right') return { x: r.right, y: r.top, height: r.height };
+      // after-station (the extent's right edge — the spot D5 fires from),
+      // painted with OA-after-structure-shift's small right shift.
+      if (caret.side === 'right') return { x: r.right + AFTER_STRUCTURE_SHIFT_PX, y: r.top, height: r.height };
       // 4b-1 OA-seam-caret-height: the LEFT flank paints at its
       // LEFT-ADJACENT element's height (the separator glyph in a glyph
       // zone, e.g. normal text height behind the `+`); without one (the
@@ -192,7 +209,20 @@ export function caretAnchor(env: Envelope, caret: Caret, rendered: RenderedMath)
           return null;
         }
         const r = extentRect(rendered, [...caret.path, caret.index]);
-        return r === null ? null : { x: r.left, y: r.top, height: r.height };
+        if (r === null) return null;
+        // K-07 / M-15 #5: an interior seam with a separator glyph on its left
+        // anchors at the glyph — x at its RIGHT edge (the after-glyph spot,
+        // not touching the right neighbor), y/height at the glyph's rect —
+        // never the following cell's full extent.
+        const spec = seamAnchorSpec(env, caret);
+        if (spec !== null && spec.kind === 'separator') {
+          const g = seamAnchorElement(caret, spec, rendered);
+          if (g !== null) {
+            const gr = rectOf(g);
+            return { x: gr.right, y: gr.top, height: gr.height };
+          }
+        }
+        return { x: r.left, y: r.top, height: r.height };
       }
       // the seam after the last cell
       if (args.length === 0) {

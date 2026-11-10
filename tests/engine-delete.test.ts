@@ -82,20 +82,28 @@ describe('Forward Delete — the D1 mirror in tokens (the char right of the care
     state = forwardDelete(at(num(5, true), tokc([], 1)));
     expect(j(envelopeOf(state).root)).toBe(j(num(5)));
     legal(state);
-    // a single character right of a gap: the node dies (the freed pending cell)
+    // OA-del-glyph (ruled 2026-11-10): at an operator gap Del removes the
+    // binding glyph — the cells bond into their implicit pair (the BS
+    // glyph-delete mirror), caret at the bonded right operand's left entry
     state = forwardDelete(at(op('add', sym('x'), sym('y')), rowc([], 1)));
-    expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('x'), null)));
-    expect(state.caret).toEqual(rowc([], 1));
+    expect(j(envelopeOf(state).root)).toBe(j({ type: 'op', op: 'multiply', args: [sym('x'), sym('y')], implicit: true }));
+    expect(state.caret).toEqual(tokc([1], 0));
     legal(state);
   });
 });
 
 describe("Forward Delete at the gap (the D2 mirror: the right-adjacent token FIRST character / the D3 whole)", () => {
-  it('x + |abc → x + bc (the first char right of the station; the station caret survives)', () => {
+  it('x + |abc at the operator gap → the glyph goes, x·abc bonds (OA-del-glyph); on a glyph-less seam the first char goes (D1 mirror)', () => {
+    // OA-del-glyph: the binding glyph deletes (text-editor parity), the pair bonds
     const state = forwardDelete(at(op('add', sym('x'), sym('abc')), rowc([], 1)));
-    expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('x'), sym('bc'))));
-    expect(state.caret).toEqual(rowc([], 1));
+    expect(j(envelopeOf(state).root)).toBe(j({ type: 'op', op: 'multiply', args: [sym('x'), sym('abc')], implicit: true }));
+    expect(state.caret).toEqual(tokc([1], 0));
     legal(state);
+    // the D1 mirror still holds on a glyph-less (implicit) seam: first char right of the station
+    const gl = forwardDelete(at({ type: 'op', op: 'multiply', args: [sym('x'), sym('abc')], implicit: true }, rowc([], 1)));
+    expect(j(envelopeOf(gl).root)).toBe(j({ type: 'op', op: 'multiply', args: [sym('x'), sym('bc')], implicit: true }));
+    expect(gl.caret).toEqual(rowc([], 1));
+    legal(gl);
   });
 
   it('the node caret on a leaf is its right edge: the FORWARD gap follows (a|bc → a|c through the pair)', () => {
@@ -141,19 +149,21 @@ describe('Forward Delete — the NAMED silent no-op defaults (unruled mirrors, t
     expect(d.kind).toBe('noop');
   });
 
-  it('Del facing a fenceless structure (the D5 forward mirror is unruled): x + |frac — silent no-op', () => {
+  it('Del at the gap facing a fenceless structure: the binding glyph goes (OA-del-glyph supersedes the parked no-op): x·frac bonds', () => {
     const seed = op('add', sym('x'), frac(num(1), num(2)));
     const d = decideDelete(envOf(seed), rowc([], 1));
-    expect(d.kind).toBe('noop');
+    expect(d.kind).toBe('glyph');
     const state = forwardDelete(at(seed, rowc([], 1)));
-    expect(j(envelopeOf(state).root)).toBe(j(seed));
-    expect(state.log.length).toBe(0);
+    expect(j(envelopeOf(state).root)).toBe(j({ type: 'op', op: 'multiply', args: [sym('x'), frac(num(1), num(2))], implicit: true }));
+    expect(state.caret).toEqual(tokc([1, 'num'], 0));
+    expect(state.log.length).toBe(1);
+    legal(state);
   });
 
-  it('Del facing a fenced container / a nested row: named no-ops (the D7/D8 forward mirrors are unruled)', () => {
-    expect(decideDelete(envOf(op('add', sym('x'), group(op('add', sym('a'), sym('b'))))), rowc([], 1)).kind).toBe('noop');
-    expect(decideDelete(envOf(op('add', sym('x'), fn('sin', [sym('a')]))), rowc([], 1)).kind).toBe('noop');
-    expect(decideDelete(envOf(op('add', sym('x'), op('multiply', sym('a'), sym('b')))), rowc([], 1)).kind).toBe('noop');
+  it('Del at the gap facing a fenced container / a nested row: the binding glyph goes (OA-del-glyph — the parked no-ops are superseded)', () => {
+    expect(decideDelete(envOf(op('add', sym('x'), group(op('add', sym('a'), sym('b'))))), rowc([], 1)).kind).toBe('glyph');
+    expect(decideDelete(envOf(op('add', sym('x'), fn('sin', [sym('a')]))), rowc([], 1)).kind).toBe('glyph');
+    expect(decideDelete(envOf(op('add', sym('x'), op('multiply', sym('a'), sym('b')))), rowc([], 1)).kind).toBe('glyph');
   });
 
   it('Del at a dangling operator glyph / a pending cell / the row end: named no-ops (the S-066 back-mirror is unruled)', () => {

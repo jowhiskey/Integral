@@ -577,7 +577,7 @@ describe('leaf and string-channel types are exit-only', () => {
     for (const dir of DIRS) expect(resolveMove(env, nodeCaret(), dir)).toBe(null);
   });
 
-  it('unit: the value is the left entry; value end → the label front (4b-1 re-pin, I-19/OA granular units)', () => {
+  it('unit: the value is the left entry; the value/label boundary is ONE seam (OA-unit-single-seam re-pin, I-19)', () => {
     const filled = envOf({ v: 1, root: { type: 'unit', value: num(50), unit: 'mm' } });
     // 4a re-pin: entry benches at the value's in-token offset 0
     expect(resolveMove(filled, nodeCaret(), 'right')).toEqual({ kind: 'token', path: ['value'], index: 0 });
@@ -586,7 +586,9 @@ describe('leaf and string-channel types are exit-only', () => {
     // skipped the label letters entirely); the label's offset 0 walks
     // back into the value's right end.
     expect(resolveMove(filled, nodeCaret(['value']), 'right')).toEqual({ kind: 'token', path: [], index: 0 });
-    expect(resolveMove(filled, { kind: 'token', path: [], index: 0 }, 'left')).toEqual({ kind: 'token', path: ['value'], index: 2 });
+    // OA-unit-single-seam: ← from the seam (label offset 0) steps to the value's last interior offset
+    expect(resolveMove(filled, { kind: 'token', path: [], index: 0 }, 'left')).toEqual({ kind: 'token', path: ['value'], index: 1 });
+    expect(resolveMove(filled, { kind: 'token', path: ['value'], index: 1 }, 'right')).toEqual({ kind: 'token', path: [], index: 0 });
     expect(resolveMove(filled, nodeCaret(['value']), 'down')).toBe(null);
   });
 });

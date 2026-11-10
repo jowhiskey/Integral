@@ -42,6 +42,7 @@ import {
   pathOfRef,
   refOfPath,
   rowArgs,
+  slotValue,
   subLabelText,
   tokenText,
   type Caret,
@@ -51,7 +52,7 @@ import {
   type SubLabel,
 } from './caret.js';
 import { EngineError } from './errors.js';
-import { entryStation, exitStation } from './nav.js';
+import { edgeStation, entryStation, exitStation } from './nav.js';
 import {
   applyOp,
   envelopeOf,
@@ -395,7 +396,28 @@ const place = (
   at: Position,
   to: Caret,
   opts?: { readonly structural?: boolean },
-): EditingState => apply1(ctx, { op: 'place', node, at, to }, opts);
+): EditingState => {
+  // The mroot □-index flag-drop (consolidated cleanup session, 2026-11-10;
+  // supersedes the session-5 rider's ValidationError rejection): filling an
+  // mroot's empty □ index slot drops the `mroot: true` flag — the flag marks
+  // the EMPTY index only and fromJSON rejects it combined with content. The
+  // slot fill becomes a whole-owner replace without the flag; the tree shape
+  // at the index path is unchanged, so the op's `to` caret resolves as-is.
+  if (at.at === 'slot' && at.slot === 'index' && node !== null) {
+    const owner = nodeAt(ctx.env, at.path);
+    if (owner !== null && owner.type === 'root' && (owner as { mroot?: boolean }).mroot === true) {
+      const rebuilt = { ...(owner as unknown as Record<string, unknown>) };
+      delete rebuilt.mroot;
+      rebuilt.index = node;
+      return apply1(
+        ctx,
+        { op: 'place', node: rebuilt as NodeJson, at: replacePosOf(refOfPath(at.path)), to },
+        opts,
+      );
+    }
+  }
+  return apply1(ctx, { op: 'place', node, at, to }, opts);
+};
 
 /** OA-token-end (rework 4a): the in-token end state of a freshly typed
  *  leaf token — typing never leaves a whole-node caret on the fresh token
@@ -621,11 +643,27 @@ function digitAtToken(ctx: Ctx, station: TokenStation, digits: string, num: Node
     return juxtaposeToken(ctx, station, num, offset === 0 ? 'before' : 'after');
   }
   if (node.type === 'unit') {
-    // S-104 + the digit-glue amendment: a digit inside/after a unit label
-    // extends the run text (the label re-validates at the edit — a digit
-    // adding an unknown label reverts to the symbol pair). Against the armed
-    // boundary a digit juxtaposes instead. A digit at the label's FRONT
-    // (offset 0) has no letters to its left: the number-before-X pairing.
+    // S-104 + the digit-glue amendment: a digit inside a unit label extends
+    // the run text (the label re-validates at the edit — a digit adding an
+    // unknown label reverts to the symbol pair). Against the armed boundary a
+    // digit juxtaposes instead.
+    // OA-unit-single-seam (ruled live 2026-11-10): at the label's EDGES —
+    // offset 0 (the value/label seam `50|mm`) and offset len (the unit's
+    // right edge `50 mm|`) — a digit goes to the VALUE channel instead: the
+    // number continues (`50 mm|` + `5` → `505 mm`), the caret lands in the
+    // value at its new end. Only an interior label offset grows the run.
+    if (!ctx.flagged && (offset === 0 || offset === text.length)) {
+      const value = slotValue(node, 'value');
+      if (value !== null && value.type === 'num') {
+        const grown = numFromText(tokenText(value) + digits);
+        if (grown !== null) {
+          return place(ctx, unitJson(grown, text), replacePosOf(ref), {
+            kind: 'token', path: [...pathOf(ref), 'value'], index: tokenText(grown).length,
+          });
+        }
+      }
+      return juxtaposeToken(ctx, station, num, offset === text.length ? 'after' : 'split');
+    }
     if (ctx.flagged || offset === 0) {
       return juxtaposeToken(ctx, station, num, offset === text.length ? 'after' : 'split');
     }
@@ -777,6 +815,23 @@ function letterAtToken(ctx: Ctx, station: TokenStation, letters: string, sym: No
     }
     return ctx.state;
   }
+  // OA-unit-single-seam: a letter at a unit VALUE's end (the `50| mm` seam,
+  // reachable by click) goes to the LABEL channel — it prepends to the run at
+  // label offset 0, re-validating per S-104 (a still-known run stays an
+  // attached unit, an unknown run reverts to the symbol pair).
+  if (node.type === 'num' && !ctx.flagged && offset === text.length && ref.at === 'slot' && ref.slot === 'value') {
+    const owner = nodeAt(ctx.env, ref.path);
+    if (owner !== null && owner.type === 'unit' && tokenText(owner).length > 0) {
+      return unitGrow(
+        ctx, { node: owner, path: ref.path }, letters + tokenText(owner),
+        { kind: 'token', path: ref.path, index: letters.length },
+        // the reverted pair replaces the unit at its own ref — the grown run
+        // is the pair's cell 1 (one level under the unit's path, not under
+        // the value slot)
+        { kind: 'token', path: [...ref.path, 1], index: letters.length },
+      );
+    }
+  }
   // A letter into a number: S-031's number·symbol·number split inside,
   // S-032's juxtaposed symbol at the edges — a letter never joins a number.
   return juxtaposeToken(ctx, station, sym, offset === 0 ? 'before' : offset === text.length ? 'after' : 'split');
@@ -798,6 +853,19 @@ function dotKey(ctx: Ctx, station: Station): EditingState {
         const next = numFromText(text.slice(0, offset) + '.' + text.slice(offset));
         if (next === null) return ctx.state;
         return growLeft(ctx, { node, path: station.path }, next);
+      }
+      // OA-unit-single-seam: at the label's edges a dot joins the VALUE number
+      // (`50 mm|` + `.` → `50. mm`); inside the label the old split/no-op path.
+      if (node.type === 'unit' && !ctx.flagged && (offset === 0 || offset === text.length)) {
+        const value = slotValue(node, 'value');
+        if (value !== null && value.type === 'num' && !tokenText(value).includes('.')) {
+          const joined = numFromText(tokenText(value) + '.');
+          if (joined !== null) {
+            return place(ctx, unitJson(joined, text), replacePosOf(ref), {
+              kind: 'token', path: [...pathOf(ref), 'value'], index: tokenText(joined).length,
+            });
+          }
+        }
       }
       // Symbols never absorb dots: the `0.` is born adjacent (S-012/S-033).
       return juxtaposeToken(ctx, station, dotted, offset === 0 ? 'before' : offset === text.length ? 'after' : 'split');
@@ -1108,7 +1176,16 @@ function completeFence(ctx: Ctx, target: Ancestor): EditingState {
   } else {
     rowArgs(nodeAt(after, ref.path) as NodeJson)[ref.index] = rebuilt;
   }
-  const to = exitStation(after, target.path, 'right') ?? { kind: 'node', path: target.path };
+  // OA-closeparen-exit (ruled 2026-11-10, the M-12/S-097 case): the retyped
+  // close paren that completes a fence lands the caret immediately after the
+  // completed group — its RIGHT FLANK station, INSIDE the enclosing structure
+  // (the slot-boundary or mid-row flank via edgeStation), never right of the
+  // whole enclosing structure (the exitStation climb). Consistent with
+  // OA-token-end: typing leaves the caret right after what was typed.
+  const to =
+    edgeStation(after, target.path, 'right') ??
+    exitStation(after, target.path, 'right') ??
+    { kind: 'node', path: target.path };
   return place(ctx, rebuilt, replacePosOf(ref), to);
 }
 

@@ -24,6 +24,18 @@ interface AppExports {
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
+/** Poll (with a tick between tries) until `cond` holds — Svelte flushes are
+ *  macro-task based, and under full-suite worker load a single tick can fire
+ *  before the flush lands (the 4b-1 full-suite flake, green standalone).
+ *  Exhausting the tries falls through to the real assertions, which then
+ *  report the genuine failure. */
+async function waitFor(cond: () => boolean, tries = 50): Promise<void> {
+  for (let i = 0; i < tries; i += 1) {
+    if (cond()) return; // the loads are synchronous — usually no wait at all
+    await tick();
+  }
+}
+
 function mountApp(): { target: HTMLDivElement; app: AppExports } {
   const target = document.createElement('div');
   document.body.appendChild(target);
@@ -43,8 +55,16 @@ const click = (el: HTMLElement): void => {
 
 /** Assert the case editor currently shows exactly the seeded state of case c. */
 async function expectSeededState(target: HTMLDivElement, app: AppExports, id: string): Promise<void> {
-  await tick(); // let Svelte flush the active-class marker
   const c = CASES.find((k) => k.id === id)!;
+  // wait until the load actually landed (active id + engine state), then assert
+  await waitFor(() => {
+    if (app.getActiveCaseId() !== id) return false;
+    const ctl = app.getController();
+    if (ctl === null) return false;
+    const s = ctl.getState();
+    return JSON.stringify(envelopeOf(s)) === JSON.stringify(c.envelope) && JSON.stringify(s.caret) === JSON.stringify(c.caret);
+  });
+  await tick(); // let Svelte flush the active-class marker
   expect(app.getActiveCaseId()).toBe(id);
   const ctl = app.getController();
   expect(ctl).not.toBeNull();
@@ -79,7 +99,9 @@ describe('demo case browser', () => {
     await unmount(app as never);
   });
 
-  it('clicking EVERY case entry loads its seeded state; re-clicking after another case resets to the seed', async () => {
+  // long test by design (every catalog case, twice): explicit timeout so a
+  // loaded worker doesn't read as a failure (the 4b-1 full-suite flake)
+  it('clicking EVERY case entry loads its seeded state; re-clicking after another case resets to the seed', { timeout: 30000 }, async () => {
     const { target, app } = mountApp();
     await tick();
     for (let i = 0; i < CASES.length; i++) {
@@ -143,10 +165,16 @@ describe('demo case browser', () => {
     expect(instructionCases.length).toBeGreaterThan(0);
     for (const c of instructionCases) {
       click(caseButton(target, c.id));
-      await tick(); // let the run-keys button render for the active instruction case
+      // let the run-keys button render for the active instruction case (poll —
+      // full-suite worker load can delay the flush past a single tick)
+      await waitFor(() => target.querySelector('button[data-run-keys]') !== null);
       const runBtn = target.querySelector('button[data-run-keys]') as HTMLButtonElement | null;
       expect(runBtn, `${c.id} run-keys button`).not.toBeNull();
       click(runBtn!);
+      await waitFor(() => {
+        const s = app.getController()?.getState();
+        return s !== undefined && app.getActiveCaseId() === c.id;
+      });
       // engine replay of the same instruction + the controller-side leave
       // settle (rework 2b-2: the DOM path fires the S-051 conversion on the
       // leave keys BEFORE the key acts — letters never leave, every other

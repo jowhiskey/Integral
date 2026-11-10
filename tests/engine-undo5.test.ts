@@ -6,11 +6,11 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { ValidationError } from '../src/ast/index.js';
 import {
   applyOp,
   applyOps,
   backspace,
+  caretResolvesIn,
   envelopeOf,
   initSession,
   redo,
@@ -193,19 +193,17 @@ describe('session 5 — U1 typing-run coalescing via typeToken’s coalesce flag
   });
 });
 
-describe('session 5 — rider: the mroot □-index typing rejection is a typed ValidationError at engine level', () => {
-  it('typing at an mroot empty index fills the index, leaves the flag, and the fromJSON gate rejects', () => {
+describe('session 5 rider — RESOLVED in the consolidated cleanup: the mroot □-index typing fills the index and drops the flag', () => {
+  it('typing at an mroot empty index sticks: the typing surface drops `mroot: true` when the index fills', () => {
     const s = initSession(envOf({ type: 'root', radicand: num(5), mroot: true }));
     expect(s.caret).toEqual(sl([], 'index')); // the seed pends in the □ index
-    let caught: unknown;
-    try {
-      typeToken(s, K('5'));
-    } catch (e) {
-      caught = e;
-    }
-    expect(caught).toBeInstanceOf(ValidationError);
-    expect((caught as Error).name).toBe('ValidationError');
-    expect((caught as Error).message).toContain('mroot');
+    const next = typeToken(s, K('5'));
+    // the flag marks the EMPTY index only — filling it drops the flag (the
+    // fromJSON gate would reject the combination); typed index content sticks
+    expect(j(envelopeOf(next).root)).toBe(j({ type: 'root', radicand: num(5), index: num(5) }));
+    expect(next.caret).toEqual(tok(['index'], 1));
+    expect(next.log.length).toBe(1);
+    expect(caretResolvesIn(envelopeOf(next), next.caret)).toBe(true);
   });
 });
 

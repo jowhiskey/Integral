@@ -93,6 +93,7 @@ import type { Envelope, NodeJson } from '../ast/json.js';
 import {
   caretResolvesIn,
   isRowNode,
+  isTokenNode,
   nodeAt,
   refOfPath,
   rowArgs,
@@ -621,6 +622,11 @@ function payloadStartStation(after: Envelope, ref: Ref, payload: NodeJson): Care
     const contentPath = pathOfRef(ref);
     return entryStation(after, contentPath, 'left') ?? { kind: 'node', path: contentPath };
   }
+  // OA-visual-trumps twin collapse (consolidated cleanup): the pair's inner
+  // start seam and the OUTER row seam before the payload cell paint at the
+  // same spot — land on the outer seam, the canonical gap-before-cell state
+  // (the `row [0] #0` vs `row [] #0` pair).
+  if (ref.at === 'cell') return { kind: 'row', path: ref.path, index: ref.index };
   return { kind: 'row', path: pathOfRef(ref), index: 0 };
 }
 
@@ -774,6 +780,16 @@ function rowSeam(env: Envelope, rowPath: Path, index: number, station: Caret, ct
       if (ref.slot === 'child' && parent.type === 'group') return openFenceDelete(env, ref.path, parent, station);
       if (ref.slot === 'radicand' && parent.type === 'root') return rootStrip(env, ref.path, parent, station);
     }
+    // OA-sinarg-merge (ruled 2026-11-10): the function-argument start station
+    // (right after the open paren) and the row seam painting at the same spot
+    // are ONE station — the D7b trigger extends to the arg-content-start
+    // landing (e.g. `token [0,0] @0` inside a row-valued first argument):
+    // BS there acts exactly as the fn's own row seam (`sin(|a+b)`), no
+    // silent no-op.
+    if (ref.at === 'cell' && ref.index === 0) {
+      const parent = nodeAt(env, ref.path) as NodeJson | null;
+      if (parent !== null && parent.type === 'fn') return rowSeam(env, ref.path, 0, station, ctx);
+    }
     return noopDecision(station); // D4 pattern (region start)
   }
   if (args[index - 1] === undefined || args[index - 1] === null) {
@@ -816,6 +832,17 @@ function tokenStation(env: Envelope, caret: Extract<Caret, { kind: 'token' }>, c
     if (ctx.ctrl) return ctrlLeftRun(env, node, caret.path, caret.index, ctx);
     const to: Caret = { kind: 'token', path: caret.path, index: caret.index - 1 };
     return charDrop(env, node, caret.path, caret.index - 1, to, ctx);
+  }
+  // OA-unit-single-seam: the label's offset 0 IS the one value/label seam —
+  // BS there peels the VALUE's last character (the character left of the
+  // caret at `50|mm`), never the row rules.
+  if (node.type === 'unit') {
+    const value = slotValue(node, 'value');
+    if (value !== null && isTokenNode(value) && tokenText(value).length > 0) {
+      const vlen = tokenText(value).length;
+      const to: Caret = { kind: 'token', path: [...caret.path, 'value'], index: vlen - 1 };
+      return charDrop(env, value, [...caret.path, 'value'], vlen - 1, to, ctx);
+    }
   }
   return stationLeftOf(env, caret, ctx);
 }
@@ -996,6 +1023,7 @@ export type DeleteKind =
   | 'noop'
   | 'char'
   | 'token-death'
+  | 'glyph' // OA-del-glyph: the binding operator glyph removed (Del at an operator gap)
   | 'close-fence' // OA-fence-flank: the movable close glyph removed (Del at a fenced content end)
   | 'open-fence' // OA-fence-flank: the opening fence removed (Del at a group's left flank)
   | 'container-death'; // an empty fenced container dies whole (D9's reading via the fence-flank Del)
@@ -1083,6 +1111,19 @@ export function decideDelete(env: Envelope, caret: Caret, opts: DeleteOpts = {})
         const keep = ctx.ctrl ? text.slice(0, caret.index) : text.slice(0, caret.index) + text.slice(caret.index + 1);
         return forwardText(env, node, caret.path, keep, caret, ctx);
       }
+      // OA-unit-single-seam: the value's right edge IS the one value/label
+      // seam — Del there removes the LABEL's first character (`50|mm` + Del
+      // → `50|m`), the caret stays at the seam.
+      {
+        const ref0 = refOfPath(caret.path);
+        if (ref0.at === 'slot' && ref0.slot === 'value') {
+          const owner = nodeAt(env, ref0.path);
+          if (owner !== null && owner.type === 'unit' && tokenText(owner).length > 0) {
+            const keep = ctx.ctrl ? '' : tokenText(owner).slice(1);
+            return forwardText(env, owner, ref0.path, keep, caret, ctx);
+          }
+        }
+      }
       return forwardGap(env, caret, ctx); // the token's right edge: the gap right of it
     }
     case 'node': {
@@ -1094,9 +1135,9 @@ export function decideDelete(env: Envelope, caret: Caret, opts: DeleteOpts = {})
       // fence token; `1/|(a+b)` + Del removes the `(`); against a fn head
       // (atomic) or a fenceless structure Del keeps the named no-op (the
       // session-3 parked Del-vs-structure defaults). Del at the RIGHT
-      // flank faces the separator glyph — the forward-glyph mirror is the
-      // PARKED session-3 named default (no-op), except past a slot/root
-      // end, which keeps the ordinary forward action.
+      // flank faces the separator glyph zone ahead — OA-del-glyph (ruled
+      // 2026-11-10, supersedes the parked session-3 no-op default): the same
+      // forward rules as the seam after the structure's cell apply.
       const node = nodeAt(env, caret.path) as NodeJson;
       if (caret.side === 'left') {
         if (node.type === 'group') {
@@ -1111,7 +1152,11 @@ export function decideDelete(env: Envelope, caret: Caret, opts: DeleteOpts = {})
       }
       if (caret.side === 'right') {
         const ref = refOfPath(caret.path);
-        if (ref.at === 'cell') return delNoop(caret); // the glyph zone ahead: parked asymmetry (named)
+        if (ref.at === 'cell') {
+          // OA-del-glyph: the right flank faces the glyph zone ahead — route
+          // to the seam after the structure's cell (index + 1).
+          return decideDelete(env, { kind: 'row', path: ref.path, index: ref.index + 1 }, opts);
+        }
       }
       return forwardGap(env, caret, ctx);
     }
@@ -1120,6 +1165,19 @@ export function decideDelete(env: Envelope, caret: Caret, opts: DeleteOpts = {})
     case 'row': {
       const row = nodeAt(env, caret.path) as NodeJson;
       const args = rowArgs(row);
+      // OA-del-glyph (ruled 2026-11-10, supersedes the session-3 parked
+      // forward-Delete no-op default at operator gaps): at an operator gap —
+      // the seam between two filled cells of an explicit op row — forward
+      // Delete REMOVES the binding operator glyph (text-editor parity, Del
+      // keeps deleting left-to-right; the M-15 #2 stall case). The row after
+      // the glyph removal follows the existing glyph-delete semantics: the
+      // cells bond into their implicit pair (glyphBond), caret at the
+      // canonical freed spot.
+      if (!ctx.ctrl && row.type === 'op' && !rowIsImplicit(row) && caret.index > 0 && caret.index < args.length &&
+          args[caret.index - 1] !== null && args[caret.index] !== null) {
+        const bond = glyphBond(env, caret.path, caret.index - 1);
+        return { kind: 'glyph', ops: bond.ops, caret: bond.caret };
+      }
       if (caret.index >= args.length || args[caret.index] === null) return delNoop(caret);
       const target = args[caret.index] as NodeJson;
       if (isD5Structure(target) || isRowNode(target) || target.type === 'group' || target.type === 'fn') {

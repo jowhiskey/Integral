@@ -176,19 +176,22 @@ describe('S-104 — the granular unit label (typed edits inside/after the run)',
     expectLegal(next);
   });
 
-  it('a digit inside/after a unit label extends the run text — no unit has digits, so it reverts', () => {
+  it('a digit at the unit EDGES (label offset len = the right edge, offset 0 = the value/label seam) continues the VALUE — OA-unit-single-seam', () => {
+    // `50 mm|` + `7` → `507 mm`, caret in the value at its new end
     const back = typeToken(at(unitn(num(50), 'mm'), { kind: 'token', path: [], index: 2 }), d('7'));
-    expectTree(back, imp(num(50), sym('mm7')));
-    expect(back.caret).toEqual({ kind: 'token', path: [1], index: 3 });
+    expectTree(back, unitn(num(507), 'mm'));
+    expect(back.caret).toEqual({ kind: 'token', path: ['value'], index: 3 });
+    // `50|mm` + `7` → the same value channel (the seam is one station)
+    const front = typeToken(at(unitn(num(50), 'mm'), { kind: 'token', path: [], index: 0 }), d('7'));
+    expectTree(front, unitn(num(507), 'mm'));
+    expect(front.caret).toEqual({ kind: 'token', path: ['value'], index: 3 });
+    expectLegal(front);
+  });
+
+  it('a digit INSIDE a unit label extends the run text — no unit has digits, so it reverts (S-104)', () => {
     const mid = typeToken(at(unitn(num(50), 'mm'), { kind: 'token', path: [], index: 1 }), d('7'));
     expectTree(mid, imp(num(50), sym('m7m')));
     expect(mid.caret).toEqual({ kind: 'token', path: [1], index: 2 });
-  });
-
-  it('a digit at the label FRONT (no letters to its left) pairs as a number before the unit', () => {
-    const next = typeToken(at(unitn(num(50), 'mm'), { kind: 'token', path: [], index: 0 }), d('7'));
-    expectTree(next, imp(num(7), unitn(num(50), 'mm')));
-    expectLegal(next);
   });
 
   it('letters glue into the label from both shared-gap sides (known stays, unknown reverts)', () => {
@@ -244,11 +247,12 @@ describe('S-104 — unit label token carets (N1 letter-wise positions)', () => {
     const inLabel: Caret = { kind: 'token', path: [1], index: 1 };
     expect(resolveMove(env, inLabel, 'left')).toEqual({ kind: 'token', path: [1], index: 0 });
     expect(resolveMove(env, inLabel, 'right')).toEqual({ kind: 'token', path: [1], index: 2 });
-    // exits: the label start walks back INTO the value's right end (the
-    // granular unit's own text-channel chain); the label end leaves right
-    // 4b-1 re-pin (I-19): the value→label walk link — the old exits skipped
-    // the value digits entirely; the right exit crosses the glyph to 9.
-    expect(resolveMove(env, { kind: 'token', path: [1], index: 0 }, 'left')).toEqual({ kind: 'token', path: [1, 'value'], index: 2 });
+    // exits: the label start (the value/label seam) walks back INTO the
+    // value's last interior offset — OA-unit-single-seam (the separate
+    // value-end stop is gone from the walk); the label end leaves right,
+    // crossing the glyph to 9.
+    // OA-unit-single-seam: ← from the seam (label offset 0) → the value's last interior offset
+    expect(resolveMove(env, { kind: 'token', path: [1], index: 0 }, 'left')).toEqual({ kind: 'token', path: [1, 'value'], index: 1 });
     expect(resolveMove(env, { kind: 'token', path: [1, 'value'], index: 2 }, 'right')).toEqual({ kind: 'token', path: [1], index: 0 });
     expect(resolveMove(env, { kind: 'token', path: [1], index: 2 }, 'right')).toEqual({ kind: 'token', path: [2], index: 0 });
   });
