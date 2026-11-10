@@ -44,10 +44,10 @@ describe('./editor entry point', () => {
     const caretDiv = container.querySelector('.integral-caret');
     expect(caretDiv).not.toBeNull();
 
-    // click the right half of b → row seam after b
+    // click the right half of b → b's in-token end (C1 nearest-edge, 4b-2 re-pin — was the row seam after b)
     const b = [...math!.querySelectorAll('[id]')].find((e) => e.textContent === 'b')!;
     b.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 999 }));
-    expect(oncaret).toHaveBeenCalledWith({ kind: 'row', path: [], index: 2 });
+    expect(oncaret).toHaveBeenCalledWith({ kind: 'token', path: [1], index: 1 });
 
     await unmount(app);
   });

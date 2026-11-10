@@ -659,6 +659,29 @@ export function exitStation(
 }
 
 /**
+ * The station AT the whole container's own edge on `side` (rework 4b-2, the
+ * click layer's C1 target): the glyph-zone flank station mid-row
+ * (OA-flank-stations / OA-fence-flank — `node` with `side`), the slot-boundary
+ * station in a slot, the lone-root border station (OA-lone-root-stations), or
+ * — at a row border with no glyph zone of its own — the row's border seam.
+ * Null for non-flankable nodes (rows, tokens) and at the document edge of a
+ * bare non-flankable root.
+ */
+export function edgeStation(env: Envelope, path: Path, side: 'left' | 'right'): Caret | null {
+  const node = nodeAt(env, path);
+  if (node === null || !isFlankable(node)) return null;
+  const flank = containerExitFlank(env, node, path, side);
+  if (flank !== null) return flank;
+  // a row-border cell of a flankable container: no glyph zone — the row's
+  // border seam is the edge station
+  const ref = refOfPath(path);
+  if (ref.at === 'cell') {
+    return { kind: 'row', path: ref.path, index: side === 'left' ? ref.index : ref.index + 1 };
+  }
+  return null;
+}
+
+/**
  * Resolve one relative movement against an envelope. Returns the target
  * caret, or null when the movement has no target (a defined no-op). Pure:
  * never mutates the envelope, never throws.

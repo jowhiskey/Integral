@@ -89,7 +89,7 @@ describe('EditorController: full rebuild per tree change', () => {
     expect(controller.getState().caret).toEqual({ kind: 'token', path: [], index: 1 }); // unchanged
   });
 
-  it('end-to-end click: dispatch on a leaf places the adjacent seam caret', () => {
+  it('end-to-end click: dispatch on a leaf places the nearest character edge (C1, 4b-2 re-pin — was the adjacent seam)', () => {
     const { controller, container } = make({ v: 1, root: { type: 'op', op: 'add', args: [sym('a'), sym('b')] } });
     const stub = stubRects({ container: { left: 0, top: 0, width: 300, height: 40 } });
     const rendered = controller.getRendered()!;
@@ -100,8 +100,8 @@ describe('EditorController: full rebuild per tree change', () => {
       '[1]': { left: 15, top: 0, width: 10, height: 10 },
     });
     const b = rendered.elementByPath.get('[1]')!;
-    b.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 24 })); // right half of b
-    expect(controller.getState().caret).toEqual({ kind: 'row', path: [], index: 2 });
+    b.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 24 })); // fraction 0.9 of b (len 1) → offset 1
+    expect(controller.getState().caret).toEqual({ kind: 'token', path: [1], index: 1 });
     expect(controller.getState().log.length).toBe(0);
     expect(container.contains(rendered.math)).toBe(true);
   });

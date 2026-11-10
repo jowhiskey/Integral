@@ -117,6 +117,10 @@ export interface RenderedMath {
   /** path key → the element of a group/fn whose close fence is absent
    *  (close: false — the movable-paren model's missing-close state). */
   readonly fencesMissingClose: ReadonlyMap<string, Element>;
+  /** 4b-2 (C4): the fn NAME <mi> element → the fn's path — the head's name area
+   *  is its own click target (the name carries no uid of its own; closest('[id]')
+   *  would otherwise resolve it to the fn's mrow). */
+  readonly fnHeads: ReadonlyMap<Element, Path>;
 }
 
 /** Module-level UID counter: ids stay unique across rebuilds and across trees
@@ -141,6 +145,7 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
   const subLabels = new Map<string, { base: Element; script: Element }>();
   const fenceGlyphs = new Map<Element, { path: Path; side: 'open' | 'close' }>();
   const fencesMissingClose = new Map<string, Element>();
+  const fnHeads = new Map<Element, Path>();
 
   const el = (tag: string): Element => doc.createElementNS(MATHML_NS, tag);
   const mo = (text: string, fence: boolean): Element => {
@@ -314,6 +319,7 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
         const mrow = el('mrow');
         const name = el('mi');
         name.textContent = fn.name;
+        fnHeads.set(name, path);
         mrow.appendChild(name);
         const open = mo('(', true);
         fenceGlyphs.set(open, { path, side: 'open' });
@@ -466,5 +472,5 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
     }
   }
 
-  return { math, uidByPath, pathByUid, elementByPath, extents, placeholders, placeholderByCaret, separators, separatorBySeam, bareAnchors, subLabels, fenceGlyphs, fencesMissingClose };
+  return { math, uidByPath, pathByUid, elementByPath, extents, placeholders, placeholderByCaret, separators, separatorBySeam, bareAnchors, subLabels, fenceGlyphs, fencesMissingClose, fnHeads };
 }

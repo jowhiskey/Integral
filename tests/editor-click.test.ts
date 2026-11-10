@@ -70,20 +70,22 @@ describe('click mapping: args row (a+b+c)', () => {
   };
   const mk = () => fixture(env, layout);
 
-  it('leaf left/right half → the row seam directly before/after the cell', () => {
+  it('leaf clicks resolve character-wise (C1 nearest-edge, S-058/S-060): the nearest character edge of the token, not the row seam', () => {
+    // 4b-2 re-pin: symbols are text-like tokens (N1) — a click at the left/right
+    // half of a single-char token lands at its offset 0 / len, not at a seam.
     const f = mk();
-    click(f.el('[1]'), 17); // fraction 0.2 → left half of b (cell 1)
-    expect(f.controller.getState().caret).toEqual(row(1));
-    click(f.el('[1]'), 24); // fraction 0.9 → right half
-    expect(f.controller.getState().caret).toEqual(row(2));
-    click(f.el('[0]'), 4); // fraction 0.4 → left half
-    expect(f.controller.getState().caret).toEqual(row(0));
-    click(f.el('[0]'), 9); // fraction 0.9 → right half
-    expect(f.controller.getState().caret).toEqual(row(1));
-    click(f.el('[2]'), 31);
-    expect(f.controller.getState().caret).toEqual(row(2));
-    click(f.el('[2]'), 34);
-    expect(f.controller.getState().caret).toEqual(row(3));
+    click(f.el('[1]'), 17); // fraction 0.2 of b (len 1) → offset 0
+    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: [1], index: 0 });
+    click(f.el('[1]'), 24); // fraction 0.9 → offset 1
+    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: [1], index: 1 });
+    click(f.el('[0]'), 4); // fraction 0.4 → offset 0
+    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: [0], index: 0 });
+    click(f.el('[0]'), 9); // fraction 0.9 → offset 1
+    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: [0], index: 1 });
+    click(f.el('[2]'), 31); // fraction 0.2 → offset 0
+    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: [2], index: 0 });
+    click(f.el('[2]'), 34); // fraction 0.8 → offset 1
+    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: [2], index: 1 });
   });
 
   it('separator glyph click → the seam it sits on', () => {
@@ -137,14 +139,14 @@ describe('click mapping: fraction with null num, filled den', () => {
     expect(f.controller.getState().caret).toEqual({ kind: 'node', path: [], side: 'right' });
   });
 
-  it('placeholder click → its slot caret; leaf in a slot → node caret on the leaf (both halves)', () => {
+  it('placeholder click → its slot caret (C2); a leaf in a slot resolves character-wise too (C1 — supersedes the session-3 slot node-caret pin)', () => {
     const f = fixture(env, layout, caretLayout);
     click(f.placeholder(numSlotCaret), 3);
     expect(f.controller.getState().caret).toEqual(numSlotCaret);
-    click(f.el('["den"]'), 11);
-    expect(f.controller.getState().caret).toEqual(node(['den']));
-    click(f.el('["den"]'), 19);
-    expect(f.controller.getState().caret).toEqual(node(['den']));
+    click(f.el('["den"]'), 11); // fraction 0.1 of "2" (len 1) → offset 0
+    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: ['den'], index: 0 });
+    click(f.el('["den"]'), 19); // fraction 0.9 → offset 1 (the slot content's end, S-055)
+    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: ['den'], index: 1 });
   });
 });
 
@@ -187,19 +189,20 @@ describe('click mapping: empty row cell, empty formula, unit, group nesting', ()
     expect(f.controller.getState().log.length).toBe(0);
   });
 
-  it('unit: value click → the value node; unit-symbol click → the value station (both halves)', () => {
+  it('unit: the value clicks character-wise (C1); the unit’s own element IS the upright label — its clicks resolve character-wise in the label (C1/S-104)', () => {
+    // 4b-2 re-pin: the unit's own uid element is the label mi, so a click on it
+    // addresses the label in-token (not the value's left entry the container
+    // dive produced before).
     const env = { v: 1, root: { type: 'unit', value: num(50), unit: 'mm' } };
     const f = fixture(env, {
       '[]': { left: 24, top: 0, width: 6, height: 10 },
       '["value"]': { left: 0, top: 0, width: 10, height: 10 },
     });
-    click(f.el('["value"]'), 5);
-    expect(f.controller.getState().caret).toEqual(node(['value']));
-    click(f.el('[]'), 25); // left half of the unit label
-    // 4a re-pin (OA-visual-trumps): the unit's left entry is the value's offset 0
-    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: ['value'], index: 0 });
-    click(f.el('[]'), 29); // right half — the unit's right side is its LABEL (S-104):
-    // 4a re-pin (OA-token-end): the label's in-token END is the unit's right end
+    click(f.el('["value"]'), 5); // fraction 0.5 of "50" (len 2) → offset 1, between 5 and 0
+    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: ['value'], index: 1 });
+    click(f.el('[]'), 25); // fraction ~0.17 of the label "mm" → label offset 0
+    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: [], index: 0 });
+    click(f.el('[]'), 29); // fraction ~0.83 → the label's in-token END is the unit's right end (OA-token-end)
     expect(f.controller.getState().caret).toEqual({ kind: 'token', path: [], index: 2 });
   });
 
@@ -214,8 +217,8 @@ describe('click mapping: empty row cell, empty formula, unit, group nesting', ()
       '["child",0]': { left: 2, top: 0, width: 10, height: 10 },
       '["child",1]': { left: 18, top: 0, width: 10, height: 10 },
     });
-    click(f.el('["child",1]'), 19); // left half of b (cell 1 of the child row)
-    expect(f.controller.getState().caret).toEqual(row(1, ['child']));
+    click(f.el('["child",1]'), 19); // fraction 0.1 of b (len 1) → its offset 0 (C1 character-wise, 4b-2 re-pin)
+    expect(f.controller.getState().caret).toEqual({ kind: 'token', path: ['child', 1], index: 0 });
   });
 });
 
@@ -240,9 +243,11 @@ describe('caretFromHit + hitFromMouseEvent: the pure resolver and the event adap
     expect(caretFromHit(env, { kind: 'none', fraction: 0.6 })).toEqual({ kind: 'token', path: [1], index: 1 });
     expect(caretFromHit(env, { kind: 'none', fraction: 0.96 })).toEqual(row(2));
 
-    expect(caretFromHit({ v: 1, root: num(7) }, { kind: 'node', path: [], fraction: 0.2 })).toEqual(node([]));
-    // an unresolvable node path falls back to the root caret
-    expect(caretFromHit(env, { kind: 'node', path: [9], fraction: 0.2 })).toEqual(node([]));
+    // 4b-2 re-pin (C1): a root num leaf clicks character-wise → its offset 0
+    expect(caretFromHit({ v: 1, root: num(7) }, { kind: 'node', path: [], fraction: 0.2 })).toEqual({ kind: 'token', path: [], index: 0 });
+    // an unresolvable node path falls back to the root's end station (4b-2: the
+    // entryStation fallback, not a bare node caret)
+    expect(caretFromHit(env, { kind: 'node', path: [9], fraction: 0.2 })).toEqual({ kind: 'token', path: [1], index: 1 });
   });
 
   it('hitFromMouseEvent maps a raw event through the rendered maps', () => {

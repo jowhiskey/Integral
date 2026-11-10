@@ -1279,6 +1279,78 @@ export const CASES: readonly CatalogCase[] = [
     envelope: env(op('add', unit(num(50), 'mm'), sym('x'))),
     caret: tk([0, 'value'], 2), // 4a reseed
   },
+  {
+    id: 'K-07',
+    rules: ['C3', 'S-056', 'C1'],
+    category: 'K',
+    label: 'x + 12/34 + y — fraction bar clicks',
+    stress: 'Click the mfrac bar at fractions 0.3 / 0.5 / 0.7 of its extent; also click the numerator and denominator glyphs mid-token.',
+    envelope: env(op('add', sym('x'), frac(num(12), num(34)), sym('y'))),
+    caret: { kind: 'node', path: [1], side: 'right' }, // 4b-1 flank station
+  },
+  {
+    id: 'K-08',
+    rules: ['C4', 'S-054', 'OA-fence-flank'],
+    category: 'K',
+    label: 'x + sin(a) + y — function head and fence glyph clicks',
+    stress: 'Click the sin name mi; click the ( and ) fence glyphs at both halves of each glyph; click the fn mrow’s left edge zone.',
+    envelope: env(op('add', sym('x'), fn('sin', sym('a')), sym('y'))),
+    caret: tk([1, 0], 1),
+  },
+  {
+    id: 'K-09',
+    rules: ['C1', 'S-058', 'S-060'],
+    category: 'K',
+    label: '1234 + ab — number and symbol glyph clicks',
+    stress: 'Click the 1234 mn and the ab mi at fractions 0.1 / 0.5 / 0.9 of their extents.',
+    envelope: env(op('add', num(1234), sym('ab'))),
+    caret: tk([0], 4), // 4a reseed (OA-token-end)
+  },
+  {
+    id: 'K-10',
+    rules: ['C1', 'S-104', 'OA-sub-label'],
+    category: 'K',
+    label: '50 mm + b_max — unit label and sub label clicks',
+    stress: 'Click the upright mm label at fractions 0.25 / 0.75 of its extent; click the 50 value glyph; click the subscript’s base and script mi at fractions.',
+    envelope: env(op('add', unit(num(50), 'mm'), sub('b', 'max'))),
+    caret: tk([0], 2), // the unit label's in-token end
+  },
+  {
+    id: 'K-11',
+    rules: ['C2', 'S-057', 'S-023'],
+    category: 'K',
+    label: 'sin(□) — the first argument’s □ click',
+    stress: 'Click the □ placeholder in the first argument; also click the sin name and the parens.',
+    envelope: env(fn('sin', null)),
+    caret: rw([], 0),
+  },
+  {
+    id: 'K-12',
+    rules: ['C2', 'S-057', 'T9'],
+    category: 'K',
+    label: 'ⁿ√5 with an empty □ index — the index □ click',
+    stress: 'Click the □ index placeholder; click the radicand glyph; arrows between index and radicand.',
+    envelope: env({ type: 'root', radicand: num(5), mroot: true }),
+    caret: sl([], 'index'),
+  },
+  {
+    id: 'K-13',
+    rules: ['C4', 'S-097', 'OA-fence-flank', 'C1'],
+    category: 'K',
+    label: '(x) + ) — group fences and the dangling close glyph',
+    stress: 'Click the group’s ( and ) at both halves of each; click the dangling ) glyph at fractions 0.2 / 0.8; click the x inside the group.',
+    envelope: env(op('add', group(sym('x')), fence())),
+    caret: rw([], 2),
+  },
+  {
+    id: 'K-14',
+    rules: ['C5', 'S-061'],
+    category: 'K',
+    label: '1/2 + y — background snap clicks',
+    stress: 'Click the math background at fractions 0.04 / 0.5 / 0.96 of the math extent.',
+    envelope: env(op('add', frac(num(1), num(2)), sym('y'))),
+    caret: rw([], 2),
+  },
 
   // ——— U: undo/redo walk-backs ———
   {
