@@ -157,19 +157,27 @@ describe('the ruled chains through the keyboard', () => {
     expect(controller.getState().log.length).toBe(2);
   });
 
-  it('Delete at an operator gap removes the binding glyph (OA-del-glyph, 2026-11-10); Ctrl+Delete then takes the whole right-adjacent token', () => {
+  it('Delete + Ctrl+Delete act forward at gaps (x + |abc → x + bc; the Ctrl mirror takes the whole token); OA-del-glyph: Del in a pending cell removes the rightward dangling glyph', () => {
     const env = { v: 1, root: op('add', sym('x'), sym('abc')) };
     const { controller, container } = make(env);
     controller.placeCaret(rowc([], 1));
     container.focus();
     press(container, 'Delete');
-    // OA-del-glyph: the `+` glyph deletes, the cells bond into the implicit pair
-    expect(j(controller.getEnvelope().root)).toBe(j({ type: 'op', op: 'multiply', args: [sym('x'), sym('abc')], implicit: true }));
-    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: [1], index: 0 }));
-    press(container, 'Delete', { ctrl: true });
-    expect(j(controller.getEnvelope().root)).toBe(j({ type: 'op', op: 'multiply', args: [sym('x'), null], implicit: true }));
+    expect(j(controller.getEnvelope().root)).toBe(j(op('add', sym('x'), sym('bc'))));
     expect(j(controller.getState().caret)).toBe(j(rowc([], 1)));
+    press(container, 'Delete', { ctrl: true });
+    expect(j(controller.getEnvelope().root)).toBe(j(op('add', sym('x'), null)));
     expect(controller.getState().log.length).toBe(2);
+    // the owner's stall case: |x+1/2 → DEL → |+1/2 → DEL → |1/2 (OA-del-glyph, corrected reading)
+    const env2 = { v: 1, root: op('add', sym('x'), frac(num(1), num(2))) };
+    const f2 = make(env2);
+    f2.controller.placeCaret(rowc([], 0));
+    f2.container.focus();
+    press(f2.container, 'Delete'); // removes x → |+1/2 (caret in the pending cell)
+    expect(j(f2.controller.getEnvelope().root)).toBe(j(op('add', null, frac(num(1), num(2)))));
+    expect(j(f2.controller.getState().caret)).toBe(j(rowc([], 0)));
+    press(f2.container, 'Delete'); // removes the dangling + → the frac unwraps to the root
+    expect(j(f2.controller.getEnvelope().root)).toBe(j(frac(num(1), num(2))));
   });
 
   it('both keys are silent no-ops on the empty formula (S-078)', () => {

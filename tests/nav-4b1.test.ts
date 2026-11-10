@@ -364,7 +364,7 @@ describe('4b-1 — I-19/20/21: the trapped-carets probes, pinned', () => {
     // OA-unit-single-seam: the seam is the label's offset 0; ← from it steps to the value's last INTERIOR offset (the value's end stop merged into the seam — no double step)
     expect(walk(bare, tok([], 0), 'left')).toEqual(tok(['value'], 1));
     expect(walk(bare, tok(['value'], 1), 'right')).toEqual(tok([], 0)); // → crosses into the label at the seam
-    expect(walk(bare, tok(['value'], 2), 'right')).toEqual(tok([], 0)); // a click-placed value end also lands on the seam
+    expect(walk(bare, tok(['value'], 2), 'right')).toEqual(tok([], 1)); // the value end (the seam's twin) skips past the seam to label@1 — no press rests on the seam twice
     expect(walk(bare, tok([], 2), 'right')).toBe(null); // N3 at the right end
     expect(walk(bare, tok(['value'], 0), 'left')).toBe(null); // N3 at the left end
     const midRow = { type: 'op', op: 'add', args: [sym('a'), { type: 'unit', value: num(50), unit: 'mm' }, sym('b')] };

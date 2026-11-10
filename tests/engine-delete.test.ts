@@ -82,28 +82,34 @@ describe('Forward Delete — the D1 mirror in tokens (the char right of the care
     state = forwardDelete(at(num(5, true), tokc([], 1)));
     expect(j(envelopeOf(state).root)).toBe(j(num(5)));
     legal(state);
-    // OA-del-glyph (ruled 2026-11-10): at an operator gap Del removes the
-    // binding glyph — the cells bond into their implicit pair (the BS
-    // glyph-delete mirror), caret at the bonded right operand's left entry
+    // a single character right of a gap: the node dies (the freed pending cell)
+    // (at a FILLED seam the glyph stands LEFT of the caret — that is
+    // Backspace's territory; Del keeps the D1 mirror here)
     state = forwardDelete(at(op('add', sym('x'), sym('y')), rowc([], 1)));
-    expect(j(envelopeOf(state).root)).toBe(j({ type: 'op', op: 'multiply', args: [sym('x'), sym('y')], implicit: true }));
-    expect(state.caret).toEqual(tokc([1], 0));
+    expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('x'), null)));
+    expect(state.caret).toEqual(rowc([], 1));
     legal(state);
   });
 });
 
 describe("Forward Delete at the gap (the D2 mirror: the right-adjacent token FIRST character / the D3 whole)", () => {
-  it('x + |abc at the operator gap → the glyph goes, x·abc bonds (OA-del-glyph); on a glyph-less seam the first char goes (D1 mirror)', () => {
-    // OA-del-glyph: the binding glyph deletes (text-editor parity), the pair bonds
+  it('x + |abc → x + bc (D1 mirror at a filled seam); OA-del-glyph fires only LEFT-of-glyph — in a pending cell', () => {
     const state = forwardDelete(at(op('add', sym('x'), sym('abc')), rowc([], 1)));
-    expect(j(envelopeOf(state).root)).toBe(j({ type: 'op', op: 'multiply', args: [sym('x'), sym('abc')], implicit: true }));
-    expect(state.caret).toEqual(tokc([1], 0));
+    expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('x'), sym('bc'))));
+    expect(state.caret).toEqual(rowc([], 1));
     legal(state);
     // the D1 mirror still holds on a glyph-less (implicit) seam: first char right of the station
     const gl = forwardDelete(at({ type: 'op', op: 'multiply', args: [sym('x'), sym('abc')], implicit: true }, rowc([], 1)));
     expect(j(envelopeOf(gl).root)).toBe(j({ type: 'op', op: 'multiply', args: [sym('x'), sym('bc')], implicit: true }));
     expect(gl.caret).toEqual(rowc([], 1));
     legal(gl);
+    // OA-del-glyph (corrected reading, owner fix round): the caret IN a pending
+    // null cell faces the dangling glyph to its RIGHT — Del removes it:
+    // `|x+1/2` → DEL → `|+1/2` → DEL → `|1/2`
+    const stall = forwardDelete(at(op('add', null, frac(num(1), num(2))), rowc([], 0)));
+    expect(j(envelopeOf(stall).root)).toBe(j(frac(num(1), num(2)))); // the + and its pending cell splice away
+    expect(stall.caret).toEqual(tokc(['num'], 0));
+    legal(stall);
   });
 
   it('the node caret on a leaf is its right edge: the FORWARD gap follows (a|bc → a|c through the pair)', () => {
@@ -149,27 +155,32 @@ describe('Forward Delete — the NAMED silent no-op defaults (unruled mirrors, t
     expect(d.kind).toBe('noop');
   });
 
-  it('Del at the gap facing a fenceless structure: the binding glyph goes (OA-del-glyph supersedes the parked no-op): x·frac bonds', () => {
+  it('Del at the seam facing a fenceless structure (x + |frac): silent no-op — the glyph is LEFT of the caret (BS territory)', () => {
     const seed = op('add', sym('x'), frac(num(1), num(2)));
     const d = decideDelete(envOf(seed), rowc([], 1));
-    expect(d.kind).toBe('glyph');
+    expect(d.kind).toBe('noop');
     const state = forwardDelete(at(seed, rowc([], 1)));
-    expect(j(envelopeOf(state).root)).toBe(j({ type: 'op', op: 'multiply', args: [sym('x'), frac(num(1), num(2))], implicit: true }));
-    expect(state.caret).toEqual(tokc([1, 'num'], 0));
-    expect(state.log.length).toBe(1);
-    legal(state);
+    expect(j(envelopeOf(state).root)).toBe(j(seed));
+    expect(state.log.length).toBe(0);
   });
 
-  it('Del at the gap facing a fenced container / a nested row: the binding glyph goes (OA-del-glyph — the parked no-ops are superseded)', () => {
-    expect(decideDelete(envOf(op('add', sym('x'), group(op('add', sym('a'), sym('b'))))), rowc([], 1)).kind).toBe('glyph');
-    expect(decideDelete(envOf(op('add', sym('x'), fn('sin', [sym('a')]))), rowc([], 1)).kind).toBe('glyph');
-    expect(decideDelete(envOf(op('add', sym('x'), op('multiply', sym('a'), sym('b')))), rowc([], 1)).kind).toBe('glyph');
+  it('Del at the seam facing a fenced container / a nested row: named no-ops (unchanged — the glyph is left of the caret)', () => {
+    expect(decideDelete(envOf(op('add', sym('x'), group(op('add', sym('a'), sym('b'))))), rowc([], 1)).kind).toBe('noop');
+    expect(decideDelete(envOf(op('add', sym('x'), fn('sin', [sym('a')]))), rowc([], 1)).kind).toBe('noop');
+    expect(decideDelete(envOf(op('add', sym('x'), op('multiply', sym('a'), sym('b')))), rowc([], 1)).kind).toBe('noop');
   });
 
-  it('Del at a dangling operator glyph / a pending cell / the row end: named no-ops (the S-066 back-mirror is unruled)', () => {
+  it('OA-del-glyph (corrected reading): Del IN a non-trailing pending cell removes the dangling glyph to its right; trailing cell / row end stay no-ops', () => {
+    // `|+1/2` caret in the leading pending cell → the + goes, the frac unwraps
+    expect(decideDelete(envOf(op('add', null, frac(num(1), num(2)))), rowc([], 0)).kind).toBe('glyph');
+    // `x+|∅|y`-class middle pending cell → the following glyph goes
+    expect(decideDelete(envOf(op('add', sym('x'), null, sym('y'))), rowc([], 1)).kind).toBe('glyph');
+    // `+|` all-null template, caret in the FIRST pending cell → the row dies → empty formula
+    expect(decideDelete(envOf(op('add', null, null)), rowc([], 0)).kind).toBe('glyph');
+    // the TRAILING pending cell (`x+|`) has nothing right of the caret → no-op; the row end too
     expect(decideDelete(envOf(op('add', sym('x'), null)), rowc([], 1)).kind).toBe('noop');
-    expect(decideDelete(envOf(op('add', sym('x'), sym('y'))), rowc([], 2)).kind).toBe('noop');
     expect(decideDelete(envOf(op('add', null, null)), rowc([], 1)).kind).toBe('noop');
+    expect(decideDelete(envOf(op('add', sym('x'), sym('y'))), rowc([], 2)).kind).toBe('noop');
   });
 
   it('Del on the empty formula: the D4 no-op (S-078 covers both keys)', () => {

@@ -843,16 +843,20 @@ export function resolveMove(
       if (!isTokenNode(node)) return null;
       const len = tokenText(node).length;
       if (!Number.isInteger(caret.index) || caret.index < 0 || caret.index > len) return null;
-      // OA-unit-single-seam (ruled live 2026-11-10): walking right out of a
-      // unit's VALUE channel at its last interior offset crosses directly
-      // into the label's offset 0 — the value's own end stop merges with the
-      // label start into ONE seam (`50|mm`), no separate value-end rest.
+      // OA-unit-single-seam (ruled live 2026-11-10): the value/label boundary
+      // is ONE seam (`50|mm`, the label's offset 0). Walking right out of a
+      // unit's VALUE channel: from the last interior offset → the seam; from
+      // the value's END (the seam's click-placed twin, e.g. right after a
+      // typed digit grew the value) → straight past the seam to the label's
+      // offset 1, so no press rests on the seam twice.
       if (dir === 'right') {
         const ref = refOfPath(caret.path);
-        if (ref.at === 'slot' && ref.slot === 'value' && caret.index >= len - 1) {
+        if (ref.at === 'slot' && ref.slot === 'value') {
           const owner = nodeAt(env, ref.path);
-          if (owner !== null && owner.type === 'unit' && tokenText(owner).length > 0) {
-            return { kind: 'token', path: ref.path, index: 0 };
+          const llen = owner !== null && owner.type === 'unit' ? tokenText(owner).length : 0;
+          if (owner !== null && owner.type === 'unit' && llen > 0) {
+            if (caret.index === len) return { kind: 'token', path: ref.path, index: Math.min(1, llen) };
+            if (caret.index === len - 1) return { kind: 'token', path: ref.path, index: 0 };
           }
         }
       }

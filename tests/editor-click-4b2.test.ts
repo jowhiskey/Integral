@@ -302,19 +302,23 @@ describe('4b-2 — C3: the fraction bar maps 50/50 to the gaps flanking the WHOL
 });
 
 describe('4b-2 — C4: the function head and the fence glyphs (S-054)', () => {
-  it('clicking the head’s name area → the caret right after the open paren (the first argument start)', () => {
+  it('K-19 overwrite: `sin(` is ONE block split in the middle — left half → |sin( (the left flank), right half → sin(| (the first argument start)', () => {
+    // head block: name [15,22) ∪ open paren [22,26) = [15,26)
     const f = midFn();
-    clickF(f.headEl([1]), 0.5);
-    expect(f.controller.getState().caret).toEqual(tok([1, 0], 0));
-    // empty first argument: the same click lands at the □ row caret (C2)
+    clickF(f.headEl([1]), 0.5); // x=18.5 → block fraction 3.5/11 < 0.5 → LEFT half of the block
+    expect(f.controller.getState().caret).toEqual(node([1], 'left')); // |sin(
+    clickF(f.headEl([1]), 0.95); // x=21.65 → block fraction 6.65/11 ≥ 0.5 → RIGHT half
+    expect(f.controller.getState().caret).toEqual(tok([1, 0], 0)); // sin(| — the first argument start
+    // empty first argument: the right half lands at the □ row caret (C2)
     const g = fixture(
       { v: 1, root: { type: 'op', op: 'add', args: [sym('x'), { type: 'fn', name: 'sin', args: [null] }, sym('y')] } },
       MID_FN_LAYOUT,
       { [caretKey(row(0, [1]))]: { left: 26, top: 0, width: 6, height: 10 } },
     );
     g.stub.set(g.headEl([1]), { left: 15, top: 0, width: 7, height: 10 });
-    clickF(g.headEl([1]), 0.5);
-    expect(g.controller.getState().caret).toEqual(row(0, [1]));
+    g.stub.set(g.fenceEl([1], 'open'), { left: 22, top: 0, width: 4, height: 10 });
+    clickF(g.headEl([1]), 0.95); // block fraction ≥ 0.5
+    expect(g.controller.getState().caret).toEqual(row(0, [1])); // sin(|□)
   });
 
   it('the head’s left edge → the gap before the head (the left flank mid-row)', () => {
@@ -325,9 +329,11 @@ describe('4b-2 — C4: the function head and the fence glyphs (S-054)', () => {
 
   it('fence glyph clicks → their nearest legal station (the flanks exist on both sides, OA-fence-flank)', () => {
     const f = midFn();
-    clickF(f.fenceEl([1], 'open'), 0.2); // left half of `(` → left-of-`(` station
-    expect(f.controller.getState().caret).toEqual(node([1], 'left'));
-    clickF(f.fenceEl([1], 'open'), 0.8); // right half of `(` → after the paren = first arg start
+    // K-19: the open paren is the RIGHT part of the `sin(` block — both its
+    // halves measure ≥ 0.5 within the block → sin(| (the first argument start)
+    clickF(f.fenceEl([1], 'open'), 0.2);
+    expect(f.controller.getState().caret).toEqual(tok([1, 0], 0));
+    clickF(f.fenceEl([1], 'open'), 0.8);
     expect(f.controller.getState().caret).toEqual(tok([1, 0], 0));
     clickF(f.fenceEl([1], 'close'), 0.2); // left half of `)` → the content end (before the paren)
     expect(f.controller.getState().caret).toEqual(tok([1, 0], 1));
@@ -466,7 +472,7 @@ describe('4b-2 — the pure resolver/adapter pins for the new hit kinds', () => 
 
     // the fn name mi: no uid → fnHead hit
     const head = [...rendered.fnHeads.entries()].find(([_, p]) => pathKey(p) === '[1]')![0];
-    expect(hitFromMouseEvent(fake(head, 5), rendered)).toEqual({ kind: 'fnHead', path: [1] });
+    expect(hitFromMouseEvent(fake(head, 5), rendered)).toEqual({ kind: 'fnHead', path: [1], fraction: 0.5 }); // zero-width stubs → the defined 0.5 (K-19 block fraction)
     // the open paren mo: no uid → fence hit
     const open = [...rendered.fenceGlyphs.entries()].find(([_, g]) => pathKey(g.path) === '[1]' && g.side === 'open')![0];
     const openHit = hitFromMouseEvent(fake(open, 5), rendered) as Extract<ReturnType<typeof hitFromMouseEvent>, { kind: 'fence' }>;

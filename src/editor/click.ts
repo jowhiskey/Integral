@@ -71,7 +71,7 @@ export type ClickHit =
   | { readonly kind: 'placeholder'; readonly caret: Caret }
   | { readonly kind: 'separator'; readonly path: Path; readonly index: number; readonly fraction: number }
   | { readonly kind: 'fence'; readonly path: Path; readonly side: 'open' | 'close'; readonly fraction: number }
-  | { readonly kind: 'fnHead'; readonly path: Path }
+  | { readonly kind: 'fnHead'; readonly path: Path; readonly fraction: number }
   | { readonly kind: 'subLabel'; readonly path: Path; readonly label: SubLabel; readonly fraction: number }
   | { readonly kind: 'node'; readonly path: Path; readonly fraction: number };
 
@@ -116,7 +116,10 @@ export function hitFromMouseEvent(event: MouseEvent, rendered: RenderedMath): Cl
   const fence = rendered.fenceGlyphs.get(target);
   const ownPath = target.id !== '' ? rendered.pathByUid.get(target.id) : undefined;
   if (fence !== undefined && (ownPath === undefined || pathKey(ownPath) !== pathKey(fence.path))) {
-    return { kind: 'fence', path: fence.path, side: fence.side, fraction: fractionOf(event.clientX, target) };
+    // K-19: an fn's open paren is the right part of the `name(` block — its
+    // click fraction is measured within the whole block, not the glyph
+    const blockFraction = fence.side === 'open' ? fnHeadBlockFraction(event.clientX, fence.path, rendered) : null;
+    return { kind: 'fence', path: fence.path, side: fence.side, fraction: blockFraction ?? fractionOf(event.clientX, target) };
   }
   // a node's own uid element hit directly (leaves, containers, the unit's label
   // mi, a dangling fence token's mo): the fraction is within that element
@@ -124,7 +127,9 @@ export function hitFromMouseEvent(event: MouseEvent, rendered: RenderedMath): Cl
     return { kind: 'node', path: ownPath, fraction: fractionOf(event.clientX, target) };
   }
   const head = rendered.fnHeads.get(target);
-  if (head !== undefined) return { kind: 'fnHead', path: head };
+  if (head !== undefined) {
+    return { kind: 'fnHead', path: head, fraction: fnHeadBlockFraction(event.clientX, head, rendered) ?? fractionOf(event.clientX, target) };
+  }
   for (const [key, labels] of rendered.subLabels) {
     if (labels.base === target) {
       return { kind: 'subLabel', path: JSON.parse(key) as Path, label: 'base', fraction: fractionOf(event.clientX, target) };
@@ -144,6 +149,25 @@ export function hitFromMouseEvent(event: MouseEvent, rendered: RenderedMath): Cl
   // rendered element (K-08 fix) — the pure none-hit stays as the fallback when
   // nothing is rendered (the empty formula).
   return nearestBackgroundHit(event.clientX, rendered) ?? { kind: 'none', fraction: fractionOf(event.clientX, rendered.math) };
+}
+
+/** The click fraction within a function's whole `name(` head block (the name
+ *  <mi> ∪ the open-paren <mo>): K-19's overwrite (owner, fix round
+ *  2026-11-10) — `sin(` is ONE block split in the MIDDLE for click handling:
+ *  left half → `|sin(` (before the head), right half → `sin(|` (right after
+ *  the open paren). Null when `path` is not an fn (groups keep per-glyph
+ *  halves). */
+function fnHeadBlockFraction(clientX: number, path: Path, rendered: RenderedMath): number | null {
+  let name: Element | undefined;
+  let open: Element | undefined;
+  for (const [el, p] of rendered.fnHeads) if (pathKey(p) === pathKey(path)) name = el;
+  for (const [el, f] of rendered.fenceGlyphs) if (f.side === 'open' && pathKey(f.path) === pathKey(path)) open = el;
+  if (name === undefined || open === undefined) return null;
+  const a = name.getBoundingClientRect();
+  const b = open.getBoundingClientRect();
+  const left = Math.min(a.left, b.left);
+  const right = Math.max(a.right, b.right);
+  return right > left ? clamp01((clientX - left) / (right - left)) : 0.5;
 }
 
 /** The nearest rendered element to a background click's x — deepest containing
@@ -182,7 +206,7 @@ function nearestBackgroundHit(clientX: number, rendered: RenderedMath): ClickHit
   }
   for (const [el, path] of rendered.fnHeads) {
     const r = el.getBoundingClientRect();
-    consider(r.left, r.right, el, () => ({ kind: 'fnHead', path }));
+    consider(r.left, r.right, el, (f) => ({ kind: 'fnHead', path, fraction: fnHeadBlockFraction(clientX, path, rendered) ?? f }));
   }
   for (const [key, labels] of rendered.subLabels) {
     const path = JSON.parse(key) as Path;
@@ -253,11 +277,19 @@ export function caretFromHit(env: Envelope, hit: ClickHit, registry: NavRegistry
       }
       break;
     }
-    case 'fnHead':
-      // C4/S-054: the head's name area → right after the open paren (the first
-      // argument's start — the □ row caret when the first argument is empty)
-      caret = entryStation(env, hit.path, 'left', registry) ?? { kind: 'node', path: hit.path };
+    case 'fnHead': {
+      // K-19 overwrite (owner, fix round 2026-11-10; supersedes C4's flat
+      // "name → arg start"): `sin(` is ONE block split in the middle — the
+      // block's LEFT half → `|sin(` (before the head, the left flank), the
+      // RIGHT half → `sin(|` (right after the open paren = the first
+      // argument's start). The fraction is measured within the whole block.
+      const before = edgeStation(env, hit.path, 'left');
+      const after = entryStation(env, hit.path, 'left', registry) ?? { kind: 'node', path: hit.path };
+      const near = hit.fraction < 0.5 ? before : after;
+      const far = hit.fraction < 0.5 ? after : before;
+      caret = firstResolving(env, [near, far]) ?? fallback;
       break;
+    }
     case 'subLabel': {
       // C1 (T9 sub labels): character-wise within the clicked label
       const node = nodeAt(env, hit.path);

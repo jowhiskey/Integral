@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyOp,
   backspace,
+  caretResolvesIn,
   decideBackspace,
   decideDelete,
   envelopeOf,
@@ -36,45 +37,41 @@ const at = (root: unknown, caret: Caret): EditingState => ({ ...initSession({ v:
 const envMoved = (root: unknown, caret: Caret, dir: NavDir): Caret | null => resolveMove(envRoot(root), caret, dir);
 const imp = (a: unknown, b: unknown) => ({ type: 'op', op: 'multiply', args: [a, b], implicit: true });
 
-describe('cleanup — OA-del-glyph (ruled 2026-11-10): forward Delete at an operator gap removes the binding glyph', () => {
-  it('x+|y + Del → the pair x·y, caret at y@0 (the BS glyph-delete mirror)', () => {
-    const root = op('add', sym('x'), sym('y'));
-    const d = decideDelete(envRoot(root), rowc([], 1));
-    expect(d.kind).toBe('glyph'); // OA-del-glyph
-    const s = forwardDelete(at(root, rowc([], 1)));
-    expect(j(envelopeOf(s).root)).toBe(j(imp(sym('x'), sym('y'))));
-    expect(s.caret).toEqual(tok([1], 0));
-    expect(s.log.length).toBe(1);
-  });
-
-  it('the M-15 #2 stall case: x + |1/2 + y — Del at the seam before the fraction removes the first `+`', () => {
-    const root = op('add', sym('x'), frac(num(1), num(2)), sym('y'));
-    const d = decideDelete(envRoot(root), rowc([], 1));
+describe('cleanup — OA-del-glyph (ruled 2026-11-10; corrected reading after the owner’s fix round: Delete works RIGHTWARD, Backspace leftward)', () => {
+  it('the owner’s stall case: |x+1/2 → DEL → |+1/2 → DEL → |1/2 — Del IN the pending cell removes the dangling glyph to its right', () => {
+    let s = at(op('add', sym('x'), frac(num(1), num(2))), rowc([], 0));
+    s = forwardDelete(s); // removes x → [null, frac], caret row([],0)
+    expect(j(envelopeOf(s).root)).toBe(j(op('add', null, frac(num(1), num(2)))));
+    expect(s.caret).toEqual(rowc([], 0));
+    const d = decideDelete(envRoot(JSON.parse(j(envelopeOf(s).root))), s.caret);
     expect(d.kind).toBe('glyph'); // OA-del-glyph — no longer the parked no-op
-    const s = forwardDelete(at(root, rowc([], 1)));
-    expect(j(envelopeOf(s).root)).toBe(j(op('add', imp(sym('x'), frac(num(1), num(2))), sym('y'))));
-    expect(s.caret).toEqual(tok([0, 1, 'num'], 0));
+    s = forwardDelete(s); // the + and its pending cell splice away → the frac unwraps
+    expect(j(envelopeOf(s).root)).toBe(j(frac(num(1), num(2))));
+    expect(s.caret).toEqual(tok(['num'], 0));
   });
 
-  it('Del at a mid-row structure’s RIGHT flank faces the glyph zone ahead (same rule)', () => {
+  it('the trailing pending cell (`x+|`) has nothing right of the caret → stays the named no-op (Del works rightward)', () => {
+    expect(decideDelete(envRoot(op('add', sym('x'), null)), rowc([], 1)).kind).toBe('noop');
+  });
+
+  it('Del at a mid-row structure’s RIGHT flank (LEFT of the glyph ahead) removes THAT glyph — rightward', () => {
     const root = op('add', sym('x'), frac(num(1), num(2)), sym('y'));
     const d = decideDelete(envRoot(root), node([1], 'right'));
-    expect(d.kind).toBe('glyph'); // OA-del-glyph — the parked flank no-op is superseded
+    expect(d.kind).toBe('glyph'); // OA-del-glyph
     const s = forwardDelete(at(root, node([1], 'right')));
     expect(j(envelopeOf(s).root)).toBe(j(op('add', sym('x'), imp(frac(num(1), num(2)), sym('y')))));
     expect(s.caret).toEqual(tok([1, 1], 0));
   });
 
-  it('the named no-ops stay: dangling glyph / pending cell / row end / □ slot; Ctrl+Del keeps the D3 whole-token mirror', () => {
-    expect(decideDelete(envRoot(op('add', sym('x'), null)), rowc([], 1)).kind).toBe('noop');
+  it('at a FILLED seam the glyph is LEFT of the caret — Del keeps the D1/D3 mirror (unchanged); row end / □ stay no-ops; Ctrl+Del keeps the whole-token mirror', () => {
+    const d = decideDelete(envRoot(op('add', sym('x'), sym('yz'))), rowc([], 1));
+    expect(d.kind).toBe('char'); // the right cell’s first char — NOT the glyph
     expect(decideDelete(envRoot(op('add', sym('x'), sym('y'))), rowc([], 2)).kind).toBe('noop');
     expect(decideDelete(envRoot(frac(null, num(2))), slot([], 'num')).kind).toBe('noop');
-    // ctrl at a binding-glyph seam: the D3 mirror (whole right token), not the glyph
-    const d = decideDelete(envRoot(op('add', sym('x'), sym('yz'))), rowc([], 1), { ctrl: true });
-    expect(d.kind).toBe('token-death');
-    // glyph-less (implicit) seam keeps the D1 first-char mirror
+    const dc = decideDelete(envRoot(op('add', sym('x'), sym('yz'))), rowc([], 1), { ctrl: true });
+    expect(dc.kind).toBe('token-death'); // Ctrl+Del: the whole right token
     const gl = forwardDelete(at(imp(sym('x'), sym('yz')), rowc([], 1)));
-    expect(j(envelopeOf(gl).root)).toBe(j(imp(sym('x'), sym('z'))));
+    expect(j(envelopeOf(gl).root)).toBe(j(imp(sym('x'), sym('z')))); // glyph-less seam: D1 first-char mirror
     expect(gl.caret).toEqual(rowc([], 1));
   });
 });
@@ -143,6 +140,7 @@ describe('cleanup — OA-unit-single-seam (ruled live 2026-11-10): one seam at 5
   it('the walk has ONE stop at the value/label boundary: |50 mm → 5|0 mm → 50|mm → 50 m|m → 50 mm|', () => {
     expect(envMoved(U, tok(['value'], 0), 'right')).toEqual(tok(['value'], 1));
     expect(envMoved(U, tok(['value'], 1), 'right')).toEqual(tok([], 0)); // OA-unit-single-seam: no value-end stop
+    expect(envMoved(U, tok(['value'], 2), 'right')).toEqual(tok([], 1)); // the value end (seam twin) skips to label@1 — the seam never rests twice
     expect(envMoved(U, tok([], 0), 'right')).toEqual(tok([], 1));
     expect(envMoved(U, tok([], 1), 'right')).toEqual(tok([], 2));
     expect(envMoved(U, tok([], 2), 'right')).toBe(null);
@@ -257,5 +255,17 @@ describe('cleanup — the mroot □-index flag-drop (K-12/K-17)', () => {
     const dv = typeToken(s2, { t: 'divide' });
     expect(j(envelopeOf(dv).root)).toBe(j({ type: 'root', radicand: num(5), index: { type: 'frac', num: null, den: null } }));
     expect(dv.caret).toEqual(slot(['index'], 'num'));
+  });
+
+  it('K-17 fix round: deleting the index content completely RESTORES the □ placeholder (and the caret); BS at the □ then deletes the whole root, leaving the radicand', () => {
+    // fill the index, then peel its only char — the □ comes back, the caret stays in the slot
+    let s = at({ type: 'root', radicand: num(5), index: num(3) }, tok(['index'], 1));
+    s = backspace(s);
+    expect(j(envelopeOf(s).root)).toBe(j({ type: 'root', radicand: num(5), mroot: true })); // placeholder restored (index null is emitted omitted under mroot — the pinned envelope shape)
+    expect(s.caret).toEqual(slot([], 'index')); // the caret does not vanish
+    expect(caretResolvesIn(envRoot(JSON.parse(j(envelopeOf(s).root))), s.caret)).toBe(true);
+    // BS at the restored □ deletes the whole root, the radicand promotes (D6 unwrap — already worked)
+    s = backspace(s);
+    expect(j(envelopeOf(s).root)).toBe(j(num(5)));
   });
 });

@@ -253,7 +253,8 @@ describe('S-104 — unit label token carets (N1 letter-wise positions)', () => {
     // crossing the glyph to 9.
     // OA-unit-single-seam: ← from the seam (label offset 0) → the value's last interior offset
     expect(resolveMove(env, { kind: 'token', path: [1], index: 0 }, 'left')).toEqual({ kind: 'token', path: [1, 'value'], index: 1 });
-    expect(resolveMove(env, { kind: 'token', path: [1, 'value'], index: 2 }, 'right')).toEqual({ kind: 'token', path: [1], index: 0 });
+    // the value's end (the seam's click-placed twin) skips past the seam to label@1
+    expect(resolveMove(env, { kind: 'token', path: [1, 'value'], index: 2 }, 'right')).toEqual({ kind: 'token', path: [1], index: 1 });
     expect(resolveMove(env, { kind: 'token', path: [1], index: 2 }, 'right')).toEqual({ kind: 'token', path: [2], index: 0 });
   });
 

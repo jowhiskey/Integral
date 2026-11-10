@@ -318,6 +318,22 @@ function unitStrip(env: Envelope, path: Path): BackspaceDecision {
  *  deletes it next), at a fixed slot the □, at the root the empty formula. */
 function tokenDeath(env: Envelope, path: Path, station?: Caret): BackspaceDecision {
   const ref = refOfPath(path);
+  if (ref.at === 'slot') {
+    const parent = nodeAt(env, ref.path);
+    // K-17 fix round: emptying an mroot's index slot RESTORES the □
+    // placeholder (index null + the mroot flag) — the slot caret keeps
+    // resolving and the □ renders again; a plain null index would silently
+    // turn the mroot into a square root and orphan the caret.
+    if (parent !== null && parent.type === 'root' && ref.slot === 'index' && slotValue(parent, 'index') !== null) {
+      const rebuilt = { ...(parent as unknown as Record<string, unknown>), index: null, mroot: true };
+      const to: Caret = { kind: 'slot', path: ref.path, slot: 'index' };
+      return {
+        kind: 'token-death',
+        ops: [{ op: 'place', node: rebuilt as NodeJson, at: replacePosOfRef(refOfPath(ref.path)), to }],
+        caret: to,
+      };
+    }
+  }
   if (ref.at !== 'cell') {
     return { kind: 'token-death', ops: [{ op: 'deleteAt', at: posOfRef(ref) }], caret: freedSpot(ref) };
   }
@@ -549,7 +565,7 @@ function glyphBond(env: Envelope, rowPath: Path, left: number): BackspaceDecisio
 /** D2/S-066 A: a dangling operator glyph deletes — its pending cell splices
  *  away; a one-cell remainder unwraps into that cell (caret at the promoted
  *  content's right side); nothing left kills the row. One op. */
-function glyphSplice(env: Envelope, rowPath: Path, nullIndex: number, station: Caret): BackspaceDecision {
+function glyphSplice(env: Envelope, rowPath: Path, nullIndex: number, station: Caret, facing: 'left' | 'right' = 'right'): BackspaceDecision {
   const row = nodeAt(env, rowPath) as NodeJson;
   const args = rowArgs(row);
   const ref = refOfPath(rowPath);
@@ -562,7 +578,7 @@ function glyphSplice(env: Envelope, rowPath: Path, nullIndex: number, station: C
   }
   if (cells.length === 1 && cells[0] !== null) {
     const after = withRefSet(env, ref, cells[0]);
-    const to = spliceStation(after, ref, 'right');
+    const to = spliceStation(after, ref, facing);
     return { kind: 'glyph', ops: [{ op: 'place', node: cells[0], at: replacePosOfRef(ref), to }], caret: to };
   }
   const to: Caret = { kind: 'row', path: rowPath, index: Math.min(nullIndex, cells.length) };
@@ -1153,9 +1169,18 @@ export function decideDelete(env: Envelope, caret: Caret, opts: DeleteOpts = {})
       if (caret.side === 'right') {
         const ref = refOfPath(caret.path);
         if (ref.at === 'cell') {
-          // OA-del-glyph: the right flank faces the glyph zone ahead — route
-          // to the seam after the structure's cell (index + 1).
-          return decideDelete(env, { kind: 'row', path: ref.path, index: ref.index + 1 }, opts);
+          // OA-del-glyph (corrected reading): the right flank stands LEFT of
+          // the separator glyph ahead — Del removes THAT glyph (the cells
+          // bond into their pair), working rightward. Past the row end or
+          // facing a pending cell: the named no-op.
+          const row = nodeAt(env, ref.path) as NodeJson | null;
+          const args = row !== null && isRowNode(row) ? rowArgs(row) : [];
+          const next = ref.index + 1;
+          if (row !== null && row.type === 'op' && !rowIsImplicit(row) && next < args.length && args[next] !== null) {
+            const bond = glyphBond(env, ref.path, ref.index);
+            return { kind: 'glyph', ops: bond.ops, caret: bond.caret };
+          }
+          return delNoop(caret);
         }
       }
       return forwardGap(env, caret, ctx);
@@ -1165,18 +1190,18 @@ export function decideDelete(env: Envelope, caret: Caret, opts: DeleteOpts = {})
     case 'row': {
       const row = nodeAt(env, caret.path) as NodeJson;
       const args = rowArgs(row);
-      // OA-del-glyph (ruled 2026-11-10, supersedes the session-3 parked
-      // forward-Delete no-op default at operator gaps): at an operator gap —
-      // the seam between two filled cells of an explicit op row — forward
-      // Delete REMOVES the binding operator glyph (text-editor parity, Del
-      // keeps deleting left-to-right; the M-15 #2 stall case). The row after
-      // the glyph removal follows the existing glyph-delete semantics: the
-      // cells bond into their implicit pair (glyphBond), caret at the
-      // canonical freed spot.
-      if (!ctx.ctrl && row.type === 'op' && !rowIsImplicit(row) && caret.index > 0 && caret.index < args.length &&
-          args[caret.index - 1] !== null && args[caret.index] !== null) {
-        const bond = glyphBond(env, caret.path, caret.index - 1);
-        return { kind: 'glyph', ops: bond.ops, caret: bond.caret };
+      // OA-del-glyph (ruled 2026-11-10; corrected reading after the owner's
+      // fix round — Delete works RIGHTWARD, Backspace leftward): the caret
+      // sitting IN a non-trailing pending null cell of an explicit op row
+      // faces the dangling glyph to its right — Del removes it (the
+      // glyphSplice mirror of BS's S-066 A rule; the `|x+1/2` → DEL →
+      // `|+1/2` → DEL → `|1/2` stall case). The TRAILING pending cell has
+      // nothing right of it (stays a no-op), and at a FILLED seam the glyph
+      // stands LEFT of the caret — that is Backspace's territory; Del keeps
+      // the D1/D3 mirror (the right cell's first char / the whole token).
+      if (row.type === 'op' && !rowIsImplicit(row) && caret.index < args.length - 1 && args[caret.index] === null) {
+        const spliced = glyphSplice(env, caret.path, caret.index, caret, caret.index === 0 ? 'left' : 'right');
+        return { kind: 'glyph', ops: spliced.ops, caret: spliced.caret };
       }
       if (caret.index >= args.length || args[caret.index] === null) return delNoop(caret);
       const target = args[caret.index] as NodeJson;
