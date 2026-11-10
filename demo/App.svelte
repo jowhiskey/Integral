@@ -16,7 +16,7 @@
   import { onMount } from 'svelte';
   import { toMathML } from '../src/ast/index.js';
   import { EditorController, IntegralEditor } from '../src/editor/index.js';
-  import { envelopeOf, type Caret, type EditingState } from '../src/engine/index.js';
+  import { caretResolvesIn, envelopeOf, type Caret, type EditingState } from '../src/engine/index.js';
   import { CATEGORIES, CASES, type CatalogCase } from './cases.js';
   import { attachImeLogger, type ImeLogLine } from './ime-logger.js';
 
@@ -26,6 +26,9 @@
   let caretText = $state('—');
   let jsonText = $state('—');
   let mathmlText = $state('—');
+  /** Session-5 rider readout: the last classified typing-op rejection
+   *  (ValidationError from the reducer's fromJSON gate) — a no-op on the tree. */
+  let rejectionText = $state('—');
   /** The IME / dead-key event log (standing debug tool): latest line first,
    *  bounded so the pane stays readable. */
   let imeLines: readonly ImeLogLine[] = $state([]);
@@ -73,6 +76,8 @@
     jsonText = JSON.stringify(envelopeOf(state), null, 2);
     const mathml = toMathML(state.root);
     mathmlText = mathml === '' ? '(empty formula)' : prettyMathml(mathml);
+    const rej = controller?.getLastRejection() ?? null;
+    rejectionText = rej === null ? '—' : `${rej.name} [${rej.kind}]: ${rej.message}`;
   }
 
   function loadCase(c: CatalogCase): void {
@@ -105,6 +110,21 @@
       onStateChange: refresh,
     });
     refresh(controller.getState());
+    // S-106 demo default (session 5): blur-commit ends the editing session
+    // and the undo history dies with it — resume the committed envelope in a
+    // fresh session (discard). The controller's own blur handler (commit)
+    // runs idempotently alongside.
+    caseContainer.addEventListener('blur', () => {
+      const ctl = controller;
+      if (!caseContainer || !ctl) return;
+      const committed = ctl.commit();
+      const caret = ctl.getState().caret; // blur must not move the caret
+      ctl.destroy();
+      caseContainer.replaceChildren();
+      controller = new EditorController(caseContainer, { envelope: committed, onStateChange: refresh });
+      if (caretResolvesIn(committed, caret)) controller.placeCaret(caret); // resume where the caret was
+      refresh(controller.getState());
+    });
     // The standing IME / dead-key event logger (capture-phase, passive —
     // pure observation): attach to the case editor, latest first.
     attachImeLogger(caseContainer, 'case', (line) => {
@@ -182,6 +202,7 @@
       <button type="button" data-insert-sub onclick={() => { controller?.insertSubscript(); caseContainer?.focus(); }}>x₍₎ insert</button>
     </div>
     <div class="caret-readout" data-caret>caret {caretText}</div>
+    <div class="rejection-readout" data-rejection>rejection {rejectionText}</div>
     {#if activeCase}
       <div class="note">
         <strong>{activeCase.id}</strong> — {activeCase.stress}

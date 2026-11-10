@@ -94,11 +94,16 @@ describe('key classification (pure)', () => {
     expect(classifyKey(ev('ArrowUp'))).toEqual({ kind: 'move', dir: 'up' });
     expect(classifyKey(ev('5')).kind).toBe('type');
     expect(classifyKey(ev(' ')).kind).toBe('type'); // unknown token, still a typing key
-    expect(classifyKey(ev('Enter')).kind).toBe('ignore');
-    expect(classifyKey(ev('Tab')).kind).toBe('ignore');
-    expect(classifyKey(ev('Escape')).kind).toBe('ignore');
+    // K2/K3 (session 5): Enter/Tab/Escape are the blur-commit family
+    expect(classifyKey(ev('Enter'))).toEqual({ kind: 'commit' });
+    expect(classifyKey(ev('Tab'))).toEqual({ kind: 'commit' });
+    expect(classifyKey(ev('Escape'))).toEqual({ kind: 'commit' });
     expect(classifyKey(ev('F5')).kind).toBe('ignore');
-    expect(classifyKey(ev('Home')).kind).toBe('ignore');
+    // K1 (session 5): Home/End boundary moves; the Ctrl variants stay unbound
+    expect(classifyKey(ev('Home'))).toEqual({ kind: 'boundary', side: 'start' });
+    expect(classifyKey(ev('End'))).toEqual({ kind: 'boundary', side: 'end' });
+    expect(classifyKey(ev('Home', { ctrl: true })).kind).toBe('ignore');
+    expect(classifyKey(ev('End', { ctrl: true })).kind).toBe('ignore');
     expect(classifyKey(ev('PageDown')).kind).toBe('ignore');
   });
 });
@@ -122,32 +127,38 @@ describe('focus gate + preventDefault', () => {
     expect(controller.getState().log.length).toBe(1);
 
     // keys outside the pinned keymap pass through even while focused
-    const enter = press(container, 'Enter');
-    expect(enter.defaultPrevented).toBe(false);
+    // (Enter/Home/End are handled since rework session 5 — K2/K3 commit+blur,
+    // K1 boundary — pinned in editor-session5.test.ts)
+    const pageUp = press(container, 'PageUp');
+    expect(pageUp.defaultPrevented).toBe(false);
     expect(controller.getState().log.length).toBe(1);
-    const home = press(container, 'Home');
-    expect(home.defaultPrevented).toBe(false);
+    const f5 = press(container, 'F5');
+    expect(f5.defaultPrevented).toBe(false);
   });
 });
 
 describe('typing', () => {
-  it('one printable key = exactly one typeToken op = one log entry', () => {
+  it('one printable key = exactly one typeToken op; a consecutive typing run COALESCES into one log entry (U1, session 5)', () => {
     const { controller, container } = make({ v: 1, root: null });
     container.focus();
 
     press(container, '5');
     expect(controller.getState().log.length).toBe(1);
+    expect(controller.getState().log[0].ops.length).toBe(1);
     expect(j(controller.getEnvelope().root)).toBe(j(num(5)));
     // 4a re-pin (OA-token-end): the typed 5's in-token end
     expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: [], index: 1 }));
 
     press(container, '+');
-    expect(controller.getState().log.length).toBe(2);
+    // U1/S-080: `+` is a typing-class key after a typing action — same unit
+    expect(controller.getState().log.length).toBe(1);
+    expect(controller.getState().log[0].ops.length).toBe(2);
     expect(j(controller.getEnvelope().root)).toBe(j({ type: 'op', op: 'add', args: [num(5), null] }));
     expect(j(controller.getState().caret)).toBe(j(row([], 1)));
 
     press(container, '3');
-    expect(controller.getState().log.length).toBe(3);
+    expect(controller.getState().log.length).toBe(1); // still the one open run
+    expect(controller.getState().log[0].ops.length).toBe(3);
     expect(j(controller.getEnvelope().root)).toBe(j({ type: 'op', op: 'add', args: [num(5), num(3)] }));
   });
 
@@ -383,13 +394,18 @@ describe('undo / redo via keyboard', () => {
     container.focus();
     press(container, '5');
     press(container, '+');
+    // U1 re-pin (session 5, S-080): the `5`,`+` typing run is ONE unit
+    expect(controller.getState().log.length).toBe(1);
+    expect(controller.getState().log[0].ops.length).toBe(2);
     const before = j([controller.getEnvelope(), controller.getState().caret, controller.getState().log.length]);
 
     const z = press(container, 'z', { ctrl: true });
     expect(z.defaultPrevented).toBe(true);
-    expect(controller.getState().log.length).toBe(1);
-    expect(j(controller.getEnvelope().root)).toBe(j(num(5)));
+    expect(controller.getState().log.length).toBe(0); // the whole run unwinds in one undo
+    expect(j(controller.getEnvelope().root)).toBe('null');
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'empty' }));
     expect(controller.getState().redo.length).toBe(1);
+    expect(controller.getState().redo[0].ops.length).toBe(2);
 
     const y = press(container, 'y', { ctrl: true });
     expect(y.defaultPrevented).toBe(true);
@@ -402,9 +418,11 @@ describe('undo / redo via keyboard', () => {
     container.focus();
     press(container, '5');
     press(container, '+');
+    // U1 re-pin (session 5): one coalesced run unit
+    expect(controller.getState().log.length).toBe(1);
     const before = j([controller.getEnvelope(), controller.getState().caret, controller.getState().log.length]);
     press(container, 'z', { ctrl: true });
-    expect(controller.getState().log.length).toBe(1);
+    expect(controller.getState().log.length).toBe(0);
     const zShift = press(container, 'Z', { ctrl: true, shift: true });
     expect(zShift.defaultPrevented).toBe(true);
     expect(j([controller.getEnvelope(), controller.getState().caret, controller.getState().log.length])).toBe(before);

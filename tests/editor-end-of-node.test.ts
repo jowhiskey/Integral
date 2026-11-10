@@ -55,7 +55,10 @@ describe('keyboard: multi-digit typing through the controller', () => {
     );
     // 4a re-pin (OA-token-end): the typed 3's in-token end
     expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: ['den'], index: 1 }));
-    expect(controller.getState().log.length).toBe(4); // one key = one op = one log entry
+    // U1 re-pin (session 5): `1`,`2` coalesce into one run unit; `/` is a structure
+    // key (its own unit, closes the run); `3` opens a new run → 3 units, ops [2,1,1]
+    expect(controller.getState().log.length).toBe(3);
+    expect(controller.getState().log.map((e) => e.ops.length)).toEqual([2, 1, 1]);
   });
 
   it('a digit at the end seam after a symbol joins the name (digit-glue, owner amendment)', () => {

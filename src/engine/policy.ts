@@ -376,15 +376,26 @@ interface Ctx {
   readonly state: EditingState;
   readonly caret: Caret;
   readonly flagged: boolean;
+  /** U1 (rework session 5): the controller asked for typing-run coalescing
+   *  (the last action was typing and this token is typing-class). Structural
+   *  emissions (the T5 function conversion) pass `structural` and split the
+   *  run regardless — the `(`-press + conversion is its own unit (S-085). */
+  readonly coalesce: boolean;
 }
 
 const armed = (ctx: Ctx): EditingState =>
   ({ ...ctx.state, caret: { ...ctx.caret, boundary: true } as Caret });
 
-const apply1 = (ctx: Ctx, op: Op): EditingState => applyOp(ctx.state, op);
+const apply1 = (ctx: Ctx, op: Op, opts: { readonly structural?: boolean } = {}): EditingState =>
+  applyOp(ctx.state, op, { extendOpenUnit: ctx.coalesce && opts.structural !== true });
 
-const place = (ctx: Ctx, node: NodeJson | null, at: Position, to: Caret): EditingState =>
-  apply1(ctx, { op: 'place', node, at, to });
+const place = (
+  ctx: Ctx,
+  node: NodeJson | null,
+  at: Position,
+  to: Caret,
+  opts?: { readonly structural?: boolean },
+): EditingState => apply1(ctx, { op: 'place', node, at, to }, opts);
 
 /** OA-token-end (rework 4a): the in-token end state of a freshly typed
  *  leaf token — typing never leaves a whole-node caret on the fresh token
@@ -1027,9 +1038,11 @@ function openKey(ctx: Ctx, station: Station): EditingState {
       // it into the atomic head (the caret inside the first argument).
       if (node.type === 'sym' && knownFunctions(ctx.state).has(tokenText(node))) {
         const bare = contentRightOf(ctx.env, ref);
+        // structural (U1/S-085): the `(`-press + conversion is its own undo
+        // unit — it never coalesces into the preceding typing run.
         return place(ctx, fnJson(tokenText(node), [null], !bare), replacePosOf(ref), {
           kind: 'row', path: pathOf(ref), index: 0,
-        });
+        }, { structural: true });
       }
       // T6: a group with both fences at the caret; content to the left
       // stays outside (the juxtaposition pairing handles that).
@@ -1052,9 +1065,10 @@ function openKey(ctx: Ctx, station: Station): EditingState {
           knownFunctions(ctx.state).has(tokenText(seam.left.node))) {
         const leftRef = refOfPath(seam.left.path);
         const bare = contentRightOf(ctx.env, leftRef);
+        // structural (U1/S-085): the `(`-press + conversion is its own unit.
         return place(ctx, fnJson(tokenText(seam.left.node), [null], !bare), replacePosOf(leftRef), {
           kind: 'row', path: seam.left.path, index: 0,
-        });
+        }, { structural: true });
       }
       const group = groupJson(null, true);
       // T6's content-to-the-left reading: the left partner wins where both
@@ -1341,7 +1355,7 @@ function resolvableStationOf(state: EditingState): { ctx: Ctx; station: Station 
     );
   }
   return {
-    ctx: { env, state, caret: state.caret, flagged: state.caret.boundary === true },
+    ctx: { env, state, caret: state.caret, flagged: state.caret.boundary === true, coalesce: false },
     station: stationOf(env, state.caret),
   };
 }
@@ -1523,8 +1537,12 @@ export function insertSubscript(state: EditingState): EditingState {
  *  returns the next state. Rejected keys are silent no-ops (the standing
  *  rejection pattern): the same state object comes back, nothing is logged.
  *  Throws EngineError only on an unresolvable caret (the editor treats the
- *  typed rejections as defined no-ops). */
-export function typeToken(state: EditingState, token: TypedToken): EditingState {
+ *  typed rejections as defined no-ops). `opts.coalesce` (U1, rework session
+ *  5): when set by the controller (last action was typing), the emitted op
+ *  extends the open undo unit instead of starting a new one — except at the
+ *  structural emission sites (the T5 function conversion), which always
+ *  split the run (S-085: the `(`-press + conversion is one unit of its own). */
+export function typeToken(state: EditingState, token: TypedToken, opts: { readonly coalesce?: boolean } = {}): EditingState {
   const env = envelopeOf(state);
   if (!caretResolvesIn(env, state.caret)) {
     throw new EngineError(
@@ -1532,7 +1550,7 @@ export function typeToken(state: EditingState, token: TypedToken): EditingState 
       `caret does not resolve in this envelope (${JSON.stringify(state.caret)})`,
     );
   }
-  const ctx: Ctx = { env, state, caret: state.caret, flagged: state.caret.boundary === true };
+  const ctx: Ctx = { env, state, caret: state.caret, flagged: state.caret.boundary === true, coalesce: opts.coalesce === true };
   const station = stationOf(env, state.caret);
   switch (token.t) {
     case 'space':

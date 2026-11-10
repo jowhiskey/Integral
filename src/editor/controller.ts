@@ -14,8 +14,11 @@ import type { Envelope } from '../ast/json.js';
 import { toJSON } from '../ast/serialize.js';
 import type { StaticVocabulary } from '../ast/vocabulary.js';
 
+import { ValidationError } from '../ast/validation.js';
+
 import {
   applyOp,
+  applyOps,
   caretResolvesIn,
   decideBackspace,
   EngineError,
@@ -25,6 +28,8 @@ import {
   insertRoot as engineInsertRoot,
   insertSubscript as engineInsertSubscript,
   redo as engineRedo,
+  resolveBoundary,
+  sameCaret,
   settleUnits,
   typeToken,
   undo,
@@ -40,9 +45,22 @@ import {
 
 import { updateCaretOverlay } from './caret-overlay.js';
 import { caretFromHit, hitFromMouseEvent } from './click.js';
-import { charFromCode, classifyKey, deadComposedBase, deadCompositionBase, KEYMAP } from './keys.js';
+import { charFromCode, classifyKey, deadComposedBase, deadCompositionBase, isTypingToken, KEYMAP } from './keys.js';
 import { buildMathML, pathKey, type RenderedMath } from './mathml-dom.js';
 import { applyVerticalKey, wipeSideways, type VerticalMemory } from './vertical-memory.js';
+
+/** A typing op rejected by the reducer's fromJSON gate (session-5 rider):
+ *  classified + reported through EditorController.getLastRejection instead of
+ *  silently swallowed — still a no-op on the tree. The known live shape:
+ *  typing at an `mroot` □ index fills the index, leaves the `mroot` flag, and
+ *  the gate rejects (the flag-drop fix itself is banked for the consolidated
+ *  cleanup session). */
+export interface ControllerRejection {
+  readonly kind: 'validation';
+  readonly name: string;
+  readonly message: string;
+  readonly token: TypedToken | undefined;
+}
 
 export interface EditorControllerOptions {
   /** Initial formula envelope (validated through fromJSON); omitted = empty formula. */
@@ -121,6 +139,15 @@ export class EditorController {
    *  if it never had happened; the confirming BS deletes the structure WITH
    *  its content. Survives only caret movement (the visual-state roll). */
   private highlighted: Path | null = null;
+  /** U1 run-closing (rework session 5): the last action kind. A consecutive
+   *  typing run coalesces into ONE log entry; any non-typing action (structure
+   *  key, Backspace, arrow, Home/End, click, undo/redo, blur-commit) closes
+   *  the open run and becomes its own unit. Controller-side by the mechanical
+   *  ruling — run boundaries are NOT derivable from the op log. */
+  private lastAction: 'typing' | 'other' = 'other';
+  /** The last classified typing-op rejection (session-5 rider) — reported,
+   *  never swallowed; a no-op on the tree. */
+  private lastRejection: ControllerRejection | null = null;
 
   constructor(container: HTMLElement, options: EditorControllerOptions = {}) {
     this.container = container;
@@ -160,6 +187,7 @@ export class EditorController {
 
   /** Apply an editing op (logs; undoable) and rebuild. */
   apply(op: Op): void {
+    this.lastAction = 'other'; // a host-applied op is a non-typing action (U1)
     this.state = applyOp(this.state, op);
     this.render();
     this.onStateChange?.(this.state);
@@ -167,6 +195,7 @@ export class EditorController {
 
   /** Step the op log back one entry and rebuild. */
   undo(): void {
+    this.lastAction = 'other'; // history keys are non-typing actions (U1)
     this.takeHighlight(); // any input that is not the confirming BS clears it (D5)
     const next = undo(this.state);
     if (next !== this.state) this.state = next;
@@ -176,6 +205,7 @@ export class EditorController {
 
   /** Step the redo list forward one entry and rebuild. */
   redo(): void {
+    this.lastAction = 'other'; // history keys are non-typing actions (U1)
     this.takeHighlight(); // any input that is not the confirming BS clears it (D5)
     const next = engineRedo(this.state);
     if (next !== this.state) this.state = next;
@@ -186,6 +216,12 @@ export class EditorController {
   /** The live vertical-memory map (read-only view; tests/hosts may inspect it). */
   getVerticalMemory(): ReadonlyMap<unknown, unknown> {
     return this.vmem;
+  }
+
+  /** The last classified typing-op rejection (session-5 rider) — null when
+   *  the last typing key applied cleanly. Visible to hosts / demo readouts. */
+  getLastRejection(): ControllerRejection | null {
+    return this.lastRejection;
   }
 
   // ——— S-051: the unit-run conversion fires on LEAVING the run ———
@@ -205,6 +241,7 @@ export class EditorController {
       triggerCaret === undefined ? this.state : { ...this.state, caret: triggerCaret };
     const next = settleUnits(base);
     if (next === base) return false;
+    this.lastAction = 'other'; // the settle is a non-typing edit — it closes the run (U1)
     this.state = next;
     this.render();
     this.onStateChange?.(this.state);
@@ -258,6 +295,7 @@ export class EditorController {
    *  no-op changes nothing; a rejected decision (typed EngineError) is a
    *  no-op, never thrown to the DOM. */
   private backspaceKey(ctrl: boolean, confirm: Path | null): void {
+    this.lastAction = 'other'; // Backspace is a non-typing action — it closes the run (U1)
     let decision: BackspaceDecision;
     try {
       decision = decideBackspace(toJSON(this.state.root), this.state.caret, {
@@ -274,9 +312,9 @@ export class EditorController {
       this.paintHighlight(this.highlighted, true);
       return;
     }
-    let next: EditingState = this.state;
+    let next: EditingState;
     try {
-      for (const op of decision.ops) next = applyOp(next, op);
+      next = applyOps(this.state, decision.ops); // U1: one key = one undo unit ({ops:[...]})
     } catch (e) {
       if (e instanceof EngineError) return;
       throw e;
@@ -290,6 +328,7 @@ export class EditorController {
   /** One forward Delete key (the D1/D3 mirrors + the named no-op defaults):
    *  at most one op = one log entry; a defined no-op changes nothing. */
   private deleteKey(ctrl: boolean): void {
+    this.lastAction = 'other'; // Delete is a non-typing action — it closes the run (U1)
     let next: EditingState;
     try {
       next = forwardDelete(this.state, { ctrl });
@@ -316,6 +355,7 @@ export class EditorController {
     }
     this.pendingDeadPow = false;
     this.takeHighlight(); // a click is not the confirming BS (D5)
+    this.lastAction = 'other'; // a click closes the open typing run (U1)
     this.state = { root: this.state.root, caret, log: this.state.log, redo: this.state.redo, vocabulary: this.state.vocabulary };
     // clicks write no memory entries (and V2 never clears anything)
     this.updateCaret();
@@ -383,18 +423,37 @@ export class EditorController {
       throw e;
     }
     if (next === this.state) return;
+    this.lastAction = 'other'; // a vocabulary insertion is a non-typing action (U1)
     this.state = next;
     this.render();
     this.onStateChange?.(this.state);
   }
 
-  private readonly handleBlur = (): void => {
-    // T8 one-shot rule: blur discards a pending dead-^ with no trace.
+  /** K2/K3 blur-commit (rework session 5): end the editing session — discard
+   *  the dead-key pending (T8 one-shot) and the D5 highlight, settle pending
+   *  unit conversions (S-051's blur-leave lands before the host takes the
+   *  envelope), close any open typing run (U1) — and return the committed
+   *  envelope (what the host persists). Idempotent; fires onStateChange only
+   *  when the settle changes the state. */
+  commit(): Envelope {
     this.pendingDeadPow = false;
     this.takeHighlight(); // blur is not the confirming BS (D5)
-    // S-051: blur leaves the run — the conversion lands before the host
-    // takes the envelope (one op, logged, undoable while the session lives).
-    this.settle();
+    this.settle(); // S-051: blur leaves the run — the conversion lands first
+    this.lastAction = 'other'; // blur closes the run (U1)
+    return envelopeOf(this.state);
+  }
+
+  /** Enter/Tab/Escape (K2/K3): commit + blur — Integral ends the session and
+   *  fires the blur event; the post-blur behavior (the next-row/next-cell
+   *  handoff for Enter/Tab; none for Escape) is the HOST's convention — an
+   *  unlogged boundary, no Integral-side action. */
+  private commitAndBlur(): void {
+    this.commit();
+    this.container.blur();
+  }
+
+  private readonly handleBlur = (): void => {
+    this.commit();
   };
 
   /** Resolve a pending dead-^ with (at most) one typed character: the power
@@ -502,6 +561,17 @@ export class EditorController {
         event.preventDefault();
         this.moveKey(action.dir);
         return;
+      case 'boundary':
+        // K1 (session 5): Home/End — local boundary first, then one level
+        // outward per press (S-105 A). Movement: never logged.
+        event.preventDefault();
+        this.moveBoundary(action.side);
+        return;
+      case 'commit':
+        // K2/K3 (session 5): Enter/Tab/Escape commit + blur; the host takes over.
+        event.preventDefault();
+        this.commitAndBlur();
+        return;
       case 'backspace':
         event.preventDefault();
         this.backspaceKey(action.ctrl, confirmHighlight);
@@ -524,6 +594,7 @@ export class EditorController {
    *  arrival region's store wins when it still resolves; horizontal keys
    *  never touch the memory. */
   private moveKey(dir: NavDir): void {
+    this.lastAction = 'other'; // an arrow closes the open typing run (U1)
     const caret = this.state.caret;
     if (dir === 'up' || dir === 'down') {
       const res = applyVerticalKey(toJSON(this.state.root), caret, dir, this.vmem);
@@ -553,19 +624,53 @@ export class EditorController {
     }
   }
 
-  /** One printable key → exactly one engine typeToken (insertion policy +
-  *  swap hook + the in-token merge/split/snap rules). A rejected token (typed
-  *  EngineError, e.g. not-a-typing-point at a row seam) is a defined no-op:
-  *  no state change, no log growth, no exception escaping to the DOM. */
+  /** One Home/End press (K1): resolveBoundary in the engine — the start/end
+   *  of the current row/slot first; when already at that boundary, one level
+   *  outward per press, DIRECTLY to the enclosing row's start/end (S-105 A),
+   *  iterating to the formula start/end (further presses: defined no-ops).
+   *  Movement: never logged; closes any open typing run (U1). */
+  private moveBoundary(side: 'start' | 'end'): void {
+    this.lastAction = 'other';
+    const target = resolveBoundary(toJSON(this.state.root), this.state.caret, side);
+    if (target === null || sameCaret(target, this.state.caret)) return; // N3-class no-op at the formula ends
+    this.state = { root: this.state.root, caret: target, log: this.state.log, redo: this.state.redo, vocabulary: this.state.vocabulary };
+    this.updateCaret();
+    this.onCaretChange?.(target);
+    this.onStateChange?.(this.state);
+  }
+
+  /** One printable key → exactly one engine typeToken (the literal typing
+   *  surface). U1 (session 5): a typing-class key whose predecessor action
+   *  was also typing COALESCES into the open undo unit (coalesce flag — the
+   *  engine may still split on a structural conversion, S-085); every other
+   *  action kind closes the run and logs its own unit. A rejected token
+   *  (typed EngineError) is a defined no-op: no state change, no log growth,
+   *  no exception escaping to the DOM. A ValidationError from the reducer's
+   *  fromJSON gate (session-5 rider) is classified into lastRejection —
+   *  reported, still a no-op on the tree. */
   private typeKey(token: TypedToken): void {
+    const typingClass = isTypingToken(token);
+    const coalesce = typingClass && this.lastAction === 'typing';
+    const logLen = this.state.log.length;
+    this.lastRejection = null;
     let next: EditingState;
     try {
-      next = typeToken(this.state, token);
+      next = typeToken(this.state, token, { coalesce });
     } catch (e) {
-      if (e instanceof EngineError) return;
+      if (e instanceof EngineError) return; // typed engine rejection: defined no-op
+      if (e instanceof ValidationError) {
+        // Session-5 rider: the fromJSON-gate rejection is classified + reported
+        // (e.g. the mroot □-index shape), not silently swallowed — no-op on the tree.
+        this.lastRejection = { kind: 'validation', name: e.name, message: e.message, token };
+        this.onStateChange?.(this.state); // readouts refresh (state unchanged)
+        return;
+      }
       throw e;
     }
-    if (next === this.state) return; // byte-identical no-op (same-op swap retype)
+    if (next === this.state) return; // byte-identical no-op: the run state is untouched
+    // coalesce requested but the log grew anyway → the engine split the unit
+    // (a structural conversion, S-085) — the run is closed.
+    this.lastAction = typingClass && !(coalesce && next.log.length > logLen) ? 'typing' : 'other';
     this.state = next;
     this.render();
     this.onStateChange?.(this.state);

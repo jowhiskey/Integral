@@ -75,7 +75,7 @@ describe('classifyKey: Backspace/Delete + the Ctrl variants (D3)', () => {
     expect(classifyKey(ev('Delete'))).toEqual({ kind: 'delete', ctrl: false }); // rework session 3: the forward mirror
     expect(classifyKey(ev('Delete', { ctrl: true }))).toEqual({ kind: 'delete', ctrl: true });
     expect(classifyKey(ev('Delete', { alt: true }))).toEqual({ kind: 'ignore' }); // alt passes through
-    expect(classifyKey(ev('Enter'))).toEqual({ kind: 'ignore' }); // K2 stays session-5 scope
+    expect(classifyKey(ev('Enter'))).toEqual({ kind: 'commit' }); // K2 (session 5): commit + blur
   });
 });
 

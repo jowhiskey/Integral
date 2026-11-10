@@ -26,6 +26,7 @@ import {
   isTokenNode,
   nodeAt,
   rowArgs,
+  sameCaret,
   setSlot,
   slotValue,
   slotsOf,
@@ -118,15 +119,23 @@ export interface PlaceOp {
  *  persisted, replayed, and property-tested without a DOM). */
 export type Op = InsertOp | DeleteAtOp | MoveCaretOp | MoveOp | PlaceOp;
 
-/** One applied op. Undo snapshots the full tree + caret state before the op —
- *  mechanics chosen over inverse ops: byte-exact restoration by construction
- *  and no inverse-derivation asymmetries; entries are plain data (hosts may
- *  merge them later, per the spec's op-log note). */
+/** One undo UNIT (rework session 5, U1): an array of ops. Single-op actions
+ *  (structure keys, Backspace, …) carry one-op arrays; a consecutive typing
+ *  run coalesces into one entry carrying the whole run's ops — the run
+ *  boundary is controller-side (the last action kind is tracked there), NOT
+ *  derivable from the log. The snapshots are taken before the unit's FIRST
+ *  op, so undo restores the pre-unit tree and caret byte-exactly and redo
+ *  replays the ops in order (the reducer is pure, so the post-unit state
+ *  reproduces byte-exactly). Mechanics chosen over inverse ops: byte-exact
+ *  restoration by construction, no inverse-derivation asymmetries; entries
+ *  are plain data (hosts may merge them later, per the spec's op-log note).
+ *  Runtime-only editor state, never serialized — an internal shape change,
+ *  not a schema change. */
 export interface LogEntry {
-  readonly op: Op;
-  /** Envelope snapshot taken before the op applied. */
+  readonly ops: readonly Op[];
+  /** Envelope snapshot taken before the unit's first op applied. */
   readonly before: Envelope;
-  /** Caret state before the op applied. */
+  /** Caret state before the unit's first op applied. */
   readonly caretBefore: Caret;
 }
 
@@ -200,33 +209,97 @@ export function caretResolves(root: MathNode | null, caret: Caret): boolean {
 
 // ——— Reducer ———
 
-/** Pure reducer: apply one op. Never mutates the given state; on error the
- *  state is unchanged and nothing is logged. Position/address mistakes throw
- *  EngineError; contract violations (invalid inserted node, arity/budget
- *  overruns) propagate fromJSON's ValidationError / ValidationLimitError. */
-export function applyOp(state: EditingState, op: Op): EditingState {
-  switch (op.op) {
-    case 'insert':
-      return applyMutating(state, op, insertInto);
-    case 'deleteAt':
-      return applyMutating(state, op, deleteAtFrom);
-    case 'moveCaret':
-      return applyMoveCaret(state, op);
-    case 'move':
-      return applyMove(state, op);
-    case 'place':
-      // Insert-position transform with the op's own explicit result caret.
-      return applyMutating(state, op, placeInto);
-    default:
-      throw new EngineError('unknown-op', `applyOp: unknown op ${JSON.stringify((op as { op: unknown }).op)}`);
+/** Options for applying ops (rework session 5, U1). */
+export interface ApplyOpts {
+  /** Typing-run coalescing: when true and the log is non-empty, the unit
+   *  EXTENDS the last entry instead of starting a new one — the entry keeps
+   *  its pre-run snapshots (`before` / `caretBefore`) and appends the ops to
+   *  `ops`. The caller (the controller) tracks the last action kind and only
+   *  sets this for typing-class actions; run boundaries are not derivable
+   *  from the op log. Any tree-changing op still clears the redo list (U3). */
+  readonly extendOpenUnit?: boolean;
+}
+
+/** Pure reducer: apply one op as its own undo unit. Never mutates the given
+ *  state; on error the state is unchanged and nothing is logged.
+ *  Position/address mistakes throw EngineError; contract violations (invalid
+ *  inserted node, arity/budget overruns) propagate fromJSON's ValidationError
+ *  / ValidationLimitError. */
+export function applyOp(state: EditingState, op: Op, opts: ApplyOpts = {}): EditingState {
+  return applyOps(state, [op], opts);
+}
+
+/** Apply a list of ops as ONE undo unit: the ops replay in order through the
+ *  pure reducer (each op validated/relocated against the intermediate state),
+ *  and the log gains a single entry carrying the whole op array plus the
+ *  pre-unit snapshots. A unit of only `move` ops is pure movement — nothing
+ *  is logged. `moveCaret` units log but keep the redo list (pinned semantics);
+ *  tree-changing ops (insert/deleteAt/place) clear it. On error the state is
+ *  unchanged and nothing is logged. With `extendOpenUnit` (U1) the unit merges
+ *  into the last log entry instead of appending a new one. */
+export function applyOps(state: EditingState, ops: readonly Op[], opts: ApplyOpts = {}): EditingState {
+  if (ops.length === 0) return state;
+  const before = toJSON(state.root);
+  const caretBefore = state.caret;
+  let cur: EditingState = state;
+  let mutating = false;
+  let clearsRedo = false;
+  for (const op of ops) {
+    switch (op.op) {
+      case 'move':
+        cur = applyMove(cur, op);
+        break;
+      case 'moveCaret':
+        cur = applyMoveCaretRaw(cur, op);
+        mutating = true; // logged, but keeps the redo list (pinned semantics)
+        break;
+      case 'insert':
+        cur = applyMutatingRaw(cur, op, insertInto);
+        mutating = true;
+        clearsRedo = true;
+        break;
+      case 'deleteAt':
+        cur = applyMutatingRaw(cur, op, deleteAtFrom);
+        mutating = true;
+        clearsRedo = true;
+        break;
+      case 'place':
+        // Insert-position transform with the op's own explicit result caret.
+        cur = applyMutatingRaw(cur, op, placeInto);
+        mutating = true;
+        clearsRedo = true;
+        break;
+      default:
+        throw new EngineError('unknown-op', `applyOps: unknown op ${JSON.stringify((op as { op: unknown }).op)}`);
+    }
   }
+  if (!mutating) return cur; // pure movement: never logged
+  if (opts.extendOpenUnit === true && state.log.length > 0) {
+    const last = state.log[state.log.length - 1];
+    const merged: LogEntry = {
+      ops: [...last.ops, ...ops],
+      before: last.before,
+      caretBefore: last.caretBefore,
+    };
+    return {
+      root: cur.root,
+      caret: cur.caret,
+      log: [...state.log.slice(0, -1), merged],
+      redo: clearsRedo ? [] : state.redo,
+      vocabulary: state.vocabulary,
+    };
+  }
+  const entry: LogEntry = { ops: [...ops], before, caretBefore };
+  return {
+    root: cur.root,
+    caret: cur.caret,
+    log: [...state.log, entry],
+    redo: clearsRedo ? [] : state.redo,
+    vocabulary: state.vocabulary,
+  };
 }
 
 const NAV_DIRS: readonly NavDir[] = ['left', 'right', 'up', 'down'];
-
-function sameCaret(a: Caret, b: Caret): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
 
 /** Relative movement: resolved against the nav profiles; the tree is never
  *  touched, the log is never appended. Unresolvable/uninteresting targets
@@ -246,8 +319,9 @@ function applyMove(state: EditingState, op: MoveOp): EditingState {
   return { root: state.root, caret: target, log: state.log, redo: state.redo, vocabulary: state.vocabulary };
 }
 
-/** Walk back exactly one op: restore the tree and caret snapshotted before it.
- *  Undo on an empty log is a defined no-op — returns the state as-is. */
+/** Walk back exactly one undo UNIT: restore the tree and caret snapshotted
+ *  before the unit's first op. Undo on an empty log is a defined no-op —
+ *  returns the state as-is (U4). */
 export function undo(state: EditingState): EditingState {
   if (state.log.length === 0) return state;
   const entry = state.log[state.log.length - 1];
@@ -264,12 +338,12 @@ export function undo(state: EditingState): EditingState {
  *  structuredClone's type declaration lives in DOM libs, which this subpath
  *  must not pull in. Envelopes are JSON by definition, so nothing survives a
  *  JSON clone that shouldn't. */
-/** Step the redo list forward one entry: re-apply the undone op onto its own
- *  before-snapshot. The reducer is pure and deterministic, so re-applying
- *  reproduces the post-op state byte-exactly (tree, caret, and the re-logged
- *  entry) with zero inverse-op derivation. Redo on an empty list is a defined
- *  no-op — returns the state as-is. The remaining redo entries survive (only
- *  a NEW op clears the list, in applyMutating). */
+/** Step the redo list forward one unit: replay the undone entry's ops onto
+ *  its own before-snapshot. The reducer is pure and deterministic, so the
+ *  replay reproduces the post-unit state byte-exactly (tree, caret, and the
+ *  re-logged entry) with zero inverse-op derivation. Redo on an empty list is
+ *  a defined no-op — returns the state as-is. The remaining redo entries
+ *  survive (only a NEW op clears the list, in applyOps). */
 
 export function redo(state: EditingState): EditingState {
   if (state.redo.length === 0) return state;
@@ -282,16 +356,17 @@ export function redo(state: EditingState): EditingState {
     redo: redoRest,
     vocabulary: state.vocabulary,
   };
-  const applied = applyOp(base, entry.op);
+  const applied = applyOps(base, entry.ops);
   return { ...applied, redo: redoRest };
 }
 
 const cloneEnvelope = (env: Envelope): Envelope => JSON.parse(JSON.stringify(env)) as Envelope;
 
-/** One tree-mutating op: serialize + clone, transform the clone at the JSON
- *  level, rebuild through fromJSON (the contract gate), relocate the caret
- *  by the op's defined rule. */
-function applyMutating<T extends InsertOp | DeleteAtOp | PlaceOp>(
+/** One tree-mutating op, log-neutral: serialize + clone, transform the clone
+ *  at the JSON level, rebuild through fromJSON (the contract gate), relocate
+ *  the caret by the op's defined rule. The caller (applyOps) owns the log and
+ *  redo-list handling — one call = no log entry by itself. */
+function applyMutatingRaw<T extends InsertOp | DeleteAtOp | PlaceOp>(
   state: EditingState,
   op: T,
   transform: (env: Envelope, op: T) => void,
@@ -305,22 +380,17 @@ function applyMutating<T extends InsertOp | DeleteAtOp | PlaceOp>(
     // unreachable: the relocation rules cover every removal/shift case
     throw new Error('engine invariant: caret normalization failed');
   }
-  // A new tree-changing op clears the redo list.
-  return { root, caret, log: [...state.log, { op, before, caretBefore: state.caret }], redo: [], vocabulary: state.vocabulary };
+  return { root, caret, log: state.log, redo: state.redo, vocabulary: state.vocabulary };
 }
 
-function applyMoveCaret(state: EditingState, op: MoveCaretOp): EditingState {
+/** moveCaret, log-neutral: validate the target against the tree and set the
+ *  caret; the caller logs the unit. */
+function applyMoveCaretRaw(state: EditingState, op: MoveCaretOp): EditingState {
   const before = toJSON(state.root);
   if (!caretResolvesIn(before, op.to)) {
     throw new EngineError('caret-invalid', `moveCaret: caret does not resolve in this tree (${JSON.stringify(op.to)})`);
   }
-  return {
-    root: state.root,
-    caret: op.to,
-    log: [...state.log, { op, before, caretBefore: state.caret }],
-    redo: state.redo,
-    vocabulary: state.vocabulary,
-  };
+  return { root: state.root, caret: op.to, log: state.log, redo: state.redo, vocabulary: state.vocabulary };
 }
 
 // ——— Op transforms (JSON level; the envelope is the reducer's working copy) ———

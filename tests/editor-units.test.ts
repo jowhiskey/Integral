@@ -83,13 +83,19 @@ describe('controller — S-051 leave triggers (the unit-run conversion)', () => 
     const { controller, container } = make({ v: 1, root: null });
     container.focus();
     typeRun(container);
+    // U1 re-pin (session 5): the `50mm` run is ONE unit
     const logBefore = controller.getState().log.length;
+    expect(logBefore).toBe(1);
     const ctrlZ = new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true });
     container.dispatchEvent(ctrlZ);
-    // no settle op fired: the undo removed exactly the last typing op — no extra entry first
+    // no settle op fired: the undo removed the whole run — no extra entry first,
+    // and the pre-run state is the EMPTY formula (not a unit node)
     expect(controller.getState().log.length).toBe(logBefore - 1);
+    expect(j(envelopeOf(controller.getState()).root)).toBe('null');
+    // redo brings the run back as the ordinary symbol pair — still no conversion
+    container.dispatchEvent(new KeyboardEvent('keydown', { key: 'y', ctrlKey: true, bubbles: true, cancelable: true }));
     expect(j(envelopeOf(controller.getState()).root)).toBe(
-      j({ type: 'op', op: 'multiply', args: [num(50), sym('m')], implicit: true }),
+      j({ type: 'op', op: 'multiply', args: [num(50), sym('mm')], implicit: true }),
     );
   });
 

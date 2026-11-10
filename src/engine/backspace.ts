@@ -111,7 +111,7 @@ import { EngineError } from './errors.js';
 
 import { entryStation } from './nav.js';
 
-import { applyOp, envelopeOf, type EditingState, type Op, type Position } from './ops.js';
+import { applyOps, envelopeOf, type EditingState, type Op, type Position } from './ops.js';
 
 import { defaultStaticVocabulary } from '../ast/vocabulary.js';
 
@@ -982,9 +982,7 @@ export function backspace(state: EditingState, opts: BackspaceOpts = {}): Editin
     ...opts,
     units: opts.units ?? new Set(state.vocabulary?.units ?? defaultStaticVocabulary.units),
   });
-  let next = state;
-  for (const op of decision.ops) next = applyOp(next, op);
-  return next;
+  return applyOps(state, decision.ops); // U1 (session 5): one key = one undo unit
 }
 
 // ——— Forward Delete (the ruled mirrors + the named no-op defaults) ———
@@ -1218,7 +1216,5 @@ export function forwardDelete(state: EditingState, opts: DeleteOpts = {}): Editi
     ctrl: opts.ctrl,
     units: opts.units ?? new Set(state.vocabulary?.units ?? defaultStaticVocabulary.units),
   });
-  let next = state;
-  for (const op of decision.ops) next = applyOp(next, op);
-  return next;
+  return applyOps(state, decision.ops); // U1 (session 5): one key = one undo unit
 }

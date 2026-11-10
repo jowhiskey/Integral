@@ -518,9 +518,9 @@ describe('4b-2 — the keymap audit pin: every coverage-matrix input → its act
   // The audit table. Each row: the matrix input, the event shape, the ACTUAL
   // classifyKey action today, the contract rule IDs, and the implementation
   // status. If a keymap entry is removed or reclassified, this pin fails — the
-  // audit cannot silently rot. Rows marked "pending session 5" are ruled by the
-  // contract (Batch 6, K1–K3; U1 coalescing) but land with the session-5 work;
-  // their CURRENT action is pinned so the change is deliberate when it lands.
+  // audit cannot silently rot. Session 5 flipped the K1–K3 + U1 rows from
+  // "deliberate pass-through until session 5" to their implemented actions
+  // (boundary/commit; coalescing is controller-side, not a classifyKey action).
   interface AuditRow {
     readonly input: string;
     readonly event: { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; shiftKey?: boolean };
@@ -551,13 +551,15 @@ describe('4b-2 — the keymap audit pin: every coverage-matrix input → its act
     { input: 'comma', event: { ...base, key: ',' }, action: { kind: 'type', token: KEYMAP[','] }, rules: ['N7', 'OA-fn-args'], status: 'implemented (2a)' },
     { input: 'Space', event: { ...base, key: ' ' }, action: { kind: 'type', token: KEYMAP[' '] }, rules: ['S-021', 'S-022', 'S-098'], status: 'implemented (2a)' },
     { input: 'dead key (any)', event: { ...base, key: 'Dead' }, action: { kind: 'deadPow' }, rules: ['T8', 'S-034', 'S-035', 'OA-dead-key', 'OA-one-shot'], status: 'implemented (2b-1 + session 3)' },
-    { input: 'Ctrl/Meta+Z (undo)', event: { ...base, key: 'z', ctrlKey: true }, action: { kind: 'undo' }, rules: ['U1', 'U2', 'U4'], status: 'keys implemented (session 2); U1 typing-burst coalescing is controller-side, pending session 5' },
-    { input: 'Ctrl/Meta+Y and Ctrl/Meta+Shift+Z (redo)', event: { ...base, key: 'Z', ctrlKey: true, shiftKey: true }, action: { kind: 'redo' }, rules: ['U3', 'U4'], status: 'keys implemented (session 2); coalescing pending session 5' },
-    { input: 'click variants (glyph interior/edges, seams, container bodies, background)', event: { ...base, key: '<mouse>' }, action: { kind: 'ignore' }, rules: ['C1', 'C2', 'C3', 'C4', 'C5'], status: 'handled by the click path (hitFromMouseEvent + caretFromHit → placeCaret), NOT classifyKey — C1–C5 implemented this session; C6 double-click defers to the selection-ranges feature' },
-    { input: 'Home/End', event: { ...base, key: 'Home' }, action: { kind: 'ignore' }, rules: ['K1', 'S-105'], status: 'RULED (Batch 6, iterative Home/End) but not yet implemented — pending session 5; currently passes through' },
-    { input: 'Enter', event: { ...base, key: 'Enter' }, action: { kind: 'ignore' }, rules: ['K2', 'S-092'], status: 'RULED (commit + blur) but not yet implemented — pending session 5; currently passes through' },
-    { input: 'Tab', event: { ...base, key: 'Tab' }, action: { kind: 'ignore' }, rules: ['K2', 'S-092'], status: 'RULED (commit + blur); today the browser focus move + the blur handler settle units — explicit handling pending session 5' },
-    { input: 'Escape', event: { ...base, key: 'Escape' }, action: { kind: 'ignore' }, rules: ['K3', 'S-093'], status: 'RULED (commit + blur, no handoff) but not yet implemented — pending session 5; currently passes through' },
+    { input: 'Ctrl/Meta+Z (undo)', event: { ...base, key: 'z', ctrlKey: true }, action: { kind: 'undo' }, rules: ['U1', 'U2', 'U4'], status: 'implemented (session 2 keys; session 5: U1 typing-run coalescing — LogEntry {ops:[…]}, controller-side run-closing)' },
+    { input: 'Ctrl/Meta+Y and Ctrl/Meta+Shift+Z (redo)', event: { ...base, key: 'Z', ctrlKey: true, shiftKey: true }, action: { kind: 'redo' }, rules: ['U3', 'U4'], status: 'implemented (session 2 keys; session 5: redo replays the whole unit, clears on new edits)' },
+    { input: 'click variants (glyph interior/edges, seams, container bodies, background)', event: { ...base, key: '<mouse>' }, action: { kind: 'ignore' }, rules: ['C1', 'C2', 'C3', 'C4', 'C5'], status: 'handled by the click path (hitFromMouseEvent + caretFromHit → placeCaret), NOT classifyKey — C1–C5 implemented in 4b-2; C6 double-click defers to the selection-ranges feature' },
+    { input: 'Home', event: { ...base, key: 'Home' }, action: { kind: 'boundary', side: 'start' }, rules: ['K1', 'S-089', 'S-090', 'S-091', 'S-105'], status: 'implemented (session 5: K1 iterative Home/End — local row/slot boundary first, then one level outward per press, S-105 A direct escalation; movement, never logged)' },
+    { input: 'End', event: { ...base, key: 'End' }, action: { kind: 'boundary', side: 'end' }, rules: ['K1', 'S-089', 'S-090', 'S-091', 'S-105'], status: 'implemented (session 5: K1 mirror of Home)' },
+    { input: 'Ctrl+Home/End', event: { ...base, key: 'Home', ctrlKey: true }, action: { kind: 'ignore' }, rules: ['K1'], status: 'implemented (session 5): deliberately UNBOUND — K1 rules out Ctrl variants; passes through' },
+    { input: 'Enter', event: { ...base, key: 'Enter' }, action: { kind: 'commit' }, rules: ['K2', 'S-092'], status: 'implemented (session 5: K2 commit + blur — the controller ends the session and fires blur; post-blur behavior is the host’s)' },
+    { input: 'Tab', event: { ...base, key: 'Tab' }, action: { kind: 'commit' }, rules: ['K2', 'S-092'], status: 'implemented (session 5: K2 commit + blur, same action as Enter — the next-cell handoff is host-side)' },
+    { input: 'Escape', event: { ...base, key: 'Escape' }, action: { kind: 'commit' }, rules: ['K3', 'S-093'], status: 'implemented (session 5: K3 commit + blur with NO follow-up — an unlogged boundary, no Integral-side action)' },
     { input: 'unknown printable (outside the keymap)', event: { ...base, key: ';' }, action: { kind: 'type', token: undefined }, rules: ['T1', 'S-013'], status: 'implemented: handled key, defined silent no-op (the rejection pattern)' },
   ];
 
@@ -576,7 +578,7 @@ describe('4b-2 — the keymap audit pin: every coverage-matrix input → its act
       'paren (', 'paren )', 'comma', 'Space', 'dead key (any)',
       'Ctrl/Meta+Z (undo)', 'Ctrl/Meta+Y and Ctrl/Meta+Shift+Z (redo)',
       'click variants (glyph interior/edges, seams, container bodies, background)',
-      'Home/End', 'Enter', 'Tab', 'Escape',
+      'Home', 'End', 'Ctrl+Home/End', 'Enter', 'Tab', 'Escape',
       'unknown printable (outside the keymap)',
     ];
     expect(AUDIT.map((r) => r.input)).toEqual(matrixInputs);

@@ -96,6 +96,46 @@ describe('demo case browser', () => {
     await unmount(app as never);
   });
 
+  it('S-106 demo default (session 5): blur-commit discards the undo history — the committed envelope resumes in a fresh session', async () => {
+    const { target, app } = mountApp();
+    await tick();
+    click(caseButton(target, 'U-04')); // instruction case, keys 'xyz'
+    await tick();
+    const runBtn = target.querySelector('button[data-run-keys]') as HTMLButtonElement | null;
+    expect(runBtn, 'run-keys button').not.toBeNull();
+    click(runBtn!);
+    const ctl1 = app.getController()!;
+    expect(ctl1.getState().log.length).toBe(1); // U1: the typed `xyz` run coalesced into ONE unit
+    const committed = JSON.parse(JSON.stringify(envelopeOf(ctl1.getState()))) as unknown;
+    const editor = target.querySelector('#case-editor') as HTMLElement;
+    editor.dispatchEvent(new FocusEvent('blur', { bubbles: false })); // K2/K3-style blur-commit
+    await tick();
+    const ctl2 = app.getController()!;
+    expect(ctl2).not.toBe(ctl1); // a fresh session was resumed from the committed envelope
+    expect(envelopeOf(ctl2.getState())).toEqual(committed); // the formula persists
+    expect(ctl2.getState().log.length).toBe(0); // the undo history died with the session (discard default)
+    await unmount(app as never);
+  });
+
+  it('blur-resume preserves the caret (clicking outside the editor must not move it)', async () => {
+    const { target, app } = mountApp();
+    await tick();
+    click(caseButton(target, 'K-16')); // a + b, seed caret at the row end
+    await tick();
+    const before = app.getController()!;
+    const caret = { kind: 'token', path: [0], index: 0 } as const; // mid-formula, NOT the end
+    before.placeCaret(caret);
+    const editor = target.querySelector('#case-editor') as HTMLElement;
+    editor.dispatchEvent(new FocusEvent('blur', { bubbles: false }));
+    await tick();
+    const after = app.getController()!;
+    expect(after).not.toBe(before);
+    expect(after.getState().caret).toEqual(caret); // the caret stays where it was
+    expect(envelopeOf(after.getState())).toEqual(CASES.find((c) => c.id === 'K-16')!.envelope); // formula intact
+    expect(after.getState().log.length).toBe(0); // history discarded
+    await unmount(app as never);
+  });
+
   it('instruction cases: the run-keys button replays the instruction through the DOM keyboard path to the engine-expected state', async () => {
     const { target, app } = mountApp();
     await tick();

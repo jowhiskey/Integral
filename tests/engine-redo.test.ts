@@ -17,7 +17,7 @@ const num = (value: number) => ({ type: 'num', value }) as const;
 const sym = (name: string) => ({ type: 'sym', name }) as const;
 
 const snap = (s: EditingState): string =>
-  JSON.stringify([envelopeOf(s), s.caret, s.log.length, s.log.map((e) => e.op)]);
+  JSON.stringify([envelopeOf(s), s.caret, s.log.length, s.log.map((e) => e.ops)]); // session 5: LogEntry {ops:[…]}
 
 describe('redo (engine)', () => {
   it('starts empty; redo on an empty list is a defined no-op returning the same state object', () => {
@@ -45,7 +45,7 @@ describe('redo (engine)', () => {
     expect(redone).not.toBe(undone);
     expect(snap(redone)).toBe(afterSnap); // byte-identical tree + caret + log shape
     expect(redone.redo.length).toBe(0);
-    expect(JSON.stringify(redone.log[1].op)).toBe(JSON.stringify(after.log[1].op));
+    expect(JSON.stringify(redone.log[1].ops)).toBe(JSON.stringify(after.log[1].ops)); // session 5: {ops:[…]} shape
   });
 
   it('multi-entry: undo, undo, redo, redo walks the log stepwise byte-identically', () => {

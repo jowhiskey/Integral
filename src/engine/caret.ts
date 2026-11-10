@@ -94,6 +94,13 @@ export type Caret =
   | ({ readonly kind: 'row'; readonly path: Path; readonly index: number } & CaretBoundary)
   | ({ readonly kind: 'token'; readonly path: Path; readonly index: number; readonly label?: SubLabel } & CaretBoundary);
 
+/** Byte-level caret equality (JSON of the caret value) — the reducer's
+ *  same-state clamp, the nav resolvers, and the controller's run-boundary
+ *  checks share it. */
+export function sameCaret(a: Caret, b: Caret): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 /**
  * The rendered text of a number or symbol token (what the editor shows and
  * what the in-token offset addresses). A `dot`-flagged number's trailing

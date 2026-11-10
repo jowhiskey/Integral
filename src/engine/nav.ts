@@ -31,12 +31,15 @@ import {
   nodeAt,
   refOfPath,
   rowArgs,
+  sameCaret,
   slotValue,
   subLabelText,
   tokenText,
   type Caret,
   type Path,
+  type Ref,
   type SlotName,
+  type SubLabel,
 } from './caret.js';
 
 /** Arrow directions the move op understands. */
@@ -831,4 +834,167 @@ export function resolveMove(
       return climb(env, caret.path, dir, registry);
     }
   }
+}
+
+// ——— Home/End (K1, rework session 5): local boundary first, then iterative outward ———
+//
+// K1 (S-089/S-090/S-091, S-105 A): Home/End jump to the start/end of the
+// CURRENT row/slot (the innermost enclosing region — inside a slot that is
+// the slot's own row, never a sibling slot). Pressed again when already at
+// that boundary they escalate ONE level outward per press — DIRECTLY to the
+// start/end of the enclosing row (not first to the position after the
+// structure) — iterating to the formula start/end, where further presses are
+// defined no-ops. The region chain is derived from the caret's address; the
+// boundary of a region is the same visual station the row/token/edge rules
+// already produce (rowEndStation / in-token offsets / edgeStation).
+
+/** A region of the caret geography for Home/End: a row, a slot, a token, or
+ *  a bare node — innermost first, ending at the formula root. */
+type BoundaryRegion =
+  | { readonly kind: 'row'; readonly path: Path }
+  | { readonly kind: 'slot'; readonly path: Path; readonly slot: SlotName }
+  | { readonly kind: 'token'; readonly path: Path; readonly label?: SubLabel }
+  | { readonly kind: 'node'; readonly path: Path };
+
+/** The boundary station of the node at `path` seen as one unit: a row's own
+ *  visual border (rowEndStation; a lone FN root's border is the station past
+ *  its close fence, mirroring the climb's fn-root rule), a token's in-token
+ *  edge, a whole container's edge station (edgeStation, falling back to the
+ *  bench), the node caret for other leaves. */
+function nodeRegionBoundary(env: Envelope, path: Path, side: Side, registry: NavRegistry): Caret | null {
+  const node = nodeAt(env, path);
+  if (node === null) return null;
+  if (isRowNode(node)) {
+    if (path.length === 0 && node.type === 'fn') {
+      return { kind: 'node', path: [], side };
+    }
+    return rowEndStation(env, path, side, registry);
+  }
+  switch (node.type) {
+    case 'num':
+    case 'sym':
+    case 'unit': {
+      const len = tokenText(node).length;
+      return { kind: 'token', path, index: side === 'left' ? 0 : len };
+    }
+    case 'sub':
+      return side === 'left'
+        ? { kind: 'token', path, index: 0, label: 'base' }
+        : { kind: 'token', path, index: subLabelText(node, 'sub').length, label: 'sub' };
+    default:
+      if (isFlankable(node)) return edgeStation(env, path, side) ?? bench(env, path, side, registry);
+      return { kind: 'node', path };
+  }
+}
+
+/** The start/end station of one region (its content's boundary for a slot). */
+function regionBoundary(env: Envelope, region: BoundaryRegion, side: 'start' | 'end', registry: NavRegistry): Caret | null {
+  const s: Side = side === 'start' ? 'left' : 'right';
+  switch (region.kind) {
+    case 'row':
+      return rowEndStation(env, region.path, s, registry);
+    case 'slot': {
+      const owner = nodeAt(env, region.path);
+      if (owner === null) return null;
+      const content = slotValue(owner, region.slot);
+      if (content === null) return { kind: 'slot', path: region.path, slot: region.slot };
+      return nodeRegionBoundary(env, [...region.path, region.slot], s, registry);
+    }
+    case 'token': {
+      const node = nodeAt(env, region.path);
+      if (node === null) return null;
+      const len = region.label !== undefined ? subLabelText(node, region.label).length : tokenText(node).length;
+      const index = side === 'start' ? 0 : len;
+      return region.label !== undefined
+        ? { kind: 'token', path: region.path, index, label: region.label }
+        : { kind: 'token', path: region.path, index };
+    }
+    case 'node':
+      // a bare node region (a leaf, or the formula root itself): the node's
+      // own unit boundary — row border for rows, in-token edge for tokens,
+      // edge station for containers, the node caret for other leaves
+      return nodeRegionBoundary(env, region.path, s, registry);
+  }
+}
+
+/** The region chain of a caret, innermost first, ending at the formula root
+ *  (a `node` region at path [] — whose boundary is the root's own row border /
+ *  in-token edge / lone-container side station). A slot region chains into
+ *  the owner's HORIZONTALLY-linked sibling slots (the pow's base→exp and the
+ *  root's index→radicand chains are one visual row — the N4/N5 horizontal
+ *  interface); stacked layouts (frac num/den) have no horizontal edge, so
+ *  they never chain — Home/End never dives into a stacked sibling slot. */
+function boundaryRegions(env: Envelope, caret: Caret, side: 'start' | 'end', registry: NavRegistry): BoundaryRegion[] {
+  const out: BoundaryRegion[] = [];
+  const dir: NavDir = side === 'start' ? 'left' : 'right';
+  const pushSlot = (ownerPath: Path, slot: SlotName): void => {
+    out.push({ kind: 'slot', path: ownerPath, slot });
+    const owner = nodeAt(env, ownerPath);
+    if (owner !== null) {
+      const edge = edgeTo(profileFor(registry, owner), owner, slot, dir);
+      if (edge !== null) {
+        pushSlot(ownerPath, edge); // the horizontal chain continues in the owner
+        return;
+      }
+    }
+    pushRef(refOfPath(ownerPath));
+  };
+  const pushRef = (ref: Ref): void => {
+    if (ref.at === 'root') out.push({ kind: 'node', path: [] });
+    else if (ref.at === 'cell') {
+      out.push({ kind: 'row', path: ref.path });
+      pushRef(refOfPath(ref.path));
+    } else {
+      pushSlot(ref.path, ref.slot);
+    }
+  };
+  switch (caret.kind) {
+    case 'empty':
+      break; // empty formula: the caller no-ops
+    case 'row':
+      out.push({ kind: 'row', path: caret.path });
+      pushRef(refOfPath(caret.path));
+      break;
+    case 'slot':
+      pushSlot(caret.path, caret.slot);
+      break;
+    case 'token':
+      out.push({ kind: 'token', path: caret.path, label: caret.label });
+      pushRef(refOfPath(caret.path));
+      break;
+    case 'node': {
+      const node = nodeAt(env, caret.path);
+      if (node !== null && caret.side === undefined) {
+        // a plain node caret: the node's own region (row or leaf)
+        if (isRowNode(node)) out.push({ kind: 'row', path: caret.path });
+        else out.push({ kind: 'node', path: caret.path });
+      }
+      // a flank/border station (side set) belongs to the parent's geography
+      pushRef(refOfPath(caret.path));
+      break;
+    }
+  }
+  return out;
+}
+
+/**
+ * Resolve one Home/End press (K1). Returns the target caret, or null when the
+ *  caret is already at the outermost (formula) boundary — a defined no-op.
+ *  The first region whose boundary differs from the caret wins: that is the
+ *  local jump when inside a row/slot, and the one-level-per-press escalation
+ *  (S-105 A: directly to the enclosing row's start/end) when already at the
+ *  inner boundary. Pure: never mutates the envelope, never throws.
+ */
+export function resolveBoundary(
+  env: Envelope,
+  caret: Caret,
+  side: 'start' | 'end',
+  registry: NavRegistry = NAV_PROFILES,
+): Caret | null {
+  if (caret.kind === 'empty') return null;
+  for (const region of boundaryRegions(env, caret, side, registry)) {
+    const b = regionBoundary(env, region, side, registry);
+    if (b !== null && !sameCaret(b, caret)) return b;
+  }
+  return null;
 }

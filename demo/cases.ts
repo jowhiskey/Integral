@@ -1351,6 +1351,35 @@ export const CASES: readonly CatalogCase[] = [
     envelope: env(op('add', frac(num(1), num(2)), sym('y'))),
     caret: rw([], 2),
   },
+  {
+    id: 'K-15',
+    rules: ['K1', 'S-089', 'S-090', 'S-091', 'S-105'],
+    category: 'K',
+    label: 'x + 1/(2+abc) + z — Home/End escalation walk from inside the denominator',
+    stress: 'From mid-`abc`: End ×3 (abc end → row end z → no-op), Home ×3 back (z start → x start → no-op); also Home/End from the numerator and from the `2`; Ctrl+Home passes through.',
+    envelope: env(
+      op('add', sym('x'), frac(num(1), op('add', num(2), sym('abc'))), sym('z')),
+    ),
+    caret: tk([1, 'den', 1], 1),
+  },
+  {
+    id: 'K-16',
+    rules: ['K2', 'K3', 'S-092', 'S-093', 'S-106'],
+    category: 'K',
+    label: 'a + b — the blur-commit family',
+    stress: 'Type a letter, then press Enter, then Tab, then Escape (refocus between): each commits and blurs — the formula persists in the JSON panel and the undo history dies with the session (demo default, S-106); type after refocus starts a new undo unit.',
+    envelope: env(op('add', sym('a'), sym('b'))),
+    caret: rw([], 2),
+  },
+  {
+    id: 'K-17',
+    rules: ['T9', 'OA-index-horizontal'],
+    category: 'K',
+    label: 'ⁿ√5 with an empty □ index — the rejection readout',
+    stress: 'With the caret in the □ index, type a digit: the op is rejected by the validation gate — the tree is unchanged and the rejection readout under the editor names it (session-5 rider).',
+    envelope: env({ type: 'root', radicand: num(5), mroot: true }),
+    caret: sl([], 'index'),
+  },
 
   // ——— U: undo/redo walk-backs ———
   {
@@ -1381,6 +1410,35 @@ export const CASES: readonly CatalogCase[] = [
     keys: 'a+b',
     envelope: EMPTY_ENV,
     caret: EMPTY,
+  },
+  {
+    id: 'U-04',
+    rules: ['U1', 'S-082'],
+    category: 'U',
+    label: 'type `xyz`, Backspace, retype `w` — the typo-fix chain',
+    stress: 'Run the instruction, then Backspace once and type `w`; Ctrl+Z ×3 walks the retype, the Backspace, then the original run (each unit byte-exact); Ctrl+Y ×3 forward.',
+    keys: 'xyz',
+    envelope: EMPTY_ENV,
+    caret: EMPTY,
+  },
+  {
+    id: 'U-05',
+    rules: ['U1', 'S-085', 'T5', 'T10'],
+    category: 'U',
+    label: 'type `a+sin(a` — the function-conversion undo chain',
+    stress: 'Run the instruction; Ctrl+Z ×4 walks `a+sin(a|)` → `a+sin(|□)` → `a+sin|` → `a+|` → empty (the `(`-press + conversion is ONE unit reverting to the bare symbol). Variant: arrow between `a+` and `sin(` to split the first run.',
+    keys: 'a+sin(a',
+    envelope: EMPTY_ENV,
+    caret: EMPTY,
+  },
+  {
+    id: 'U-06',
+    rules: ['U1', 'U2', 'S-086', 'D7'],
+    category: 'U',
+    label: 'sin(a+b), caret at the argument start — the head-swap undo pair',
+    stress: 'Backspace (the head dies), type `cos(` (re-binds the pair), then Ctrl+Z ×2: the typed `cos(` head goes in one undo, the `sin(` head is restored by the next — the swap is two ordinary edits.',
+    envelope: env(fn('sin', op('add', sym('a'), sym('b')))),
+    caret: rw([], 0),
   },
 
   // ——— R: real-world formulas ———

@@ -186,7 +186,7 @@ function applyChecked(prev: EditingState, op: Op): EditingState | null {
   expect(caretResolves(next.root, next.caret)).toBe(true);
   // C5: the log tracks exactly the applied ops
   expect(next.log.length).toBe(prev.log.length + 1);
-  expect(next.log[next.log.length - 1]?.op).toEqual(op);
+  expect(next.log[next.log.length - 1]?.ops).toEqual([op]); // session 5 (U1): LogEntry carries {ops:[…]}
   return next;
 }
 
@@ -533,7 +533,7 @@ describe('log entries', () => {
     const state = initSession(SEEDS.incompleteFrac);
     const next = applyOp(state, { op: 'insert', node: num(3), at: { at: 'slot', path: [], slot: 'num' } });
     const entry = next.log[0];
-    expect(entry.op).toEqual({ op: 'insert', node: num(3), at: { at: 'slot', path: [], slot: 'num' } });
+    expect(entry.ops).toEqual([{ op: 'insert', node: num(3), at: { at: 'slot', path: [], slot: 'num' } }]); // session 5 (U1): LogEntry carries {ops:[…]}
     expect(JSON.stringify(entry.before)).toBe(JSON.stringify(envelopeOf(state)));
     expect(entry.caretBefore).toEqual(state.caret);
     expect(next.log.length).toBe(1);

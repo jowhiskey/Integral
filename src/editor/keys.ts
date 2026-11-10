@@ -37,6 +37,8 @@ export const KEYMAP: Readonly<Record<string, TypedToken>> = (() => {
 export type KeyAction =
   | { readonly kind: 'type'; readonly token: TypedToken | undefined }
   | { readonly kind: 'move'; readonly dir: NavDir }
+  | { readonly kind: 'boundary'; readonly side: 'start' | 'end' }
+  | { readonly kind: 'commit' }
   | { readonly kind: 'backspace'; readonly ctrl: boolean }
   | { readonly kind: 'delete'; readonly ctrl: boolean }
   | { readonly kind: 'undo' }
@@ -44,20 +46,41 @@ export type KeyAction =
   | { readonly kind: 'deadPow' }
   | { readonly kind: 'ignore' };
 
+/** U1 coalescing class (rework session 5): the tokens that may extend an open
+ *  typing run. The T7/T8 structure keys (`/`, `^`, the dead-key power) are
+ *  NOT in this class — they close the run and form their own undo unit.
+ *  Parens ARE in the class: a `(` that merely creates a group or re-binds a
+ *  head-less fence pair (OA-rehead, S-086) coalesces with the run; the T5
+ *  function conversion splits it — the engine forces that split at the
+ *  conversion emission sites (S-085: the `(`-press + conversion is one unit
+ *  of its own). */
+export const isTypingToken = (token: TypedToken): boolean =>
+  token.t === 'leaf' ||
+  token.t === 'operator' ||
+  token.t === 'dot' ||
+  token.t === 'space' ||
+  token.t === 'comma' ||
+  token.t === 'groupOpen' ||
+  token.t === 'groupClose';
+
 /** Classify one keydown event (structural type — no DOM dependency, so the
  *  classifier is unit-testable without jsdom):
  *  - Ctrl/Meta + Z            → undo;  Ctrl/Meta + Y or Ctrl/Meta + Shift + Z → redo
  *    (both `z` and `Z` with shift are handled); Ctrl/Meta + Backspace or
  *    Ctrl/Meta + Delete → the split-semantics variants (D3); any other
- *    modified key passes through.
+ *    modified key passes through — including Ctrl+Home/End, which stay
+ *    UNBOUND (K1 rules out Ctrl variants).
  *  - Arrow keys               → move.
+ *  - Home / End               → boundary (K1, rework session 5: local row/slot
+ *                              boundary first, then iterative outward; S-105 A).
+ *  - Enter / Tab / Escape     → commit (K2/K3, rework session 5: commit +
+ *                              blur; the post-blur behavior is the host's).
  *  - Backspace                → backspace (D1–D9); Delete → forward delete
  *                              (the ruled D1/D3 mirrors + named no-op defaults).
  *  - a printable single character (key.length === 1, no Ctrl/Meta/Alt) → a
  *    typing key; `token` is undefined when the char is outside the pinned
  *    keymap (unknown token — still a handled key).
- *  - everything else (Enter, Tab, Escape, F-keys, Home/End, PageUp/Down, …)
- *    → ignored, passed through untouched. */
+ *  - everything else (F-keys, PageUp/Down, …) → ignored, passed through. */
 export function classifyKey(event: {
   readonly key: string;
   readonly ctrlKey: boolean;
@@ -89,6 +112,14 @@ export function classifyKey(event: {
       return { kind: 'move', dir: 'up' };
     case 'ArrowDown':
       return { kind: 'move', dir: 'down' };
+    case 'Home':
+      return { kind: 'boundary', side: 'start' }; // K1 (session 5)
+    case 'End':
+      return { kind: 'boundary', side: 'end' }; // K1 (session 5)
+    case 'Enter':
+    case 'Tab':
+    case 'Escape':
+      return { kind: 'commit' }; // K2/K3 blur-commit (session 5)
     case 'Dead':
       // T8, as amended by the owner directive (2026-11-09, live check): ANY
       // dead-key press arms the pending power — layout-independent, no
