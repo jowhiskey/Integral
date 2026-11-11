@@ -46,8 +46,9 @@ const dataOf = (e: Event): string => {
 /**
  * Attach the logger: every keydown/keyup and
  * compositionstart/compositionupdate/compositionend event on `target` (the
- * editor's focus-bearing container) lands in `sink` as one pre-formatted
- * line, capture-phase and passive. Returns the detach function.
+ * editor's focus-bearing container), plus every click (test-logger session),
+ * lands in `sink` as one pre-formatted line, capture-phase and passive.
+ * Returns the detach function.
  */
 export function attachImeLogger(
   target: HTMLElement,
@@ -61,6 +62,14 @@ export function attachImeLogger(
   };
   const keyLine = (e: KeyboardEvent) => emit(e.type, keyFields(e));
   const compLine = (e: Event) => emit(e.type, `data=${JSON.stringify(dataOf(e))}`);
+  /** Click capture (test-logger session): the mouse stream alongside the key
+   *  stream — target described by id (uid) or tag, plus client coordinates. */
+  const mouseLine = (e: Event) => {
+    const me = e as MouseEvent;
+    const t = me.target as Element | null;
+    const target = t === null ? 'null' : t.id !== '' ? `#${t.id}` : `<${t.localName}>`;
+    return emit(me.type, `button=${me.button} x=${me.clientX} y=${me.clientY} target=${target}`);
+  };
 
   const listeners: Array<[keyof HTMLElementEventMap, EventListener]> = [
     ['keydown', keyLine as EventListener],
@@ -68,6 +77,7 @@ export function attachImeLogger(
     ['compositionstart', compLine],
     ['compositionupdate', compLine],
     ['compositionend', compLine],
+    ['click', mouseLine as EventListener],
     [
       'beforeinput',
       (e: Event) =>

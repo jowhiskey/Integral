@@ -162,17 +162,6 @@
         padding: 0.15em 0.5em;
         cursor: pointer;
       }
-      .caret-readout {
-        font-family: ui-monospace, monospace;
-        font-size: 0.78em;
-        color: #357;
-        background: #eef3fb;
-        border: 1px solid #d5e0f0;
-        border-radius: 4px;
-        padding: 0.15em 0.45em;
-        white-space: nowrap;
-        overflow-x: auto;
-      }
       .note {
         font-size: 0.8em;
         color: #444;
@@ -182,11 +171,211 @@
         color: #357;
         font-family: ui-monospace, monospace;
       }
-      .panel {
+      /* ——— the test-logger panel (replaces the old AST/MathML readout strips) ——— */
+      .logger-col {
         flex: 1 1 0;
         min-width: 0;
         display: flex;
         flex-direction: column;
+        gap: 0.3em;
+        overflow-y: auto;
+      }
+      .logger-head {
+        display: flex;
+        align-items: baseline;
+        gap: 0.6em;
+        flex-wrap: wrap;
+      }
+      .logger-head input[type='text'] {
+        font: inherit;
+        font-size: 0.85em;
+        flex: 1 1 10em;
+        min-width: 6em;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        padding: 0.15em 0.45em;
+      }
+      .logger-head button,
+      .recordings button,
+      .comment-row button {
+        font: inherit;
+        font-size: 0.8em;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        background: #fafafa;
+        padding: 0.15em 0.5em;
+        cursor: pointer;
+      }
+      .logger-head button[data-record] {
+        font-weight: 600;
+        background: #fdecec;
+        border-color: #c66;
+      }
+      .paint-toggle {
+        font-size: 0.78em;
+        color: #555;
+        display: flex;
+        align-items: center;
+        gap: 0.3em;
+      }
+      .live-line {
+        display: flex;
+        gap: 0.8em;
+        flex-wrap: wrap;
+      }
+      .caret-readout {
+        font-family: ui-monospace, monospace;
+        font-size: 0.72em;
+        color: #357;
+        background: #eef3fb;
+        border: 1px solid #d5e0f0;
+        border-radius: 4px;
+        padding: 0.1em 0.4em;
+        white-space: nowrap;
+        overflow-x: auto;
+      }
+      .rejection-readout {
+        font-family: ui-monospace, monospace;
+        font-size: 0.72em;
+        color: #a33;
+        background: #fdeeee;
+        border: 1px solid #f0d5d5;
+        border-radius: 4px;
+        padding: 0.1em 0.4em;
+        white-space: nowrap;
+        overflow-x: auto;
+      }
+      .entries-label,
+      .rec-label {
+        margin-top: 0.2em;
+      }
+      ol.entries {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        overflow-y: auto;
+        min-height: 4em;
+        max-height: 34vh;
+        border: 1px solid #e4e4e4;
+        border-radius: 4px;
+        background: #fafafa;
+      }
+      ol.entries li {
+        border-bottom: 1px solid #eee;
+      }
+      button.entry {
+        font-family: ui-monospace, monospace;
+        font-size: 0.72em;
+        text-align: left;
+        width: 100%;
+        border: none;
+        background: transparent;
+        padding: 0.2em 0.5em;
+        cursor: pointer;
+        display: flex;
+        gap: 0.5em;
+        align-items: baseline;
+        flex-wrap: wrap;
+      }
+      button.entry.expanded {
+        background: #e8f0fa;
+      }
+      button.entry .noop {
+        color: #a60;
+        border: 1px solid #e0b060;
+        border-radius: 3px;
+        padding: 0 0.3em;
+        font-size: 0.9em;
+      }
+      button.entry .rej {
+        color: #a33;
+        border: 1px solid #e0a0a0;
+        border-radius: 3px;
+        padding: 0 0.3em;
+        font-size: 0.9em;
+      }
+      button.entry .cmt {
+        color: #357;
+        border: 1px solid #a0b8e0;
+        border-radius: 3px;
+        padding: 0 0.3em;
+        font-size: 0.9em;
+      }
+      .entry-detail {
+        padding: 0.2em 0.6em 0.5em;
+        display: flex;
+        flex-direction: column;
+        gap: 0.25em;
+      }
+      .entry-detail .d {
+        font-family: ui-monospace, monospace;
+        font-size: 0.7em;
+        color: #555;
+        word-break: break-all;
+      }
+      .entry-detail .d.rej {
+        color: #a33;
+      }
+      .entry-detail .d.cmt {
+        color: #357;
+      }
+      /* The review preview: styled like the editor container so the recorded
+         container-relative caret rect maps onto it 1:1. NOT an .integral-editor
+         (the demo has exactly one editor surface). */
+      .log-preview {
+        position: relative;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        background: #fff;
+        padding: 0.25em 0.5em;
+        font-size: 1.25em;
+        min-height: 2.1em;
+        align-self: flex-start;
+        min-width: 12em;
+      }
+      .log-caret {
+        position: absolute;
+        width: 2px;
+        border-radius: 1px;
+        background: #d33;
+        pointer-events: none;
+      }
+      .comment-row {
+        display: flex;
+        gap: 0.4em;
+      }
+      .comment-row input {
+        font: inherit;
+        font-size: 0.78em;
+        flex: 1 1 auto;
+        min-width: 0;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        padding: 0.15em 0.45em;
+      }
+      ul.recordings {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        font-size: 0.78em;
+      }
+      ul.recordings li {
+        display: flex;
+        gap: 0.5em;
+        align-items: baseline;
+        padding: 0.1em 0;
+        border-bottom: 1px solid #f0f0f0;
+      }
+      ul.recordings .rec-open {
+        font-weight: 600;
+      }
+      ul.recordings .meta {
+        color: #777;
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
       pre.src {
         flex: 1 1 0;
@@ -279,7 +468,7 @@
     </style>
   </head>
   <body>
-    <h1>Integral editor demo — visual-test case browser</h1>
+    <h1>Integral editor demo — visual-test case browser + usability-test logger</h1>
     <details class="about">
       <summary>about this page (dev-only demo, not part of the published package)</summary>
       <p>
@@ -288,8 +477,11 @@
         again to reset to the seed. Instruction cases (marked <code>keys</code>) seed the empty formula — the “type
         instruction” button runs the key sequence through the real keyboard path. In the editor: type, move with the
         arrow keys, Backspace / Ctrl+Backspace, undo/redo (Ctrl+Z, Ctrl+Y or Ctrl+Shift+Z), and click to place the
-        caret. The testing area shows the live data without devtools: the stored AST envelope as pretty JSON, the
-        generated MathML as pretty source (right of the JSON), and a caret-state readout under the editor.
+        caret. The panel right of the editor is the usability-test logger: press Record, act in the editor, Stop —
+        every key, click, and case load is captured as one diff entry (baseline first); expand an entry to re-render
+        the exact state at that step and pin a comment. Recordings persist in localStorage; export-one / export-all
+        download text-only JSON bug files for a fix session. The paint-geometry toggle adds the caret overlay rect
+        and anchor element rect to entries.
       </p>
     </details>
     <div id="app"></div>
