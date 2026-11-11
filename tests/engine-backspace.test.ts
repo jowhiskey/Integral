@@ -17,6 +17,7 @@ import {
   EngineError,
   initSession,
   redo,
+  typeToken,
   undo,
   type Caret,
   type EditingState,
@@ -866,5 +867,63 @@ describe('U2 — one key, one op, one log entry; fromJSON legality at every inte
     const tether = backspace(at(group(op('add', sym('a'), sym('b'))), rowc(['child'], 0)));
     expect(j(envelopeOf(tether).root)).toBe(j(jmp(op('add', sym('a'), sym('b')), fence())));
     legal(tether);
+  });
+});
+
+// ——— OA-invisible-death (2026-11-11 micro-fix session, log rec-mwcb3stc-6) ———
+
+describe('OA-invisible-death — an all-null implicit (glyph-less) row renders nothing, so it must not persist in the AST (owner ruling 2026-11-11: "nothing visible → nothing in the AST")', () => {
+  it('unit→symbol reversion inside a dangling implicit pair: backspacing everything away ends at the EMPTY formula — no leftover invisible rows, caret empty, one undo unit per key', () => {
+    let state = at(jmp(null, unitNode(num(50), 'mm')), tokc([1], 0));
+    state = typeToken(state, { t: 'leaf', node: sym('x') }); // the letter at the unit seam reverts the unit to the [50, xmm] pair
+    expect(j(envelopeOf(state).root)).toBe(j(jmp(null, jmp(num(50), sym('xmm')))));
+    expect(state.caret).toEqual(tokc([1, 1], 1));
+    legal(state);
+    let s = { ...state, caret: tokc([1, 1], 3) }; // walk to the run's end (movement, unlogged)
+    const logs0 = s.log.length;
+    s = backspace(s); // xmm → xm (D1)
+    expect(j(envelopeOf(s).root)).toBe(j(jmp(null, jmp(num(50), sym('xm')))));
+    expect(s.caret).toEqual(tokc([1, 1], 2));
+    s = backspace(s); // xm → x
+    expect(j(envelopeOf(s).root)).toBe(j(jmp(null, jmp(num(50), sym('x')))));
+    expect(s.caret).toEqual(tokc([1, 1], 1));
+    s = backspace(s); // the emptied symbol → the pending null cell (D1 token-death)
+    expect(j(envelopeOf(s).root)).toBe(j(jmp(null, jmp(num(50), null))));
+    expect(s.caret).toEqual(rowc([1], 1));
+    legal(s);
+    s = backspace(s); // 50 → 5 (the gap consumes the last char, caret stays at the gap — S-064)
+    expect(j(envelopeOf(s).root)).toBe(j(jmp(null, jmp(num(5), null))));
+    expect(s.caret).toEqual(rowc([1], 1));
+    s = backspace(s); // 5 dies → the inner row becomes all-null implicit → CASCADE kills the outer row too → EMPTY formula (OA-invisible-death)
+    expect(j(envelopeOf(s).root)).toBe('null');
+    expect(s.caret).toEqual({ kind: 'empty' });
+    legal(s);
+    expect(s.log.length).toBe(logs0 + 5); // one undo unit per Backspace key — the cascade is a single op
+    expect(backspace(s)).toBe(s); // D4 silent no-op on the empty formula
+  });
+
+  it('the cascade stops at a visible ancestor: the all-null implicit row dies to the pending null (OA-pending-null), the surviving sibling stays', () => {
+    let s = at(jmp(sym('a'), jmp(num(5), sym('x'))), tokc([1, 1], 1));
+    s = backspace(s); // x dies
+    expect(j(envelopeOf(s).root)).toBe(j(jmp(sym('a'), jmp(num(5), null))));
+    expect(s.caret).toEqual(rowc([1], 1));
+    s = backspace(s); // 5 dies → the inner row is all-null implicit → dies; the outer row keeps a → pending null at cell 1
+    expect(j(envelopeOf(s).root)).toBe(j(jmp(sym('a'), null)));
+    expect(s.caret).toEqual(rowc([], 1));
+    legal(s);
+  });
+
+  it('BS directly on an already-all-null implicit row (seeded state) kills it the same way', () => {
+    const s = backspace(at(jmp(null, null), rowc([], 0)));
+    expect(j(envelopeOf(s).root)).toBe('null');
+    expect(s.caret).toEqual({ kind: 'empty' });
+    legal(s);
+  });
+
+  it('an explicit all-null row keeps its visible glyph — unchanged (glyphSplice death on BS stands, no OA-invisible-death)', () => {
+    const s = backspace(at(op('add', null, null), rowc([], 1)));
+    expect(j(envelopeOf(s).root)).toBe('null');
+    expect(s.caret).toEqual({ kind: 'empty' });
+    legal(s);
   });
 });

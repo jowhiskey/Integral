@@ -314,6 +314,13 @@ function tokenDeath(env: Envelope, path: Path, station?: Caret): BackspaceDecisi
   }
   const row = nodeAt(env, ref.path) as NodeJson;
   const cells = rowArgs(row).map((c, i) => (i === ref.index ? null : c));
+  // OA-invisible-death: nulling the last visible cell of an implicit row kills
+  // the whole invisible row chain in the SAME keypress (nothing visible →
+  // nothing in the AST), cascading up while parents become all-null too.
+  if (cells.length > 0 && cells.every((c) => c === null)) {
+    const death = invisibleRowDeath(env, ref.path, ref.index);
+    if (death !== null) return death;
+  }
   const freed: Caret = { kind: 'row', path: ref.path, index: ref.index };
   return { kind: 'token-death', ops: [{ op: 'place', node: rowClone(row, cells), at: replacePosOfRef(refOfPath(ref.path)), to: freed }], caret: freed };
 }
@@ -512,6 +519,41 @@ function containerDeath(env: Envelope, path: Path, station: Caret): BackspaceDec
   return outrightDeath(env, path, 'container-death');
 }
 
+/** OA-invisible-death (2026-11-11 micro-fix session, log rec-mwcb3stc-6):
+ *  an implicit (glyph-less) row whose cells are ALL null renders nothing, so
+ *  per the owner's ruling ("nothing visible → nothing in the AST") it must
+ *  not persist. Walk UP from `rowPath` — whose cell `becameNull` is (or
+ *  already is) null — while the parent row would become an all-null implicit
+ *  row too; return the topmost such row's path (null when the row at `rowPath`
+ *  stays visible). Explicit all-null rows keep their visible glyph and are
+ *  NOT invisible (the glyphSplice death on BS stands there). */
+function invisibleChainTop(env: Envelope, rowPath: Path, becameNull: number | null): Path | null {
+  let path: Path = rowPath;
+  let nullCell: number | null = becameNull;
+  let top: Path | null = null;
+  for (;;) {
+    const row = nodeAt(env, path) as NodeJson | null;
+    if (row === null || row.type !== 'op' || !rowIsImplicit(row)) break;
+    const args = rowArgs(row);
+    if (args.length === 0 || !args.every((c, i) => c === null || i === nullCell)) break;
+    top = path;
+    const ref = refOfPath(path);
+    if (ref.at !== 'cell') break; // root/slot rows cannot climb further
+    path = ref.path;
+    nullCell = ref.index;
+  }
+  return top;
+}
+
+/** The death decision for an invisible row chain: the topmost all-null implicit
+ *  row dies outright (pending-null at a parent cell per OA-pending-null, the □
+ *  at a slot, the empty formula at the root) — one op, one undo unit. Null
+ *  when nothing at `rowPath` is invisible. */
+function invisibleRowDeath(env: Envelope, rowPath: Path, becameNull: number | null): BackspaceDecision | null {
+  const top = invisibleChainTop(env, rowPath, becameNull);
+  return top === null ? null : outrightDeath(env, top, 'glyph');
+}
+
 // ——— D2 glyph / open fence / head ———
 
 /** D2/S-077 (the owner's B-15 live ruling): the BINDING glyph between two
@@ -700,7 +742,12 @@ function tail(env: Envelope, path: Path, station: Caret, ctx: BsCtx): BackspaceD
       }
       let idx = args.length - 1;
       while (idx >= 0 && args[idx] === null) idx -= 1; // invisible nulls render nothing
-      if (idx < 0) return noopDecision(station);
+      if (idx < 0) {
+        // OA-invisible-death: an all-null IMPLICIT row renders nothing — it
+        // dies (an explicit all-null row keeps its visible glyph: the no-op
+        // stands there).
+        return invisibleRowDeath(env, path, null) ?? noopDecision(station);
+      }
       return tail(env, [...path, idx], station, ctx);
     }
     case 'group':
@@ -722,6 +769,12 @@ function tail(env: Envelope, path: Path, station: Caret, ctx: BsCtx): BackspaceD
 function rowSeam(env: Envelope, rowPath: Path, index: number, station: Caret, ctx: BsCtx): BackspaceDecision {
   const row = nodeAt(env, rowPath) as NodeJson;
   const args = rowArgs(row);
+  // OA-invisible-death: BS on an all-null implicit row (it renders nothing)
+  // kills the invisible row chain outright instead of no-op'ing.
+  if (row.type === 'op' && rowIsImplicit(row) && args.length > 0 && args.every((c) => c === null)) {
+    const death = invisibleRowDeath(env, rowPath, null);
+    if (death !== null) return death;
+  }
   const fn = row.type === 'fn';
   const atEnd = index >= args.length;
 

@@ -1086,6 +1086,15 @@ export const CASES: readonly CatalogCase[] = [
     envelope: env(op('add', sym('x'), frac(num(1), num(2)))),
     caret: tk([0], 1),
   },
+  {
+    id: 'B-35',
+    rules: ['OA-invisible-death', 'D1', 'D2', 'OA-visual-trumps'],
+    category: 'B',
+    label: 'dangling implicit × with 50mm, caret at the unit seam (log rec-mwcb3stc-6)',
+    stress: 'Type x at the seam (the unit reverts to the 50·xmm pair), walk to the run’s end, Backspace everything away — the formula ends EMPTY: no leftover invisible rows in the AST, caret at the empty start.',
+    envelope: env(jmp(null, unit(num(50), 'mm'))),
+    caret: tk([1], 0),
+  },
 
   // ——— M: navigation (horizontal + vertical) ———
   {
