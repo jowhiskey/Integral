@@ -191,16 +191,17 @@ describe('D2 — backspace at gaps (S-064/S-066 A/S-077)', () => {
     // unwraps to the pair at its position
     let state = backspace(at(op('add', sym('ab'), sym('c')), rowc([], 1)));
     expect(j(envelopeOf(state).root)).toBe(j(jmp(sym('ab'), sym('c'))));
-    // 4b-1 re-pin (OA-visual-trumps, twin elimination): the freed glyph's
-    // spot collapses onto the bonded right operand's left entry — the
-    // pair's inner seam painted exactly where c's offset 0 paints.
-    expect(state.caret).toEqual(tokc([1], 0));
+    // B-33 (2) re-pin (owner ruling, cleanup-session leftover list): the caret
+    // rests at the LEFT operand's right edge (ab's end) — the old 4b-1
+    // landing on the right operand's left entry (c@0) is retired.
+    expect(state.caret).toEqual(tokc([0], 2));
     expect(state.log.length).toBe(1);
     legal(state);
     // `x + |1/2`: NO highlight from the before-side — the plus dies and the
-    // operands juxtapose (`x 1/2`)
+    // operands juxtapose (`x 1/2`); the caret lands at `x|1/2` (B-33 (2))
     state = backspace(at(op('add', sym('x'), frac(num(1), num(2))), rowc([], 1)));
     expect(j(envelopeOf(state).root)).toBe(j(jmp(sym('x'), frac(num(1), num(2)))));
+    expect(state.caret).toEqual(tokc([0], 1)); // B-33 (2) — not into the numerator
     legal(state);
     // the gap before a function deletes the `+` too — never the fn (S-077)
     state = backspace(at(op('add', sym('x'), fn('sin', [sym('a')])), rowc([], 1)));
@@ -209,8 +210,9 @@ describe('D2 — backspace at gaps (S-064/S-066 A/S-077)', () => {
     // a longer row keeps its cells: a+b+|c → a + b·c (the pair nests in place)
     state = backspace(at(op('add', sym('a'), sym('b'), sym('c')), rowc([], 2)));
     expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('a'), jmp(sym('b'), sym('c')))));
-    // 4b-1 re-pin (OA-visual-trumps): the freed spot's canonical state.
-    expect(state.caret).toEqual(tokc([1, 1], 0));
+    // B-33 (2) re-pin: the freed spot's canonical state is the LEFT operand's
+    // right edge (b's end), not the bonded right operand's left entry.
+    expect(state.caret).toEqual(tokc([1, 0], 1));
     legal(state);
     // the Ctrl variant keeps the glyph-delete (a one-character glyph has no run)
     state = backspace(at(op('add', sym('x'), frac(num(1), num(2))), rowc([], 1)), { ctrl: true });

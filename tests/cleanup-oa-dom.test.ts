@@ -204,6 +204,35 @@ describe('cleanup — paint rules: K-07/M-15 #5 interior seam anchors at the sep
     const after = caretAnchor(env18, node([1], 'right'), g.rendered)!;
     expect(after.x).toBe(40 + AFTER_STRUCTURE_SHIFT_PX);
   });
+
+  it('OA-unit-seam-paint (I-22, ruled live 2026-11-10): the unit-seam caret paints MID-WAY between value and label — both seam states, incl. after digit growth at the seam', () => {
+    const U = { v: 1, root: { type: 'unit', value: num(50), unit: 'mm' } };
+    const f = fixture(U, {
+      '["value"]': { left: 100, top: 50, width: 10, height: 10 }, // value mn: 100..110
+      '[]': { left: 114, top: 50, width: 6, height: 10 }, // label mi: 114..120 (the mspace gap is 110..114)
+    });
+    const env = U as unknown as Envelope;
+    // the seam (label@0) and its twin (the value's end) BOTH paint at the
+    // midway x = (110 + 114) / 2 = 112 — not snug at either side
+    expect(caretAnchor(env, tok([], 0), f.rendered)).toEqual({ x: 112, y: 50, height: 10 });
+    expect(caretAnchor(env, tok(['value'], 2), f.rendered)).toEqual({ x: 112, y: 50, height: 10 });
+    // label interiors still interpolate within the label element (S-104)
+    expect(caretAnchor(env, tok([], 1), f.rendered)).toEqual({ x: 117, y: 50, height: 10 });
+    expect(caretAnchor(env, tok([], 2), f.rendered)).toEqual({ x: 120, y: 50, height: 10 });
+    // through the real keyboard path: a digit typed at the seam lands at the
+    // value's end — the seam's twin state paints midway too (consistent)
+    f.container.focus();
+    f.controller.placeCaret(tok([], 0));
+    press(f.container, '5');
+    expect(f.controller.getState().caret).toEqual(tok(['value'], 3)); // OA-unit-single-seam: the value channel
+    f.stub.syncPath(f.controller.getRendered()!, {
+      '["value"]': { left: 100, top: 50, width: 12, height: 10 }, // 505: 100..112
+      '[]': { left: 116, top: 50, width: 6, height: 10 }, // label pushed to 116..122
+    });
+    f.controller.updateCaret();
+    const div = f.container.querySelector('.integral-caret') as HTMLElement;
+    expect(div.style.left).toBe('14px'); // midway (112+116)/2 = 114, container left 100
+  });
 });
 
 describe('cleanup — OA-undo-burst (ruled 2026-11-10): every operator press is its own undo unit', () => {

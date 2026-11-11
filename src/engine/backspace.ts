@@ -110,7 +110,7 @@ import {
 
 import { EngineError } from './errors.js';
 
-import { entryStation } from './nav.js';
+import { entryStation, enterFromSide } from './nav.js';
 
 import { applyOps, envelopeOf, type EditingState, type Op, type Position } from './ops.js';
 
@@ -543,11 +543,13 @@ function containerDeath(env: Envelope, path: Path, station: Caret): BackspaceDec
  *  filled cells deletes — the operands bond into their own implicit
  *  juxtaposition pair at the left cell's position (`x + frac` → the pair
  *  `x·frac`); a two-cell row unwraps to the pair at the row's position. The
- *  caret rests at the freed glyph's spot — the pair's inner seam. One op.
- *  4b-1 (OA-visual-trumps): the freed spot's CANONICAL state is the bonded
- *  right operand's left entry (its offset 0 for tokens — the 4a merged-gap
- *  rule; the content bench for structures) — never the pair's inner seam,
- *  which paints at the same spot (the eliminated V-16/V-17 twin class). */
+ *  One op. B-33 (2) (owner ruling, the consolidated cleanup session's
+ *  leftover list, 2026-11-10): the caret rests at the LEFT operand's right
+ *  edge — `x+|1/2` → `x|1/2` — via the nav-canonical right edge
+ *  (enterFromSide, so a structure operand lands at its S-094 horizontal
+ *  boundary: a frac's numerator end). The pre-fix 4b-1 landing (the right
+ *  operand's left entry, painting inside the bonded fraction's numerator)
+ *  is retired. */
 function glyphBond(env: Envelope, rowPath: Path, left: number): BackspaceDecision {
   const row = nodeAt(env, rowPath) as NodeJson;
   const args = rowArgs(row);
@@ -558,7 +560,7 @@ function glyphBond(env: Envelope, rowPath: Path, left: number): BackspaceDecisio
   const node = promoted ? bond : rowClone(row, cells);
   const after = withRefSet(env, ref, node);
   const bondPath = promoted ? pathOfRef(ref) : [...rowPath, left];
-  const to = entryStation(after, [...bondPath, 1], 'left') ?? { kind: 'row', path: bondPath, index: 1 };
+  const to = enterFromSide(after, [...bondPath, 0], 'right') ?? { kind: 'row', path: bondPath, index: 0 };
   return { kind: 'glyph', ops: [{ op: 'place', node, at: replacePosOfRef(ref), to }], caret: to };
 }
 
@@ -1262,6 +1264,17 @@ function forwardGap(env: Envelope, caret: Caret, ctx: { ctrl: boolean; units: Re
   const row = nodeAt(env, ref.path) as NodeJson;
   const args = rowArgs(row);
   const next = ref.index + 1;
+  // B-33 (1) + OA-del-glyph (rightward reading): at a cell's right edge —
+  // the before-glyph station (a token's in-token end / a node-on-token
+  // caret) — Del removes the separator glyph AHEAD when the next cell is
+  // filled; the cells bond (glyphBond), the caret rests at the left
+  // operand's right edge (B-33 (2)). The behind-glyph row seam keeps the
+  // D1/D3 mirror below; a dangling glyph ahead (a pending cell) keeps the
+  // named no-op.
+  if (row.type === 'op' && !rowIsImplicit(row) && next < args.length && args[next] !== null) {
+    const bond = glyphBond(env, ref.path, ref.index);
+    return { kind: 'glyph', ops: bond.ops, caret: bond.caret };
+  }
   if (next >= args.length || args[next] === null) {
     // A pending cell / plain row end is the unruled forward mirror (named)
     // — but a fenced content end takes the OA-fence-flank Del first: the

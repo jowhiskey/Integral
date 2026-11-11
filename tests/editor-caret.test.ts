@@ -83,18 +83,26 @@ describe('caretAnchor per caret kind (stubbed rects)', () => {
     expect(caretAnchor(env, { kind: 'node', path: [] }, rendered)).toEqual({ x: 0, y: 0, height: 10 });
   });
 
-  it('unit LABEL token carets interpolate within the label element (S-104), not the whole unit extent', () => {
+  it('unit LABEL token carets interpolate within the label element (S-104), not the whole unit extent; the seam paints midway (OA-unit-seam-paint, I-22)', () => {
     const env: Envelope = { v: 1, root: { type: 'unit', value: num(50), unit: 'mm' } };
     const rendered = buildMathML(fromJSON(env), document);
     const stub = stubRects();
     stub.syncPath(rendered, {
-      '["value"]': { left: 0, top: 0, width: 10, height: 10 },
+      '["value"]': { left: 0, top: 0, width: 10, height: 10 }, // value mn: x 0..10 (right edge 10)
       '[]': { left: 24, top: 0, width: 6, height: 10 }, // label mi: x 24..30
     });
-    expect(caretAnchor(env, { kind: 'token', path: [], index: 0 }, rendered)).toEqual({ x: 24, y: 0, height: 10 });
+    // OA-unit-seam-paint (I-22, ruled live 2026-11-10): the seam (label@0)
+    // paints MID-WAY between the value's right edge (10) and the label's
+    // left edge (24) → 17 — consistently, not snug at the label (24)
+    expect(caretAnchor(env, { kind: 'token', path: [], index: 0 }, rendered)).toEqual({ x: 17, y: 0, height: 10 });
     expect(caretAnchor(env, { kind: 'token', path: [], index: 1 }, rendered)).toEqual({ x: 27, y: 0, height: 10 });
     expect(caretAnchor(env, { kind: 'token', path: [], index: 2 }, rendered)).toEqual({ x: 30, y: 0, height: 10 });
     expect(caretAnchor(env, { kind: 'token', path: [], index: 3 }, rendered)).toEqual(null); // out of the label
+    // the seam's TWIN state (the value's end) paints at the same midway x
+    expect(caretAnchor(env, { kind: 'token', path: ['value'], index: 2 }, rendered)).toEqual({ x: 17, y: 0, height: 10 });
+    // in-value offsets still interpolate over the value extent (unchanged)
+    expect(caretAnchor(env, { kind: 'token', path: ['value'], index: 0 }, rendered)).toEqual({ x: 0, y: 0, height: 10 });
+    expect(caretAnchor(env, { kind: 'token', path: ['value'], index: 1 }, rendered)).toEqual({ x: 5, y: 0, height: 10 });
   });
 
   it('sub LABEL token carets anchor within their own label element (T9), base and script separately', () => {

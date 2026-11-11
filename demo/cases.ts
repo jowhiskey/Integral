@@ -703,10 +703,10 @@ export const CASES: readonly CatalogCase[] = [
   },
   {
     id: 'I-22',
-    rules: ['OA-unit-single-seam', 'S-104', 'S-051', 'N1'],
+    rules: ['OA-unit-single-seam', 'OA-unit-seam-paint', 'S-104', 'S-051', 'N1'],
     category: 'I',
     label: 'the attached unit `50 mm`, caret at the label end',
-    stress: 'Left/Right walk (one stop at 50|mm — no double step); type a digit at 50|mm and at 50 mm| (continues the value); type a letter at 50|mm (the label channel); type a digit inside the label; Backspace and Delete at 50|mm.',
+    stress: 'Left/Right walk (one stop at 50|mm — no double step, painted MID-WAY between value and label); type a digit at 50|mm and at 50 mm| (continues the value); type a letter at 50|mm (the label channel); type a digit inside the label; Backspace and Delete at 50|mm.',
     envelope: env(unit(num(50), 'mm')),
     caret: tk([], 2),
   },
@@ -1076,6 +1076,15 @@ export const CASES: readonly CatalogCase[] = [
     stress: 'Delete (removes x → |+1/2), Delete again (the dangling + goes → |1/2); reload and Delete at the fraction’s right-edge flank in x + 1/2 + y (the glyph ahead goes, the cells bond). Compare with Backspace at the same stations.',
     envelope: env(op('add', sym('x'), frac(num(1), num(2)), sym('y'))),
     caret: rw([], 1),
+  },
+  {
+    id: 'B-34',
+    rules: ['OA-del-glyph', 'D2', 'S-077'],
+    category: 'B',
+    label: 'x + 1/2, caret at the end of x — directly before the + (the before-glyph station)',
+    stress: 'Delete here (the glyph ahead goes, the cells bond, the caret stays at x’s end); reload, walk Right to x+|1/2 and Backspace (the glyph goes, the caret lands at x|1/2 — the left operand’s right edge).',
+    envelope: env(op('add', sym('x'), frac(num(1), num(2)))),
+    caret: tk([0], 1),
   },
 
   // ——— M: navigation (horizontal + vertical) ———

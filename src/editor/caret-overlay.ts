@@ -23,7 +23,10 @@
 //                    its own label element, a unit label (S-104) within the
 //                    unit's own element — the upright label mi; numbers and
 //                    symbols interpolate over their own extent (rework 4a —
-//                    typed syms rest in-token, OA-token-end).
+//                    typed syms rest in-token, OA-token-end). The UNIT SEAM
+//                    (the label's offset 0 and the value's end, the seam's
+//                    twin states) paints MID-WAY between value and label
+//                    (OA-unit-seam-paint, I-22).
 
 import type { Envelope } from '../ast/json.js';
 
@@ -140,6 +143,21 @@ const extentRect = (rendered: RenderedMath, path: Path): RectLike | null => {
   const bottom = Math.max(a.bottom, b.bottom);
   return { left: a.left, top, right: b.right, bottom, height: bottom - top };
 };
+
+/** OA-unit-seam-paint (I-22, ruled live 2026-11-10, cleanup-session live
+ *  check): the unit-seam caret paints MID-WAY between the value's right edge
+ *  and the label's left edge (equal spacing) — the owner's preferred
+ *  position, applied consistently to BOTH seam states (the label's offset 0
+ *  and the value's end, the seam's twin). Overlay anchor choice only — no
+ *  engine state change. Null when either side has no rendered element (a
+ *  valueless unit keeps the plain label anchor). */
+function unitSeamMidX(rendered: RenderedMath, unitPath: Path): number | null {
+  const valueRect = extentRect(rendered, [...unitPath, 'value']);
+  const labelEl = rendered.elementByPath.get(pathKey(unitPath));
+  if (valueRect === null || labelEl === undefined) return null;
+  const labelRect = rectOf(labelEl);
+  return (valueRect.right + labelRect.left) / 2;
+}
 
 /**
  * Pixel anchor for a caret in a rendered tree. Returns null when the caret does
@@ -269,6 +287,22 @@ export function caretAnchor(env: Envelope, caret: Caret, rendered: RenderedMath)
       }
       if (rect === null) return null;
       if (!Number.isInteger(caret.index) || caret.index < 0 || caret.index > len) return null;
+      // OA-unit-seam-paint (I-22): the unit seam's two states — the label's
+      // offset 0 and the value's end (a token caret on the unit's 'value'
+      // slot) — both anchor at the midway x between value and label.
+      {
+        const lastStep = caret.path[caret.path.length - 1];
+        const unitPath: Path | null =
+          node.type === 'unit' && caret.index === 0 && len > 0
+            ? caret.path
+            : node.type !== 'unit' && caret.index === len && lastStep === 'value'
+              ? caret.path.slice(0, -1)
+              : null;
+        if (unitPath !== null && nodeAt(env, unitPath)?.type === 'unit') {
+          const mid = unitSeamMidX(rendered, unitPath);
+          if (mid !== null) return { x: mid, y: rect.top, height: rect.height };
+        }
+      }
       const x = len === 0 ? rect.left : rect.left + (caret.index / len) * (rect.right - rect.left);
       return { x, y: rect.top, height: rect.height };
     }

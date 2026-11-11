@@ -405,11 +405,13 @@ function bench(env: Envelope, path: Path, side: Side, registry: NavRegistry): Ca
   }
 }
 
-/** Entering the node at `path` across its right boundary, from an adjacent
- *  row position: consults the profile's `enterRight` override (N5/S-094 —
- *  a fraction's horizontal interface is the numerator on BOTH edges, a
- *  root's right boundary its radicand); everything else benches right. */
-function enterFromSide(env: Envelope, path: Path, side: Side, registry: NavRegistry): Caret | null {
+/** Entering the node at `path` from an adjacent row position: consults the
+ *  profile's `enterRight` override on the right side (N5/S-094 — a fraction's
+ *  horizontal interface is the numerator on BOTH edges, a root's right
+ *  boundary its radicand); everything else benches. Exported for deletion
+ *  landings that rest at a cell's right edge (B-33 (2): the bonded pair's
+ *  left operand). */
+export function enterFromSide(env: Envelope, path: Path, side: Side, registry: NavRegistry = NAV_PROFILES): Caret | null {
   const node = nodeAt(env, path);
   if (node === null) return null;
   const profile = profileFor(registry, node);
