@@ -234,6 +234,48 @@ describe('test logger — recording state machine, baseline, per-action entries'
     await unmount(app as never);
   });
 
+  it('layout: Record sits left of the title input (no "test logger" label); export-all shares the recordings row on the right; AST/MathML readouts below the editor update live; comment box is a textarea', async () => {
+    const { target, app } = mountApp();
+    await tick();
+    const head = target.querySelector('.logger-head') as HTMLElement;
+    const headKids = Array.from(head.children);
+    // owner-pinned order: Record, paint toggle, then the title input
+    expect(headKids[0].matches('button[data-record]')).toBe(true);
+    expect(headKids[1].matches('.paint-toggle')).toBe(true);
+    expect(headKids[2].matches('input[data-title]')).toBe(true);
+    expect(head.textContent).not.toContain('test logger'); // the label string is gone
+    // export-all lives in the recordings header row, on the right of the label
+    const recHead = target.querySelector('.rec-head') as HTMLElement;
+    expect(recHead.querySelector('.rec-label')!.textContent).toContain('recordings (localStorage');
+    expect(recHead.querySelector('button[data-export-all]')).not.toBeNull();
+    expect(head.querySelector('button[data-export-all]')).toBeNull();
+    // live readouts below the editor, splitting the column, both present
+    const editor = editorOf(target);
+    const col = editor.closest('.editor-col') as HTMLElement;
+    const json = col.querySelector('pre[data-json]') as HTMLElement;
+    const mml = col.querySelector('pre[data-mathml]') as HTMLElement;
+    expect(json).not.toBeNull();
+    expect(mml).not.toBeNull();
+    expect(json.textContent).toContain('"v": 1'); // empty baseline envelope
+    expect(mml.textContent).toContain('(empty formula)');
+    editor.focus();
+    press(editor, '5');
+    await tick();
+    expect(json.textContent).toContain('"value": 5'); // AST JSON live
+    expect(mml.textContent).toContain('<math'); // MathML source live
+    // comment box is a multi-line textarea
+    startRecording(target);
+    await tick();
+    press(editor, '0');
+    await tick();
+    click(target.querySelector('button[data-entry-seq="1"]') as HTMLButtonElement);
+    await waitFor(() => target.querySelector('[data-entry-detail="1"]') !== null);
+    const ta = target.querySelector('[data-entry-detail="1"] textarea[data-comment-input="1"]');
+    expect(ta).not.toBeNull();
+    expect(target.querySelector('[data-entry-detail="1"] input[data-comment-input="1"]')).toBeNull();
+    await unmount(app as never);
+  });
+
   it('vocabulary button mid-recording logs exactly one entry (input = the button click)', async () => {
     const { target, app } = mountApp();
     await tick();
@@ -450,7 +492,7 @@ describe('test logger — review panel interactions', () => {
     expect(detail.querySelector('.log-preview .log-caret')).not.toBeNull(); // caret from the resolved rect
 
     // attach a comment to the expanded entry (after recording)
-    const ci = detail.querySelector('input[data-comment-input="2"]') as HTMLInputElement;
+    const ci = detail.querySelector('textarea[data-comment-input="2"]') as HTMLTextAreaElement;
     ci.value = 'caret height looks off at 50';
     ci.dispatchEvent(new Event('input', { bubbles: true }));
     click(detail.querySelector('button[data-comment-pin="2"]') as HTMLButtonElement);

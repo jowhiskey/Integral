@@ -17,17 +17,17 @@
   // the resolved caret rect) and pins a one-line comment. Recordings persist in
   // localStorage; export-one/export-all download text-only JSON bug files.
   //
-  // The old live readouts (AST JSON dump, MathML source strip, caret readout)
-  // are superseded by the logger surfaces; a compact caret/rejection line
-  // remains in the logger header. The bottom IME/dead-key keylogger panel is
-  // gone (the engine-side standing event log, 2b-2, is untouched —
-  // demo/ime-logger.ts remains for direct use).
+  // Live readouts: a compact caret/rejection line in the logger header, and
+  // below the editor the stored AST envelope (pretty JSON) + the generated
+  // MathML source — both live from the current engine state. The bottom
+  // IME/dead-key keylogger panel is gone (the engine-side standing event log,
+  // 2b-2, is untouched — demo/ime-logger.ts remains for direct use).
   //
   // Dev-only — not part of the published package.
   import { onMount } from 'svelte';
-  import { fromJSON } from '../src/ast/index.js';
+  import { fromJSON, toMathML } from '../src/ast/index.js';
   import { buildMathML, EditorController } from '../src/editor/index.js';
-  import { caretResolvesIn, type Caret, type EditingState } from '../src/engine/index.js';
+  import { caretResolvesIn, envelopeOf, type Caret, type EditingState } from '../src/engine/index.js';
   import { CATEGORIES, CASES, type CatalogCase } from './cases.js';
   import { Recorder, downloadText } from './recorder.js';
   import {
@@ -45,6 +45,10 @@
   /** Compact live line (kept from the old readouts, now inside the logger header). */
   let caretText = $state('—');
   let rejectionText = $state('—');
+  /** Live readouts below the editor: the stored AST envelope as pretty JSON
+   *  and the generated MathML as pretty source. */
+  let jsonText = $state('—');
+  let mathmlText = $state('—');
 
   // ——— logger UI state ———
   let title = $state('');
@@ -90,9 +94,33 @@
     return `${c.kind} ${path}${at}${c.boundary === true ? ' boundary' : ''}`;
   }
 
-  /** Compact live line from the current engine state (wired to onStateChange). */
+  /** Pretty-print the generated MathML string: one tag per line, indented by
+   *  depth (text content on its own line). Demo-only source view. */
+  function prettyMathml(src: string): string {
+    const tokens = src.match(/<[^>]*>|[^<]+/g) ?? [];
+    let depth = 0;
+    const lines: string[] = [];
+    for (const t of tokens) {
+      if (t.startsWith('</')) {
+        depth = Math.max(0, depth - 1);
+        lines.push(`${'  '.repeat(depth)}${t}`);
+      } else if (t.startsWith('<')) {
+        lines.push(`${'  '.repeat(depth)}${t}`);
+        if (!t.endsWith('/>')) depth += 1;
+      } else if (t.trim() !== '') {
+        lines.push(`${'  '.repeat(depth)}${t.trim()}`);
+      }
+    }
+    return lines.join('\n');
+  }
+
+  /** Live readouts from the current engine state (wired to onStateChange):
+   * pretty AST JSON, pretty MathML source, caret state, rejection line. */
   function refresh(state: EditingState): void {
     caretText = formatCaret(state.caret);
+    jsonText = JSON.stringify(envelopeOf(state), null, 2);
+    const mathml = toMathML(state.root);
+    mathmlText = mathml === '' ? '(empty formula)' : prettyMathml(mathml);
     const rej = controller?.getLastRejection() ?? null;
     rejectionText = rej === null ? '—' : `${rej.name} [${rej.kind}]: ${rej.message}`;
   }
@@ -333,17 +361,25 @@
         <span class="rules">rules: {activeCase.rules.join(', ')}</span>
       </div>
     {/if}
+    <div class="readouts">
+      <div class="readout">
+        <div class="label">stored AST envelope — pretty JSON (live)</div>
+        <pre class="src" data-json>{jsonText}</pre>
+      </div>
+      <div class="readout">
+        <div class="label">generated MathML — pretty source (live)</div>
+        <pre class="src" data-mathml>{mathmlText}</pre>
+      </div>
+    </div>
   </div>
   <div class="logger-col">
     <div class="logger-head">
-      <span class="label">test logger</span>
-      <input type="text" data-title bind:value={title} placeholder="bug title" />
       <button type="button" data-record onclick={onRecord}>{recordingNow ? 'Stop' : 'Record'}</button>
       <label class="paint-toggle">
         <input type="checkbox" data-paint-toggle bind:checked={paintOn} onchange={onPaintToggle} />
         paint geometry
       </label>
-      <button type="button" data-export-all onclick={onExportAll}>export all</button>
+      <input type="text" data-title bind:value={title} placeholder="bug title" />
     </div>
     <div class="live-line">
       <span class="caret-readout" data-caret>caret {caretText}</span>
@@ -371,12 +407,12 @@
                 <div class="d">diff: {diffKeys(e).join(', ') === '' ? '(none — nothing changed)' : diffKeys(e).join(', ')}</div>
                 <div class="log-preview" bind:this={previewEl}></div>
                 <div class="comment-row">
-                  <input
-                    type="text"
+                  <textarea
                     data-comment-input={e.seq}
+                    rows="3"
                     bind:value={drafts[`${activeRecId}:${e.seq}`]}
-                    placeholder="pin a one-line comment to this exact state…"
-                  />
+                    placeholder="pin a comment to this exact state…"
+                  ></textarea>
                   <button type="button" data-comment-pin={e.seq} onclick={() => pinComment(e.seq)}>pin</button>
                 </div>
                 {#if commentOf(e.seq)}
@@ -388,7 +424,10 @@
         {/each}
       </ol>
     {/if}
-    <div class="label rec-label">recordings (localStorage — one recording = one bug)</div>
+    <div class="rec-head">
+      <span class="label rec-label">recordings (localStorage — one recording = one bug)</span>
+      <button type="button" data-export-all onclick={onExportAll}>export all</button>
+    </div>
     <ul class="recordings">
       {#each recordings as r (r.id)}
         <li data-rec-id={r.id}>
