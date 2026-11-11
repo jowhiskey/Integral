@@ -10,12 +10,22 @@
   // The test logger (demo/recorder.ts + demo/logger-core.ts) wraps that editor
   // passively: Record starts a recording whose first entry is the full
   // baseline (AST envelope, caret, caret rect, MathML, all element rects, all
-  // whitelisted styles); every user action during recording (key, click, case
+  // whitelisted styles); every user action during recording (keydown, click, case
   // load) appends one unified-diff entry — a field appears only when changed.
-  // The panel lists entries; expanding one re-renders the state in effect at
-  // that entry (MathML from the most recent entry that changed it, caret from
-  // the resolved caret rect) and pins a one-line comment. Recordings persist in
-  // localStorage; export-one/export-all download text-only JSON bug files.
+  // Capture is KEYDOWN-ONLY: keyup is never captured, and a bare modifier keydown
+  // (Shift/Control/Alt/Meta) is no step of its own — its state rides on the next
+  // keydown's modifier flags. The panel lists entries; clicking one expands it
+  // (the state in effect at that entry: MathML from the most recent entry that
+  // changed it, caret from the resolved caret rect) AND, for a loaded recording,
+  // restores that step's after-state into the editor (per-channel walk-up via
+  // resolveAt); comments pin below the entry. Loading a recording restores its
+  // CLOSING state (the last step's after-state) into the editor — editor and
+  // panel in sync; Unload clears the loaded recording and resets the editor to
+  // the empty formula. The header's one name input is the single name surface:
+  // load fills it, editing it renames the loaded record (persisted), and a new
+  // record takes the input's content at STOP time (empty input → empty title).
+  // Recordings persist in localStorage; export-one/export-all download text-only
+  // JSON bug files.
   //
   // Live readouts: a compact caret/rejection line in the logger header, and
   // below the editor the stored AST envelope (pretty JSON) + the generated
@@ -25,7 +35,7 @@
   //
   // Dev-only — not part of the published package.
   import { onMount } from 'svelte';
-  import { fromJSON, toMathML } from '../src/ast/index.js';
+  import { fromJSON, toMathML, type Envelope } from '../src/ast/index.js';
   import { buildMathML, EditorController } from '../src/editor/index.js';
   import { caretResolvesIn, envelopeOf, type Caret, type EditingState } from '../src/engine/index.js';
   import { CATEGORIES, CASES, type CatalogCase } from './cases.js';
@@ -125,18 +135,37 @@
     rejectionText = rej === null ? '—' : `${rej.name} [${rej.kind}]: ${rej.message}`;
   }
 
-  function loadCaseInner(c: CatalogCase): void {
+  /** Re-seed the one editor in place with an envelope + caret — THE restore
+   *  path: case loads, recording load (closing state), unload (empty formula),
+   *  and step-click restore all go through here. */
+  function restoreEditor(envelope: Envelope, caret: Caret): void {
     if (!caseContainer) return;
     controller?.destroy();
     caseContainer.replaceChildren();
     controller = new EditorController(caseContainer, {
-      envelope: c.envelope,
+      envelope,
       onStateChange: refresh,
     });
-    controller.placeCaret(c.caret); // seed caret applied (validated, never logged)
-    activeId = c.id;
-    caseContainer.focus();
+    controller.placeCaret(caret); // seed caret applied (validated, never logged)
     refresh(controller.getState());
+  }
+
+  /** Restore the editor to the after-state of step `seq` of a recording's log:
+   *  per channel, the latest payload at or before that step (resolveAt's
+   *  walk-up — caret is always logged, AST/MathML only on change). */
+  function restoreRecordingState(entries: readonly TestEntry[], seq: number): void {
+    try {
+      const res = resolveAt(entries, seq);
+      restoreEditor(res.ast as Envelope, res.caret as Caret);
+    } catch {
+      // unresolvable log (corrupt baseline) — the panel still opens; the editor stays as it was
+    }
+  }
+
+  function loadCaseInner(c: CatalogCase): void {
+    restoreEditor(c.envelope, c.caret);
+    activeId = c.id;
+    caseContainer?.focus();
   }
 
   /** Case-grid click: loads the case INTO the one editor; mid-recording this
@@ -160,7 +189,9 @@
   function onRecord(): void {
     if (!recorder) return;
     if (recorder.isRecording()) {
-      const stopped = recorder.stopRecording();
+      // the name is read at STOP time: the input's content at this moment,
+      // verbatim (empty input → empty title)
+      const stopped = recorder.stopRecording(title);
       if (stopped !== null) {
         openRec = stopped;
         openRecId = stopped.id;
@@ -168,7 +199,7 @@
       expanded = null;
     } else {
       recorder.setPaint(paintOn);
-      recorder.startRecording(title);
+      recorder.startRecording(title); // live draft only — the final name is read at stop
       openRec = null;
       openRecId = null;
       expanded = null;
@@ -184,9 +215,34 @@
     recorder?.setPaint(paintOn);
   }
 
-  function toggleExpand(seq: number): void {
+  /** Entry click: toggle the review expansion; when a recording is loaded (not
+   *  recording — a restore mid-recording would corrupt the live diff chain),
+   *  also set the editor to that step's after-state. The editor stays live:
+   *  further typing changes the editor only, the recording is untouched. */
+  function onEntryClick(seq: number): void {
     expanded = expanded === seq ? null : seq;
+    if (!recordingNow && activeRec !== null) {
+      restoreRecordingState(activeRec.entries, seq);
+      activeId = null;
+      caseContainer?.focus();
+    }
   }
+
+  // The one name input is the single surface for a record's name — plain
+  // Svelte reactivity, no separate rename affordance: while a record is loaded,
+  // editing the input renames it (persisted, list updates). Loading fills the
+  // input with the record's name (a no-op here); an empty session is an empty
+  // input. Keystrokes in the input never become log steps (it lives outside the
+  // editor container — the recorder only captures inside it).
+  $effect(() => {
+    const t = title;
+    const id = openRecId;
+    if (recorder === null || id === null || recordingNow) return;
+    const cur = recorder.getRecording(id);
+    if (cur === null || cur.title === t) return;
+    recorder.renameRecording(id, t);
+    refreshPanel();
+  });
 
   const commentOf = (seq: number): string | undefined => activeRec?.comments[String(seq)];
 
@@ -196,12 +252,36 @@
     refreshPanel();
   }
 
+  /** Load a stored recording: the panel shows its steps/comments AND the editor
+   *  is restored to the recording's closing state (the last step's after-state)
+   *  — editor and panel in sync. Disabled while recording (recording integrity). */
   function openRecording(id: string): void {
-    if (!recorder) return;
-    openRec = recorder.getRecording(id);
+    if (!recorder || recorder.isRecording()) return;
+    const rec = recorder.getRecording(id);
+    if (rec === null) return;
+    openRec = rec;
     openRecId = id;
+    title = rec.title; // the one name input carries the loaded record's name
     expanded = null;
+    if (rec.entries.length > 0) restoreRecordingState(rec.entries, rec.entries.length - 1);
+    activeId = null;
     refreshPanel();
+    caseContainer?.focus();
+  }
+
+  /** Unload the loaded recording: the logger/panel and the name input return to
+   *  the empty session and the free editor returns to the empty formula. The
+   *  recording itself stays saved in the list. Disabled while recording. */
+  function onUnload(): void {
+    if (!recorder || recorder.isRecording() || openRecId === null) return;
+    openRec = null;
+    openRecId = null;
+    expanded = null;
+    title = ''; // empty session → empty input
+    activeId = null;
+    restoreEditor({ v: 1, root: null }, { kind: 'empty' });
+    refreshPanel();
+    caseContainer?.focus();
   }
 
   function deleteRec(id: string): void {
@@ -379,7 +459,7 @@
         <input type="checkbox" data-paint-toggle bind:checked={paintOn} onchange={onPaintToggle} />
         paint geometry
       </label>
-      <input type="text" data-title bind:value={title} placeholder="bug title" />
+      <input type="text" data-title bind:value={title} placeholder="recording name" />
     </div>
     <div class="live-line">
       <span class="caret-readout" data-caret>caret {caretText}</span>
@@ -387,12 +467,12 @@
     </div>
     {#if entries.length > 0}
       <div class="label entries-label">
-        {recordingNow ? 'recording' : 'viewing'} — {activeRec?.title} ({entries.length} entries, click one to expand)
+        {recordingNow ? 'recording' : 'viewing'} ({entries.length} entries — click one to expand{#if !recordingNow && openRecId !== null}, restore that step's state into the editor{/if})
       </div>
       <ol class="entries">
         {#each entries as e (e.seq)}
           <li>
-            <button type="button" class="entry" data-entry-seq={e.seq} class:expanded={expanded === e.seq} onclick={() => toggleExpand(e.seq)}>
+            <button type="button" class="entry" data-entry-seq={e.seq} class:expanded={expanded === e.seq} onclick={() => onEntryClick(e.seq)}>
               #{e.seq} {inputSummary(e.input)}
               {#if e.rejection}<span class="rej">rejected</span>{/if}
               {#if deriveMechanicalNoop(e)}<span class="noop" data-noop={e.seq}>mechanical no-op</span>{/if}
@@ -413,8 +493,8 @@
                     bind:value={drafts[`${activeRecId}:${e.seq}`]}
                     placeholder="pin a comment to this exact state…"
                   ></textarea>
-                  <button type="button" data-comment-pin={e.seq} onclick={() => pinComment(e.seq)}>pin</button>
                 </div>
+                <button type="button" class="comment-pin" data-comment-pin={e.seq} onclick={() => pinComment(e.seq)}>pin</button>
                 {#if commentOf(e.seq)}
                   <div class="d cmt">pinned: {commentOf(e.seq)}</div>
                 {/if}
@@ -424,6 +504,14 @@
         {/each}
       </ol>
     {/if}
+    <button
+      type="button"
+      class="unload-btn"
+      data-unload
+      disabled={recordingNow || openRecId === null}
+      title={recordingNow ? 'stop the recording first' : openRecId === null ? 'nothing loaded' : 'clear the loaded recording — panel + editor reset to empty'}
+      onclick={onUnload}
+    >unload</button>
     <div class="rec-head">
       <span class="label rec-label">recordings (localStorage — one recording = one bug)</span>
       <button type="button" data-export-all onclick={onExportAll}>export all</button>
@@ -431,7 +519,14 @@
     <ul class="recordings">
       {#each recordings as r (r.id)}
         <li data-rec-id={r.id}>
-          <button type="button" class="rec-open" data-rec-open={r.id} onclick={() => openRecording(r.id)}>{r.title}</button>
+          <button
+            type="button"
+            class="rec-open"
+            data-rec-open={r.id}
+            disabled={recordingNow}
+            title={recordingNow ? 'stop the recording first' : 'load: panel shows the steps + the editor restores the closing state'}
+            onclick={() => openRecording(r.id)}
+          >{r.title === '' ? '(no name)' : r.title}</button>
           <span class="meta">{r.createdAt} — {r.entryCount} entries{#if r.commentCount > 0}, {r.commentCount} comments{/if}</span>
           <button type="button" data-rec-export={r.id} onclick={() => exportOne(r.id)}>export</button>
           <button type="button" data-rec-delete={r.id} onclick={() => deleteRec(r.id)}>delete</button>

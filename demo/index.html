@@ -242,7 +242,8 @@
       .logger-head button,
       .rec-head button,
       .recordings button,
-      .comment-row button {
+      .unload-btn,
+      .comment-pin {
         font: inherit;
         font-size: 0.8em;
         border: 1px solid #ccc;
@@ -396,6 +397,8 @@
         background: #d33;
         pointer-events: none;
       }
+      /* The comment pin button sits BELOW the comment text input (ruled
+         2026-11-11) — the row holds the textarea alone, the button follows. */
       .comment-row {
         display: flex;
         gap: 0.4em;
@@ -412,6 +415,15 @@
         resize: vertical;
         min-height: 2.6em;
       }
+      .comment-pin {
+        align-self: flex-start;
+        margin-top: 0.25em;
+      }
+      /* The unload control sits between the review panel (entries) and the
+         recordings list section. */
+      .unload-btn {
+        align-self: flex-start;
+      }
       ul.recordings {
         list-style: none;
         margin: 0;
@@ -420,12 +432,15 @@
         flex: 0 0 auto; /* pinned to the bottom of the logger column */
         max-height: 22vh;
         overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 0.35em; /* breathing room between stored recordings */
       }
       ul.recordings li {
         display: flex;
         gap: 0.5em;
         align-items: baseline;
-        padding: 0.1em 0;
+        padding: 0.4em 0.25em;
         border-bottom: 1px solid #f0f0f0;
       }
       ul.recordings .rec-open {

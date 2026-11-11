@@ -6,7 +6,8 @@
 // It never calls preventDefault, never mutates editor state, never touches the
 // engine — instrumentation only.
 //
-// Capture mechanics:
+// Capture mechanics (keydown-only since the 2026-11-11 dogfood ruling — the
+// engine has no keyup-driven behavior, so keyup events are not captured at all):
 //  - a CAPTURE listener on the container's PARENT fires before the container's
 //    own handlers (true capture order), records the pending input (keys only
 //    while the editor is focused — mirroring the controller's focus gate;
@@ -14,6 +15,8 @@
 //  - a BUBBLE listener on the same parent fires after every container handler
 //    for that event, flushing one entry from the controller's then-current
 //    state (synchronous per event, so synthetic key loops still log per key).
+//  - a bare modifier keydown (Shift/Control/Alt/Meta) records NOTHING — its
+//    state rides on the following steps via each keydown's modifier flags.
 //  - programmatic editor actions from demo UI outside the container (case
 //    loads, the T9 vocabulary buttons) go through recordAction(), which wraps
 //    the action and flushes synchronously — a case load mid-recording is one
@@ -248,11 +251,9 @@ export class Recorder {
     this.parent = parent;
     this.load();
     parent.addEventListener('keydown', this.onCapture, true);
-    parent.addEventListener('keyup', this.onCapture, true);
     parent.addEventListener('compositionend', this.onCapture, true);
     parent.addEventListener('click', this.onCapture, true);
     parent.addEventListener('keydown', this.onBubble);
-    parent.addEventListener('keyup', this.onBubble);
     parent.addEventListener('compositionend', this.onBubble);
     parent.addEventListener('click', this.onBubble);
   }
@@ -268,7 +269,9 @@ export class Recorder {
     return this.recording;
   }
 
-  /** Start recording: the first entry is the FULL baseline (seq 0). */
+  /** Start recording: the first entry is the FULL baseline (seq 0). The title
+   *  passed here is only the live draft — the record's final name is read from
+   *  the name input at STOP time (stopRecording), verbatim. */
   startRecording(title: string): void {
     if (this.recording !== null) return;
     const ctl = this.getController();
@@ -276,7 +279,7 @@ export class Recorder {
     const nowIso = new Date(this.now()).toISOString();
     const rec: StoredRecording = {
       id: `rec-${this.now().toString(36)}-${(this.idCounter++).toString(36)}`,
-      title: title.trim() === '' ? 'untitled bug' : title.trim(),
+      title,
       createdAt: nowIso,
       updatedAt: nowIso,
       paintGeometry: this.paintOn,
@@ -291,17 +294,32 @@ export class Recorder {
     this.onChange?.();
   }
 
-  stopRecording(): StoredRecording | null {
+  /** Stop recording. The record takes its name from `name` — the name input's
+   *  content at stop time, verbatim (empty input → empty title; the createdAt
+   *  timestamp stays) — and joins the saved list. */
+  stopRecording(name: string): StoredRecording | null {
     const rec = this.recording;
     if (rec === null) return null;
+    const stopped: StoredRecording = { ...rec, title: name, updatedAt: new Date(this.now()).toISOString() };
     // the stopped recording joins the saved list (it was only the live one until now)
-    this.recordings = [...this.recordings.filter((r) => r.id !== rec.id), rec];
+    this.recordings = [...this.recordings.filter((r) => r.id !== rec.id), stopped];
     this.recording = null;
     this.pending = null;
     this.lastSnap = null;
     this.persist();
     this.onChange?.();
-    return rec;
+    return stopped;
+  }
+
+  /** Rename a recording (the demo's one name input is the rename surface). */
+  renameRecording(id: string, title: string): void {
+    const rec = this.allRecordings().find((r) => r.id === id);
+    if (rec === undefined) return;
+    const updated: StoredRecording = { ...rec, title, updatedAt: new Date(this.now()).toISOString() };
+    this.recordings = this.recordings.map((r) => (r.id === id ? updated : r));
+    if (this.recording?.id === id) this.recording = updated;
+    this.persist();
+    this.onChange?.();
   }
 
   setPaint(on: boolean): void {
@@ -346,11 +364,14 @@ export class Recorder {
       }
       return { kind: 'click', x: me.clientX, y: me.clientY, target };
     }
-    if (ev.type === 'keydown' || ev.type === 'keyup' || ev.type === 'compositionend') {
+    if (ev.type === 'keydown' || ev.type === 'compositionend') {
       // mirror the controller's focus gate: keys while the editor is not
       // focused are not actions on the editor — no entry
       if (doc.activeElement !== this.container) return null;
       const ke = ev as KeyboardEvent;
+      // keydown-only capture: a bare modifier keydown is not an action — no
+      // step of its own; the modifier state rides on the next keydown's mods
+      if (ev.type === 'keydown' && (ke.key === 'Shift' || ke.key === 'Control' || ke.key === 'Alt' || ke.key === 'Meta')) return null;
       const mods = `${ke.altKey ? 'A' : ''}${ke.ctrlKey ? 'C' : ''}${ke.metaKey ? 'M' : ''}${ke.shiftKey ? 'S' : ''}`;
       return { kind: 'key', type: ev.type, key: ke.key, code: ke.code ?? '', mods };
     }
@@ -521,11 +542,9 @@ export class Recorder {
 
   destroy(): void {
     this.parent.removeEventListener('keydown', this.onCapture, true);
-    this.parent.removeEventListener('keyup', this.onCapture, true);
     this.parent.removeEventListener('compositionend', this.onCapture, true);
     this.parent.removeEventListener('click', this.onCapture, true);
     this.parent.removeEventListener('keydown', this.onBubble);
-    this.parent.removeEventListener('keyup', this.onBubble);
     this.parent.removeEventListener('compositionend', this.onBubble);
     this.parent.removeEventListener('click', this.onBubble);
   }

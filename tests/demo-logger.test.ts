@@ -9,18 +9,25 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount, unmount } from 'svelte';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import App from '../demo/App.svelte';
 import { STORAGE_KEY, elementKeys, type Recorder } from '../demo/recorder.js';
 import {
+  LOG_VERSION,
   STYLE_WHITELIST,
   deriveMechanicalNoop,
   parseLogFile,
   parseStorage,
   resolveAt,
+  serializeStorage,
   type Rect,
+  type StoredRecording,
   type TestEntry,
 } from '../demo/logger-core.js';
+import { toMathML } from '../src/ast/index.js';
 import { applyOp, initSession, settleUnits, typeToken, envelopeOf } from '../src/engine/index.js';
 import { KEYMAP } from '../src/editor/keys.js';
 import type { EditorController } from '../src/editor/index.js';
@@ -68,6 +75,20 @@ function startRecording(target: HTMLDivElement, title = 'test bug'): void {
 const stopRecording = (target: HTMLDivElement): void => {
   click(target.querySelector('button[data-record]') as HTMLButtonElement);
 };
+
+/** Set the one name input's content through the real input event. */
+const setTitle = (target: HTMLDivElement, v: string): void => {
+  const ti = target.querySelector('input[data-title]') as HTMLInputElement;
+  ti.value = v;
+  ti.dispatchEvent(new Event('input', { bubbles: true }));
+};
+
+/** Load a stored recording via its list button. */
+const openRec = (target: HTMLDivElement, id: string): void => {
+  click(target.querySelector(`button[data-rec-open="${id}"]`) as HTMLButtonElement);
+};
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const headerKeys = (e: TestEntry): string[] => Object.keys(e).filter((k) => !['seq', 't', 'input', 'rejection'].includes(k));
 
@@ -513,9 +534,12 @@ describe('test logger — review panel interactions', () => {
     expect(base.paint).toBeDefined();
     expect(Object.keys(base.paint!).sort()).toEqual(['anchorKey', 'anchorRect', 'caretRect']);
     expect(base.paint!.anchorKey).toBe('[]'); // caret token@1 on the num → extent element key
-    press(editor, '7'); // caret was at token@1 after the arrow → 570
+    // re-pinned 2026-11-11 (demo rework, step-click restore): clicking entry 2
+    // above restored the editor to THAT step's after-state (num 50, caret
+    // token@2), so the new recording's baseline sits there → 507, not 570
+    press(editor, '7'); // caret at token@2 (entry 2's restored after-state) → 507
     const e1 = live.entries[1];
-    expect(e1.ast).toEqual({ v: 1, root: { type: 'num', value: 570 } });
+    expect(e1.ast).toEqual({ v: 1, root: { type: 'num', value: 507 } });
     await unmount(app as never);
   });
 });
@@ -606,6 +630,326 @@ describe('test logger — whitelist-as-data and element-level diff on live entri
     for (const k of ['math', '[]', '[0]', '[1]', '[1,"num"]', '[1,"den"]']) {
       expect(keys2).toContain(k);
     }
+    await unmount(app as never);
+  });
+});
+
+describe('test logger — demo rework 2026-11-11: load/unload restore, one name input, step-click restore, keydown-only capture, pin placement, list spacing', () => {
+  it('LOAD = closing-state restore: the editor shows the last step’s after-state (AST + caret byte-exact), the rendered MathML matches the last-step MathML, the panel shows the entries, the name input holds the title', async () => {
+    const { target, app } = mountApp();
+    await tick();
+    const editor = editorOf(target);
+    editor.focus();
+    const rec = app.getRecorder()!;
+    startRecording(target, 'closing state');
+    press(editor, '5');
+    press(editor, '0');
+    press(editor, 'ArrowLeft'); // caret-only last step — the closing state's AST walks up
+    stopRecording(target);
+    const id = rec.listRecordings()[0].id;
+    const stored = rec.getRecording(id)!;
+    const last = stored.entries.length - 1;
+    const res = resolveAt(stored.entries, last);
+    expect(stored.entries[last].ast).toBeUndefined(); // the last step is zero-diff — the walk-up matters
+
+    // unload first, so the load is what puts the state back into the editor
+    click(target.querySelector('button[data-unload]') as HTMLButtonElement);
+    await tick();
+    expect(envelopeOf(app.getController()!.getState())).toEqual({ v: 1, root: null });
+
+    openRec(target, id);
+    await tick();
+    const st = app.getController()!.getState();
+    expect(envelopeOf(st)).toEqual(res.ast); // byte-exact AST envelope pin
+    expect(st.caret).toEqual(res.caret); // byte-exact caret pin
+    expect(toMathML(st.root)).toBe(res.mathml); // load sync: generated MathML == the recording's last-step MathML
+    // the panel shows the recording's entries; the name input holds the record's title
+    expect(target.querySelectorAll('button[data-entry-seq]').length).toBe(stored.entries.length);
+    expect((target.querySelector('input[data-title]') as HTMLInputElement).value).toBe('closing state');
+    // the old record-name label under the input is gone — the input carries the name
+    expect(target.querySelector('.entries-label')!.textContent).not.toContain('closing state');
+    await unmount(app as never);
+  });
+
+  it('rename via the one name input: editing the input renames the loaded record (persistence round-trip + list update); no label or rename affordance beyond the input', async () => {
+    const { target, app } = mountApp();
+    await tick();
+    const editor = editorOf(target);
+    editor.focus();
+    const rec = app.getRecorder()!;
+    startRecording(target, 'old name');
+    press(editor, '5');
+    stopRecording(target);
+    const id = rec.listRecordings()[0].id;
+
+    setTitle(target, 'new name');
+    await tick();
+    expect(rec.getRecording(id)!.title).toBe('new name'); // renamed on the recorder
+    expect(parseStorage(localStorage.getItem(STORAGE_KEY)!).recordings[0].title).toBe('new name'); // persisted
+    expect((target.querySelector(`button[data-rec-open="${id}"]`) as HTMLElement).textContent).toBe('new name'); // list updated
+    // source pin: the record-name label under the text input is removed from App.svelte
+    expect(readFileSync(join(repoRoot, 'demo/App.svelte'), 'utf8')).not.toContain('activeRec?.title');
+    await unmount(app as never);
+  });
+
+  it('naming at stop: the new record takes the input content at stop time (mid-recording edits count); empty input → empty title with the timestamp kept; an empty session is an empty input', async () => {
+    const { target, app } = mountApp();
+    await tick();
+    // empty session → empty input
+    expect((target.querySelector('input[data-title]') as HTMLInputElement).value).toBe('');
+    const editor = editorOf(target);
+    editor.focus();
+    const rec = app.getRecorder()!;
+
+    // (1) input "X" at stop → titled "X"
+    startRecording(target, 'X');
+    press(editor, '5');
+    stopRecording(target);
+    expect(rec.listRecordings()[0].title).toBe('X');
+    click(target.querySelector('button[data-unload]') as HTMLButtonElement);
+
+    // (2) mid-recording edit counts: start with "A", change to "B" before stop → "B"
+    startRecording(target, 'A');
+    press(editor, '6');
+    setTitle(target, 'B');
+    const liveId = rec.currentRecording()!.id;
+    const createdAt = rec.currentRecording()!.createdAt;
+    stopRecording(target);
+    const second = rec.getRecording(liveId)!;
+    expect(second.title).toBe('B');
+    expect(second.createdAt).toBe(createdAt); // the timestamp stays
+    click(target.querySelector('button[data-unload]') as HTMLButtonElement);
+
+    // (3) empty input at stop → empty title (timestamp kept); the list shows (no name)
+    startRecording(target, '');
+    press(editor, '7');
+    const live3 = rec.currentRecording()!;
+    stopRecording(target);
+    await tick(); // let the recordings list render the new row
+    const third = rec.getRecording(live3.id)!;
+    expect(third.title).toBe('');
+    expect(third.createdAt).toBe(live3.createdAt);
+    expect((target.querySelector(`button[data-rec-open="${live3.id}"]`) as HTMLElement).textContent).toBe('(no name)');
+    await unmount(app as never);
+  });
+
+  it('name-input isolation: keystrokes typed into the name input produce ZERO log steps', async () => {
+    const { target, app } = mountApp();
+    await tick();
+    const editor = editorOf(target);
+    editor.focus();
+    const rec = app.getRecorder()!;
+    startRecording(target, 'iso');
+    press(editor, '5');
+    expect(rec.currentRecording()!.entries.length).toBe(2);
+    const ti = target.querySelector('input[data-title]') as HTMLInputElement;
+    ti.focus();
+    ti.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', bubbles: true, cancelable: true }));
+    ti.dispatchEvent(new KeyboardEvent('keyup', { key: 'x', bubbles: true, cancelable: true }));
+    ti.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift', bubbles: true, cancelable: true }));
+    const entries = rec.currentRecording()!.entries;
+    expect(entries.length).toBe(2); // nothing logged
+    expect(JSON.stringify(entries)).not.toContain('"key":"x"');
+    await unmount(app as never);
+  });
+
+  it('UNLOAD: sits below the review panel and above the recordings list — clears the panel + name input and resets the editor to the empty formula; the recording stays saved; repeatable; load/unload disabled while recording', async () => {
+    const { target, app } = mountApp();
+    await tick();
+    const editor = editorOf(target);
+    editor.focus();
+    const rec = app.getRecorder()!;
+    startRecording(target, 'unload me');
+    press(editor, '5');
+    stopRecording(target);
+    const id = rec.listRecordings()[0].id;
+    await tick();
+    // DOM placement pin: entries list → unload button → recordings header
+    const unload = target.querySelector('button[data-unload]') as HTMLButtonElement;
+    const ol = target.querySelector('ol.entries') as HTMLElement;
+    expect(ol.compareDocumentPosition(unload) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(unload.nextElementSibling!.matches('.rec-head')).toBe(true);
+
+    click(unload);
+    await tick();
+    const st = app.getController()!.getState();
+    expect(envelopeOf(st)).toEqual({ v: 1, root: null }); // editor back to the empty formula
+    expect(st.caret).toEqual({ kind: 'empty' });
+    expect(target.querySelectorAll('button[data-entry-seq]').length).toBe(0); // panel back to empty
+    expect((target.querySelector('input[data-title]') as HTMLInputElement).value).toBe(''); // input empty
+    expect(target.querySelectorAll('li[data-rec-id]').length).toBe(1); // the recording stays saved
+    expect(rec.getRecording(id)).not.toBeNull();
+
+    // repeatable for any recording: load again → closing state back → unload again
+    openRec(target, id);
+    await tick();
+    expect(envelopeOf(app.getController()!.getState())).toEqual({ v: 1, root: { type: 'num', value: 5 } });
+    click(unload);
+    await tick();
+    expect(envelopeOf(app.getController()!.getState())).toEqual({ v: 1, root: null });
+
+    // while recording: load + unload are disabled with a hint (recording integrity first)
+    startRecording(target, 'busy');
+    await tick();
+    const unloadBtn = target.querySelector('button[data-unload]') as HTMLButtonElement;
+    expect(unloadBtn.disabled).toBe(true);
+    expect(unloadBtn.title).toContain('stop');
+    expect((target.querySelector(`button[data-rec-open="${id}"]`) as HTMLButtonElement).disabled).toBe(true);
+    stopRecording(target);
+    await tick();
+    expect((target.querySelector('button[data-unload]') as HTMLButtonElement).disabled).toBe(false);
+    await unmount(app as never);
+  });
+
+  it('STEP-CLICK restore: clicking a step sets the editor to that step’s after-state — zero-diff steps walk up per channel; typing afterwards changes the editor only (recording untouched); no restore while recording', async () => {
+    const { target, app } = mountApp();
+    await tick();
+    const editor = editorOf(target);
+    editor.focus();
+    const rec = app.getRecorder()!;
+    startRecording(target, 'steps');
+    press(editor, '5'); // e1: ast num 5, caret token@1
+    press(editor, 'ArrowLeft'); // e2: caret-only — zero ast/mathml diff (the walk-up case)
+    stopRecording(target);
+    await tick(); // let the recordings list render the row before loading it
+    const id = rec.listRecordings()[0].id;
+    const stored = rec.getRecording(id)!;
+    const entries = stored.entries;
+    expect(entries[2].ast).toBeUndefined();
+    expect(entries[2].mathml).toBeUndefined();
+
+    // load → closing state (e2 after-state: ast walked up from e1, caret token@0)
+    openRec(target, id);
+    await tick();
+    let st = app.getController()!.getState();
+    expect(envelopeOf(st)).toEqual(resolveAt(entries, 2).ast);
+    expect(st.caret).toEqual({ kind: 'token', path: [], index: 0 });
+
+    // click step 2 (zero-diff): AST walks up to e1, caret comes from e2
+    click(target.querySelector('button[data-entry-seq="2"]') as HTMLButtonElement);
+    await tick();
+    st = app.getController()!.getState();
+    expect(envelopeOf(st)).toEqual(entries[1].ast); // still num 5 — e2 carried no ast
+    expect(st.caret).toEqual(entries[2].caret); // token@0
+
+    // click step 1 → that step's after-state (num 5, caret token@1)
+    click(target.querySelector('button[data-entry-seq="1"]') as HTMLButtonElement);
+    await tick();
+    st = app.getController()!.getState();
+    expect(envelopeOf(st)).toEqual(entries[1].ast);
+    expect(st.caret).toEqual(entries[1].caret); // token@1
+
+    // the editor stays live: further typing changes the editor only
+    const before = rec.getRecording(id)!.entries.length;
+    press(editor, '7'); // at token@1 (end of 5) → 57
+    await tick();
+    expect(envelopeOf(app.getController()!.getState())).toEqual({ v: 1, root: { type: 'num', value: 57 } });
+    expect(rec.getRecording(id)!.entries.length).toBe(before); // the loaded recording is untouched
+    expect(parseStorage(localStorage.getItem(STORAGE_KEY)!).recordings.find((r) => r.id === id)!.entries.length).toBe(before);
+
+    // while recording, a step click does NOT restore (the live diff chain is protected)
+    click(target.querySelector('button[data-unload]') as HTMLButtonElement);
+    startRecording(target, 'live');
+    press(editor, '0'); // num 0 — e1 of the live log (the editor was reset by the unload)
+    click(target.querySelector('button[data-entry-seq="0"]') as HTMLButtonElement); // the baseline row
+    await tick();
+    // NOT reset to the baseline's empty formula — the editor stays at the typed state
+    expect(envelopeOf(app.getController()!.getState())).toEqual({ v: 1, root: { type: 'num', value: 0 } });
+    await unmount(app as never);
+  });
+
+  it('KEYDOWN-ONLY capture: keyup events produce no entries; a bare Shift press is no step; Shift+Home is ONE Home entry carrying the shift flag', async () => {
+    const { target, app } = mountApp();
+    await tick();
+    const editor = editorOf(target);
+    editor.focus();
+    const rec = app.getRecorder()!;
+    startRecording(target, 'keys');
+    press(editor, '5');
+    editor.dispatchEvent(new KeyboardEvent('keyup', { key: '5', bubbles: true, cancelable: true }));
+    editor.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift', bubbles: true, cancelable: true }));
+    let entries = rec.currentRecording()!.entries;
+    expect(entries.length).toBe(2); // baseline + the one keydown — the keyups added nothing
+    expect(entries.some((e) => e.input.kind === 'key' && e.input.type === 'keyup')).toBe(false);
+
+    editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift', bubbles: true, cancelable: true }));
+    entries = rec.currentRecording()!.entries;
+    expect(entries.length).toBe(2); // a bare modifier keydown is no step of its own
+
+    editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', code: 'Home', shiftKey: true, bubbles: true, cancelable: true }));
+    editor.dispatchEvent(new KeyboardEvent('keyup', { key: 'Home', code: 'Home', shiftKey: true, bubbles: true, cancelable: true }));
+    entries = rec.currentRecording()!.entries;
+    expect(entries.length).toBe(3); // exactly ONE entry for Shift+Home
+    expect(entries[2].input).toEqual({ kind: 'key', type: 'keydown', key: 'Home', code: 'Home', mods: 'S' });
+    await unmount(app as never);
+  });
+
+  it('persisted recordings with keyup steps keep their format — the panel renders them unchanged (no migration) and load still restores them', async () => {
+    const baseline: TestEntry = {
+      seq: 0,
+      t: 1,
+      input: { kind: 'record-start' },
+      caret: { kind: 'empty' },
+      caretRect: { x: 0, y: 0, w: 2, h: 0 },
+      ast: { v: 1, root: null },
+      mathml: '',
+      rects: { math: { x: 0, y: 0, w: 100, h: 20 } },
+      styles: { math: { display: 'block' } },
+    };
+    const keyupEntry: TestEntry = {
+      seq: 1,
+      t: 2,
+      input: { kind: 'key', type: 'keyup', key: '5', code: 'Digit5', mods: '' },
+      caret: { kind: 'token', path: [], index: 1 },
+      ast: { v: 1, root: { type: 'num', value: 5 } },
+      mathml: '<math><mn>5</mn></math>',
+    };
+    const legacy: StoredRecording = {
+      id: 'rec-legacy',
+      title: 'legacy keyup log',
+      createdAt: '2026-11-10T10:00:00.000Z',
+      updatedAt: '2026-11-10T10:00:00.000Z',
+      paintGeometry: false,
+      entries: [baseline, keyupEntry],
+      comments: {},
+    };
+    localStorage.setItem(STORAGE_KEY, serializeStorage({ version: LOG_VERSION, recordings: [legacy] }));
+    const { target, app } = mountApp();
+    await tick();
+    openRec(target, 'rec-legacy');
+    await tick();
+    expect(target.querySelector('button[data-entry-seq="1"]')!.textContent).toContain('keyup "5"'); // rendered unchanged
+    const st = app.getController()!.getState(); // closing-state restore works on the legacy log
+    expect(envelopeOf(st)).toEqual({ v: 1, root: { type: 'num', value: 5 } });
+    expect(st.caret).toEqual({ kind: 'token', path: [], index: 1 });
+    await unmount(app as never);
+  });
+
+  it('PIN BUTTON renders below the comment text input (not at its right end); the recordings list carries the extra spacing', async () => {
+    const { target, app } = mountApp();
+    await tick();
+    const editor = editorOf(target);
+    editor.focus();
+    startRecording(target, 'pin placement');
+    press(editor, '5');
+    stopRecording(target);
+    await tick();
+    click(target.querySelector('button[data-entry-seq="1"]') as HTMLButtonElement);
+    await waitFor(() => target.querySelector('[data-entry-detail="1"]') !== null);
+    const detail = target.querySelector('[data-entry-detail="1"]') as HTMLElement;
+    const row = detail.querySelector('.comment-row') as HTMLElement;
+    expect(row.querySelector('textarea[data-comment-input="1"]')).not.toBeNull();
+    expect(row.querySelector('button')).toBeNull(); // no button at the right end of the input row
+    expect(row.nextElementSibling!.matches('button[data-comment-pin="1"]')).toBe(true); // below the input
+    // source pins
+    const css = readFileSync(join(repoRoot, 'demo/index.html'), 'utf8');
+    expect(css).not.toContain('.comment-row button');
+    expect(css).toMatch(/\.comment-pin\s*\{[^}]*align-self:\s*flex-start/);
+    // recordings-list spacing: gap between entries + roomy li padding
+    const listRule = css.match(/ul\.recordings\s*\{[^}]*\}/)![0];
+    expect(listRule).toMatch(/gap:\s*0\.[3-9]/);
+    const liRule = css.match(/ul\.recordings li\s*\{[^}]*\}/)![0];
+    expect(parseFloat(liRule.match(/padding:\s*([0-9.]+)em/)![1])).toBeGreaterThanOrEqual(0.3);
     await unmount(app as never);
   });
 });
