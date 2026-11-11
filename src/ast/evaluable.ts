@@ -12,6 +12,7 @@
 // own scope. This boundary is deliberate and pinned by tests.
 
 import {
+  AssignNode,
   FractionNode,
   FunctionNode,
   GroupNode,
@@ -28,7 +29,16 @@ import {
   projectsUnaryRow,
 } from './nodes.js';
 
+/**
+ * The evaluation gate. `atRoot` marks the envelope's root call: assignment-ness
+ * is an eval state that lives only at the ROOT (an assign nested in a slot —
+ * seedable via fromJSON — refuses per this structural gate, A5/A6).
+ */
 export function isEvaluable(node: MathNode | null): boolean {
+  return isEvaluableAt(node, true);
+}
+
+function isEvaluableAt(node: MathNode | null, atRoot: boolean): boolean {
   if (node === null) {
     return false;
   }
@@ -41,7 +51,7 @@ export function isEvaluable(node: MathNode | null): boolean {
       const op = node as OperatorNode;
       if (!(op.op in OPERATOR_SYMBOLS)) return false;
       if (UNARY_OPS.has(op.op)) {
-        return op.args.length === 1 && isEvaluable(op.args[0]);
+        return op.args.length === 1 && isEvaluableAt(op.args[0], false);
       }
       if (op.implicit) {
         // Glyph-less adjacency (Owner amendment): every cell must be filled
@@ -51,7 +61,7 @@ export function isEvaluable(node: MathNode | null): boolean {
         return (
           op.args.length >= 2 &&
           op.op === 'multiply' &&
-          op.args.every(isEvaluable) &&
+          op.args.every((arg) => isEvaluableAt(arg, false)) &&
           op.args.slice(1).every((arg, i) => arg !== null && op.args[i] !== null && implicitPairLegal(op.args[i]!, arg))
         );
       }
@@ -62,40 +72,57 @@ export function isEvaluable(node: MathNode | null): boolean {
         // null cells refuse (the projection pattern is exhaustive for the rest).
         return (
           projectsUnaryRow(op.args) &&
-          op.args.every((arg) => arg === null || isEvaluable(arg))
+          op.args.every((arg) => arg === null || isEvaluableAt(arg, false))
         );
       }
-      return op.args.length >= 2 && op.args.every(isEvaluable);
+      return op.args.length >= 2 && op.args.every((arg) => isEvaluableAt(arg, false));
     }
     case 'fn': {
       const fn = node as FunctionNode;
       // close === false: the movable closing fence is absent — unbalanced
       // states stand structurally refused (the existing gate, no new rule).
-      return fn.close !== false && fn.name !== '' && fn.args.every(isEvaluable);
+      return fn.close !== false && fn.name !== '' && fn.args.every((arg) => isEvaluableAt(arg, false));
     }
     case 'group':
       // close === false: see the fn case.
-      return (node as GroupNode).close !== false && isEvaluable((node as GroupNode).child);
+      return (node as GroupNode).close !== false && isEvaluableAt((node as GroupNode).child, false);
     case 'fence':
       // A close-fence glyph is never a value — dangling or paired, every
       // state that contains one is structurally incomplete for evaluation.
       return false;
     case 'frac':
-      return isEvaluable((node as FractionNode).num) && isEvaluable((node as FractionNode).den);
+      return isEvaluableAt((node as FractionNode).num, false) && isEvaluableAt((node as FractionNode).den, false);
     case 'pow':
-      return isEvaluable((node as PowerNode).base) && isEvaluable((node as PowerNode).exp);
+      return isEvaluableAt((node as PowerNode).base, false) && isEvaluableAt((node as PowerNode).exp, false);
     case 'root': {
       const root = node as RootNode;
       // mroot with a null index is the empty-index-slot state — incomplete.
       return (
-        isEvaluable(root.radicand) &&
+        isEvaluableAt(root.radicand, false) &&
         !(root.mroot && root.index === null) &&
-        (root.index === null || isEvaluable(root.index))
+        (root.index === null || isEvaluableAt(root.index, false))
       );
     }
     case 'sub':
       return (node as SubscriptNode).base !== '' && (node as SubscriptNode).sub !== '';
     case 'unit':
-      return (node as UnitNode).unit !== '' && isEvaluable((node as UnitNode).value);
+      return (node as UnitNode).unit !== '' && isEvaluableAt((node as UnitNode).value, false);
+    case 'assign': {
+      // A5/A6: assignment-ness is an EVAL STATE at the ROOT only — an assign
+      // nested in a slot (seedable via fromJSON) refuses here. At the root:
+      // the lhs exactly one bare SymbolNode with a non-empty name + the rhs
+      // evaluable. Every other lhs shape (empty, number, multi-node row,
+      // group, structure, unit) is DECLINED evaluation — storable, renders,
+      // the node persists (no structural dissolve); the state flips live with
+      // the lhs content, like unit-ness flips with the letter run.
+      if (!atRoot) return false;
+      const assign = node as AssignNode;
+      return (
+        assign.lhs !== null &&
+        assign.lhs.type === 'sym' &&
+        (assign.lhs as SymbolNode).name !== '' &&
+        isEvaluableAt(assign.rhs, false)
+      );
+    }
   }
 }

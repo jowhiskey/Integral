@@ -11,7 +11,7 @@
 import type { Envelope, NodeJson } from '../ast/json.js';
 
 /** Fixed-arity child slots by their JSON field name. */
-export type SlotName = 'child' | 'num' | 'den' | 'base' | 'exp' | 'radicand' | 'index' | 'value';
+export type SlotName = 'child' | 'num' | 'den' | 'base' | 'exp' | 'radicand' | 'index' | 'value' | 'lhs' | 'rhs';
 
 /** One step down the tree: an args-row index (number) or a slot name (string). */
 export type Step = number | SlotName;
@@ -33,6 +33,8 @@ const SLOTS: Readonly<Record<NodeJson['type'], readonly SlotName[]>> = {
   sub: [],
   unit: ['value'],
   fence: [], // a close-fence glyph token is a leaf (session 1, additive)
+  // assign (2026-11-11, the `=` key): lhs/rhs slots, each any single node or null
+  assign: ['lhs', 'rhs'],
 };
 
 /**

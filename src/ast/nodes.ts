@@ -4,6 +4,7 @@
 import type { FencePath, NodeJson } from './json.js';
 import type { MathNode as MathJsNode } from 'mathjs';
 import {
+  AssignmentNode as MathAssignmentNode,
   ConstantNode as MathConstantNode,
   FunctionNode as MathFunctionNode,
   OperatorNode as MathOperatorNode,
@@ -11,7 +12,7 @@ import {
   SymbolNode as MathSymbolNode,
 } from 'mathjs';
 
-export type NodeTag = 'num' | 'sym' | 'op' | 'fn' | 'group' | 'frac' | 'pow' | 'root' | 'sub' | 'unit' | 'fence';
+export type NodeTag = 'num' | 'sym' | 'op' | 'fn' | 'group' | 'frac' | 'pow' | 'root' | 'sub' | 'unit' | 'fence' | 'assign';
 
 /** mathjs function name → operator symbol (for mathjs OperatorNode construction). */
 type MathJsOperatorFn = ConstructorParameters<typeof MathOperatorNode>[1];
@@ -587,5 +588,42 @@ export class UnitNode extends MathNode {
       return `${this.childMathml(this.value)}<mi mathvariant="normal"></mi>`;
     }
     return `${this.childMathml(this.value)}${UNIT_SPACE}<mi mathvariant="normal">${escapeMathml(this.unit)}</mi>`;
+  }
+}
+
+/**
+ * Assignment (added 2026-11-11, the `=` key — the 12th node class, additive;
+ * the JSON envelope stays v1). The lhs and rhs slots each hold ANY single
+ * expression node or null (an empty slot renders □). Assignment-ness is an
+ * EVAL STATE, not a structure flip: isEvaluable reads it live (the assign at
+ * the ROOT + the lhs exactly one bare SymbolNode with a non-empty name + the
+ * rhs evaluable); every other lhs shape (empty, number, multi-node row,
+ * group, structure, unit) is DECLINED evaluation — storable, renders, the
+ * node persists, no structural dissolve. fromJSON validates shape only, never
+ * identifier validity. Definition vs. reference stays positional (lhs vs.
+ * anywhere else) — the same SymbolNode class, no new symbol semantics.
+ */
+export class AssignNode extends MathNode {
+  readonly type = 'assign' as const;
+  constructor(readonly lhs: MathNode | null, readonly rhs: MathNode | null) {
+    super();
+  }
+  toJSON(): NodeJson {
+    return { type: 'assign', lhs: jsonOrNull(this.lhs), rhs: jsonOrNull(this.rhs) };
+  }
+  toMathNode(): MathJsNode {
+    // Standalone parity with mathjs's AssignmentNode — but only for the live
+    // shape; the declined shapes refuse here too (same pattern as the
+    // implicit-row refusal: a host skipping the gate cannot evaluate them).
+    if (this.lhs === null || this.rhs === null) throw incomplete('assign slot is empty');
+    if (this.lhs.type !== 'sym' || (this.lhs as SymbolNode).name === '') {
+      throw incomplete('assign lhs is not a bare symbol (declined evaluation)');
+    }
+    return new MathAssignmentNode(new MathSymbolNode((this.lhs as SymbolNode).name), this.rhs.toMathNode());
+  }
+  protected mathmlContent(): string {
+    // Inline `lhs = rhs` row; an empty slot renders the standing □ (T7 split
+    // reading, both renderers byte-parallel).
+    return `<mrow>${this.childMathml(this.lhs)}<mo>=</mo>${this.childMathml(this.rhs)}</mrow>`;
   }
 }

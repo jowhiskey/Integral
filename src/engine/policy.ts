@@ -93,7 +93,8 @@ export type StructureToken =
   | { readonly t: 'groupClose' }
   | { readonly t: 'comma' }
   | { readonly t: 'dot' }
-  | { readonly t: 'space' };
+  | { readonly t: 'space' }
+  | { readonly t: 'assign' };
 
 /** One typed item: a structure token or a leaf value. Leaves are single
  *  characters in practice (the keymap sends one char per key): a leaf num
@@ -1411,6 +1412,158 @@ function structureKey(ctx: Ctx, station: Station, kind: 'divide' | 'pow'): Editi
   }
 }
 
+// ——— A1: the `=` key — eager assign insertion at the root row (2026-11-11) ———
+//
+// Ruling A1: `=` inserts EAGERLY at the root row (the unit-style trigger). At
+// ANY caret position in the root row it splits EVERYTHING — all content left
+// of the caret becomes the assign node's lhs slot, all content right of it the
+// rhs slot (the OA-both-halves uniform reading: at `a+b|c` the WHOLE `a+b` is
+// the lhs, not the preceding node; at `12|3` the number halves split; at
+// offset 0 the lhs starts empty) — with ZERO insertion-time validation of
+// either side (T1 text-editor parity: `=` inserts wherever `+` inserts). The
+// caret lands at the rhs start (the after-the-glyph position); from the
+// completely empty formula both slots are □ with the caret in the lhs (the
+// S-025 A template). Insertion + split + grab = ONE place op = one undo unit,
+// reverting to the unsplit row. A5: `=` fires only at the root row — at any
+// deeper position (a slot, a nested row/token) it is a silent no-op, and once
+// an assign exists at the root every caret sits inside its slots, so nesting
+// and chaining are impossible BY CONSTRUCTION (no insertion-time refusal
+// list exists). Judgment calls (announced): a pair-gap station splits at the
+// caret like any root-row position — the gap dissolves into the two slots
+// (OA-seam-family (5) only requires that gaps never block input); a pending
+// null cell of the root row splits at the caret's index (the null goes right);
+// a unit/sub token station splits whole at its edges and no-ops at interior
+// label offsets (the structure-key reading — a unit cannot fly apart from its
+// value).
+
+/** The assign node JSON (A6: lhs/rhs each any single node or null). */
+const assignJson = (lhs: NodeJson | null, rhs: NodeJson | null): NodeJson =>
+  ({ type: 'assign', lhs, rhs }) as NodeJson;
+
+/** Collapse the split cells of a row into one slot node: none → null, one →
+ *  the cell itself, more → the row cloned with just those cells. */
+const cellsToSlot = (row: NodeJson, cells: readonly (NodeJson | null)[]): NodeJson | null =>
+  cells.length === 0 ? null : cells.length === 1 ? cells[0] : rowClone(row, cells);
+
+/** Split a token at `offset` into its halves: whole node at the edges for
+ *  unsplittable tokens (unit/sub labels), text halves for num/sym; null when
+ *  an interior offset is unrepresentable (the caller no-ops silently). */
+function tokenSplitAt(node: NodeJson, text: string, offset: number): { left: NodeJson | null; right: NodeJson | null } | null {
+  if (node.type === 'unit' || node.type === 'sub') {
+    if (offset === 0) return { left: null, right: node };
+    if (offset === text.length) return { left: node, right: null };
+    return null; // interior label offset: silent no-op
+  }
+  const left = offset > 0 ? tokenHalf(node, text.slice(0, offset)) : null;
+  const right = offset < text.length ? tokenHalf(node, text.slice(offset)) : null;
+  if ((offset > 0 && left === null) || (offset < text.length && right === null)) return null;
+  return { left, right };
+}
+
+function assignKey(ctx: Ctx, station: Station): EditingState {
+  const env = ctx.env;
+  const root = env.root;
+  // A5: an assign at the root + `=` = silent no-op (nesting impossible by
+  // construction — every caret of an existing assign sits inside its slots or
+  // on the node itself, all covered by this one guard).
+  if (root !== null && root.type === 'assign') return ctx.state;
+  let lhs: NodeJson | null = null;
+  let rhs: NodeJson | null = null;
+  let at: Position | null = null;
+  switch (station.kind) {
+    case 'void': {
+      if (station.ref.at === 'root') {
+        // The completely empty formula: □=□, caret in the LHS (the S-025 A template).
+        return place(ctx, assignJson(null, null), { at: 'root' }, { kind: 'slot', path: [], slot: 'lhs' });
+      }
+      if (station.ref.at === 'cell' && station.ref.path.length === 0) {
+        // A pending null cell of the root row: the split runs at the caret's
+        // index (the null cell itself goes right).
+        const row = root as NodeJson;
+        const args = rowArgs(row);
+        const i = station.ref.index;
+        lhs = cellsToSlot(row, args.slice(0, i));
+        rhs = cellsToSlot(row, args.slice(i));
+        at = { at: 'replaceRoot' };
+        break;
+      }
+      return ctx.state; // a slot void (inside a root structure): not the root row
+    }
+    case 'tok': {
+      const { node, ref, offset } = station;
+      const text = stationText(station);
+      const halves = tokenSplitAt(node, text, offset);
+      if (halves === null) return ctx.state;
+      if (ref.at === 'root') {
+        // A lone token at the root: the token itself halves at the caret
+        // (offset 0 → □ lhs + the token as rhs; the end → the token as lhs + □ rhs).
+        lhs = halves.left;
+        rhs = halves.right;
+      } else if (ref.at === 'cell' && ref.path.length === 0) {
+        // A token cell of the root row: the row splits around the caret, the
+        // token's halves joining their sides.
+        const row = root as NodeJson;
+        const args = rowArgs(row);
+        const c = ref.index;
+        const leftCells = [...args.slice(0, c), ...(halves.left !== null ? [halves.left] : [])];
+        const rightCells = [...(halves.right !== null ? [halves.right] : []), ...args.slice(c + 1)];
+        lhs = cellsToSlot(row, leftCells);
+        rhs = cellsToSlot(row, rightCells);
+      } else {
+        return ctx.state; // a token inside a slot/nested structure: not the root row
+      }
+      at = { at: 'replaceRoot' };
+      break;
+    }
+    case 'seam': {
+      if (station.path.length !== 0) return ctx.state; // a nested row's seam
+      lhs = cellsToSlot(station.row, station.args.slice(0, station.index));
+      rhs = cellsToSlot(station.row, station.args.slice(station.index));
+      at = { at: 'replaceRoot' };
+      break;
+    }
+    case 'after': {
+      const ref = station.ref;
+      if (ref.at === 'root') {
+        // A lone non-row root: whole-node grab at the caret's side — after/right
+        // flank → lhs = the node + □ rhs (the token-end reading); left flank
+        // → □ lhs + the node as rhs (the offset-0 reading).
+        if (station.before === true) {
+          lhs = null;
+          rhs = station.node;
+        } else {
+          lhs = station.node;
+          rhs = null;
+        }
+      } else if (ref.at === 'cell' && ref.path.length === 0) {
+        // A mid-row after/flank station on a root-row cell: the row splits at
+        // the caret (left flank → before the cell, else after it).
+        const row = root as NodeJson;
+        const args = rowArgs(row);
+        const i = station.before === true ? ref.index : ref.index + 1;
+        lhs = cellsToSlot(row, args.slice(0, i));
+        rhs = cellsToSlot(row, args.slice(i));
+      } else {
+        return ctx.state; // an after-station inside a slot/nested structure
+      }
+      at = { at: 'replaceRoot' };
+      break;
+    }
+  }
+  const assignNode = assignJson(lhs, rhs);
+  const afterEnv: Envelope = { v: 1, root: assignNode };
+  // Caret at the RHS start (A1): in front of a container rhs (its slot-boundary
+  // flank), else the content's left entry (token offset 0 / row dive / …),
+  // else the rhs □ slot.
+  const to: Caret =
+    rhs === null
+      ? { kind: 'slot', path: [], slot: 'rhs' }
+      : (edgeStation(afterEnv, ['rhs'], 'left') ??
+        entryStation(afterEnv, ['rhs'], 'left') ??
+        { kind: 'slot', path: [], slot: 'rhs' });
+  return place(ctx, assignNode, at as Position, to);
+}
+
 // ——— T9: the keyless-structure insertion vocabulary (rework session 2b-2) ———
 //
 // Root and subscript have no entry keys (the suggestion box and the palette
@@ -1651,6 +1804,8 @@ export function typeToken(state: EditingState, token: TypedToken, opts: { readon
     case 'divide':
     case 'pow':
       return structureKey(ctx, station, token.t);
+    case 'assign':
+      return assignKey(ctx, station);
     case 'leaf':
       if (token.node.type === 'num') return digitKey(ctx, station, String(token.node.value));
       if (token.node.type === 'sym') return letterKey(ctx, station, token.node.name);

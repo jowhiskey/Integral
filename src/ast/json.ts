@@ -36,6 +36,11 @@ export type NodeJson =
   | { type: 'root'; radicand: NodeJson | null; index?: NodeJson | null; mroot?: boolean }
   | { type: 'sub'; base: string; sub: string }
   | { type: 'unit'; value: NodeJson | null; unit: string }
+  // assign (added 2026-11-11, the `=` key feature — additive, envelope stays
+  // v1): lhs/rhs each hold ANY single expression node or null (empty slot).
+  // Shape-only validation — identifier validity is NOT checked here;
+  // assignment-ness lives in isEvaluable (the root-only gate).
+  | { type: 'assign'; lhs: NodeJson | null; rhs: NodeJson | null }
   // fence: a close-fence glyph token (the movable-paren model). open = path to
   // the paired open fence (a group/fn missing its own close); omitted/null =
   // a dangling close with nothing unclosed. Storable + renders, never a value.

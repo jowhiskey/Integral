@@ -84,7 +84,7 @@ export function countNodes(node: unknown): number {
   if (node === null || typeof node !== 'object' || Array.isArray(node)) return 0;
   const n = node as Record<string, unknown>;
   let count = 1;
-  for (const key of ['args', 'child', 'num', 'den', 'base', 'exp', 'radicand', 'index', 'value'] as const) {
+  for (const key of ['args', 'child', 'num', 'den', 'base', 'exp', 'radicand', 'index', 'value', 'lhs', 'rhs'] as const) {
     const v = n[key];
     if (Array.isArray(v)) count += v.reduce((acc, a) => acc + countNodes(a), 0);
     else count += countNodes(v);

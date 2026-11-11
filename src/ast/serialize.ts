@@ -11,6 +11,7 @@
 
 import type { Envelope, FencePath, NodeJson } from './json.js';
 import {
+  AssignNode,
   FenceNode,
   FractionNode,
   FunctionNode,
@@ -197,6 +198,10 @@ function validateBudgets(root: unknown): void {
       case 'unit':
         push(node.value);
         break;
+      case 'assign':
+        push(node.lhs);
+        push(node.rhs);
+        break;
       default:
         break; // num/sym/sub are leaves; unknown tags are rejected by parseNode
     }
@@ -204,7 +209,7 @@ function validateBudgets(root: unknown): void {
 }
 
 const NODE_TAGS = new Set<NodeJson['type']>([
-  'num', 'sym', 'op', 'fn', 'group', 'frac', 'pow', 'root', 'sub', 'unit', 'fence',
+  'num', 'sym', 'op', 'fn', 'group', 'frac', 'pow', 'root', 'sub', 'unit', 'fence', 'assign',
 ]);
 
 function parseNode(value: unknown, path: string, allowedUnits: ReadonlySet<string>): MathNode | null {
@@ -310,6 +315,14 @@ function parseNode(value: unknown, path: string, allowedUnits: ReadonlySet<strin
       }
       return new UnitNode(parseNode(node.value, `${path}.value`, allowedUnits), unit);
     }
+    case 'assign':
+      // Shape only (added 2026-11-11, the `=` key): each slot is any single
+      // node or null (missing = null, the empty-slot rule). Identifier
+      // validity is NOT validated — assignment-ness lives in isEvaluable.
+      return new AssignNode(
+        parseNode(node.lhs, `${path}.lhs`, allowedUnits),
+        parseNode(node.rhs, `${path}.rhs`, allowedUnits),
+      );
   }
 }
 
@@ -337,7 +350,7 @@ function fenceTarget(root: unknown, path: FencePath): Record<string, unknown> | 
       if (!Array.isArray(args) || step < 0 || step >= args.length) return null;
       current = args[step];
     } else {
-      const slots: Record<string, boolean> = { child: true, num: true, den: true, base: true, exp: true, radicand: true, index: true, value: true };
+      const slots: Record<string, boolean> = { child: true, num: true, den: true, base: true, exp: true, radicand: true, index: true, value: true, lhs: true, rhs: true };
       if (!slots[step]) return null;
       current = rec[step];
     }
@@ -376,7 +389,7 @@ function validateFencePairs(root: unknown): void {
         if (Array.isArray(rec.args)) stack.push(...rec.args);
         break;
       default:
-        for (const key of ['child', 'num', 'den', 'base', 'exp', 'radicand', 'index', 'value']) {
+        for (const key of ['child', 'num', 'den', 'base', 'exp', 'radicand', 'index', 'value', 'lhs', 'rhs']) {
           if (rec[key] !== undefined) stack.push(rec[key]);
         }
         break;

@@ -498,7 +498,7 @@ export class EditorController {
       this.resolvePendingPow(charFromCode(event.code));
       return;
     }
-    const action = classifyKey(event);
+    let action = classifyKey(event);
     if (action.kind === 'deadPow') {
       // T8: no live feedback (S-034) — the OS composition is suppressed; the
       // power materializes with the NEXT key press. A re-press re-arms
@@ -508,7 +508,15 @@ export class EditorController {
       return;
     }
     if (this.pendingDeadPow) {
-      if (action.kind === 'type') {
+      const composed = deadComposedBase(event.key);
+      if (event.key === '=' || composed === '=') {
+        // A5 (2026-11-11): an armed dead-^ pending + `=` DISCARDS the pending
+        // — an exponent never receives the `=` (the pre-ruling "resolve" was
+        // a settle-machinery artifact). The key then does its ordinary job
+        // below: the root-row assign insertion.
+        this.pendingDeadPow = false;
+        if (event.key !== '=') action = { kind: 'type', token: KEYMAP['='] }; // the composed emission's base is `=`
+      } else if (action.kind === 'type') {
         // The next typing key resolves the pending: the deferred `^` op runs
         // first (its own log entry — undo parity with a non-dead layout's `^`
         // followed by this key), then the key itself lands at the fresh
@@ -518,9 +526,7 @@ export class EditorController {
         event.preventDefault();
         this.resolvePendingPowToken(action.token);
         return;
-      }
-      const composed = deadComposedBase(event.key);
-      if (composed !== null) {
+      } else if (composed !== null) {
         // The Firefox/Windows rider (owner live reading 2026-11-09, rework
         // session 3): with the pending armed, NO composition ever fires and
         // the composed output rides the follow-up keydown as a two-character

@@ -76,6 +76,7 @@ export type ClickHit =
   | { readonly kind: 'fence'; readonly path: Path; readonly side: 'open' | 'close'; readonly fraction: number }
   | { readonly kind: 'fnHead'; readonly path: Path; readonly fraction: number }
   | { readonly kind: 'subLabel'; readonly path: Path; readonly label: SubLabel; readonly fraction: number }
+  | { readonly kind: 'assignGlyph'; readonly path: Path; readonly fraction: number }
   | { readonly kind: 'node'; readonly path: Path; readonly fraction: number };
 
 const clamp01 = (x: number): number => (x < 0 ? 0 : x > 1 ? 1 : x);
@@ -114,6 +115,11 @@ export function hitFromMouseEvent(event: MouseEvent, rendered: RenderedMath): Cl
   // own click target (it carries no uid — checked before the closest-uid fallbacks)
   const gap = rendered.seamGaps.get(target);
   if (gap) return { kind: 'seamGap', path: gap.path, index: gap.index, fraction: fractionOf(event.clientX, target) };
+  // A1/A4 (2026-11-11): an assign's `=` binding glyph is the shared gap
+  // between its slots — its own click target (no uid — checked before the
+  // closest-uid fallbacks).
+  const glyph = rendered.assignGlyphs.get(target);
+  if (glyph) return { kind: 'assignGlyph', path: glyph, fraction: fractionOf(event.clientX, target) };
   // Fence glyphs of containers (group/fn parens) are recognized as fence hits
   // even when the mo carries a uid — a group with an inlined flat row child
   // stamps the OPEN paren with the child row's uid, but the element is still
@@ -223,6 +229,10 @@ function nearestBackgroundHit(clientX: number, rendered: RenderedMath): ClickHit
     const r = el.getBoundingClientRect();
     consider(r.left, r.right, el, (f) => ({ kind: 'seamGap', path: gap.path, index: gap.index, fraction: f }));
   }
+  for (const [el, path] of rendered.assignGlyphs) {
+    const r = el.getBoundingClientRect();
+    consider(r.left, r.right, el, (f) => ({ kind: 'assignGlyph', path, fraction: f }));
+  }
   for (const [el, f] of rendered.fenceGlyphs) {
     const r = el.getBoundingClientRect();
     consider(r.left, r.right, el, (fr) => ({ kind: 'fence', path: f.path, side: f.side, fraction: fr }));
@@ -323,6 +333,22 @@ export function caretFromHit(env: Envelope, hit: ClickHit, registry: NavRegistry
         break;
       }
       caret = { kind: 'row', path: hit.path, index: hit.index };
+      break;
+    }
+    case 'assignGlyph': {
+      // A1/A4: the `=` glyph resolves to the shared gap between the assign's
+      // slots per the binding-glyph click rules (the OA-glyph-click-halves
+      // pattern): the LEFT half → the position before the glyph (the lhs
+      // end), the RIGHT half → the rhs start.
+      const lhsNode = nodeAt(env, [...hit.path, 'lhs']);
+      const rhsNode = nodeAt(env, [...hit.path, 'rhs']);
+      const lhsEnd: Caret | null = lhsNode === null
+        ? { kind: 'slot', path: hit.path, slot: 'lhs' }
+        : edgeStation(env, [...hit.path, 'lhs'], 'right') ?? entryStation(env, [...hit.path, 'lhs'], 'right', registry);
+      const rhsStart: Caret | null = rhsNode === null
+        ? { kind: 'slot', path: hit.path, slot: 'rhs' }
+        : edgeStation(env, [...hit.path, 'rhs'], 'left') ?? entryStation(env, [...hit.path, 'rhs'], 'left', registry);
+      caret = firstResolving(env, clickHalves(hit.fraction, lhsEnd, rhsStart)) ?? fallback;
       break;
     }
     case 'fnHead': {

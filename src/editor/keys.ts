@@ -30,6 +30,9 @@ export const KEYMAP: Readonly<Record<string, TypedToken>> = (() => {
   map['.'] = { t: 'dot' };
   map[','] = { t: 'comma' };
   map[' '] = { t: 'space' };
+  // A1 (2026-11-11): `=` is the assign structure token — eager insertion at
+  // the root row (see policy.ts's assignKey).
+  map['='] = { t: 'assign' };
   return map;
 })();
 
@@ -56,7 +59,9 @@ export type KeyAction =
  *  `(` that merely creates a group or re-binds a head-less fence pair
  *  (OA-rehead, S-086) coalesces with the run; the T5 function conversion
  *  splits it — the engine forces that split at the conversion emission sites
- *  (S-085: the `(`-press + conversion is one unit of its own). */
+ *  (S-085: the `(`-press + conversion is one unit of its own). The `=` assign
+ *  token (A1, 2026-11-11) is NOT in the class either: insertion + split + grab
+ *  is its own undo unit, like every structure key. */
 export const isTypingToken = (token: TypedToken): boolean =>
   token.t === 'leaf' ||
   token.t === 'dot' ||

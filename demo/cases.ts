@@ -70,6 +70,8 @@ const root = (radicand: NodeJson | null, index?: NodeJson | null): NodeJson =>
   index == null ? { type: 'root', radicand } : { type: 'root', radicand, index };
 const sub = (base: string, s: string): NodeJson => ({ type: 'sub', base, sub: s });
 const unit = (value: NodeJson | null, u: string): NodeJson => ({ type: 'unit', value, unit: u });
+/** Assignment (the `=` key, 2026-11-11): lhs/rhs slots, each any single node or null. */
+const asg = (lhs: NodeJson | null, rhs: NodeJson | null): NodeJson => ({ type: 'assign', lhs, rhs });
 
 const EMPTY_ENV: Envelope = { v: 1, root: null };
 const env = (rootNode: NodeJson | null): Envelope => ({ v: 1, root: rootNode });
@@ -99,6 +101,7 @@ export const CATEGORIES: readonly CatalogCategory[] = [
   { key: 'R', title: 'Real-world formulas (typed + prebuilt to edit)' },
   { key: 'P', title: 'Known-suspect probes' },
   { key: 'V', title: 'Contract rendering states (rework session 1: bare rows, implicit juxtaposition, movable fences)' },
+  { key: 'A', title: 'Assignment — the `=` key (rules A1–A7, 2026-11-11)' },
 ];
 
 // ——— the catalog ———
@@ -1904,5 +1907,100 @@ export const CASES: readonly CatalogCase[] = [
     stress: 'The T9 empty-square-root landing state (nothing to grab): the radicand renders □ and the caret sits in it; type into it, navigate out.',
     envelope: env({ type: 'root', radicand: null }),
     caret: sl([], 'radicand'),
+  },
+
+  // ——— A: assignment, the `=` key (2026-11-11, rules A1–A7) ———
+  {
+    id: 'A-01',
+    rules: ['A1', 'A6'],
+    category: 'A',
+    label: 'type `x=5+3` from empty',
+    stress: 'The headline assign scenario typed from empty: symbol, `=`, then the RHS row. Watch the `=` split the root row eagerly and the caret land at the RHS start.',
+    keys: 'x=5+3',
+    envelope: EMPTY_ENV,
+    caret: EMPTY,
+  },
+  {
+    id: 'A-02',
+    rules: ['A1', 'A3'],
+    category: 'A',
+    label: 'type `=` from empty (the □=□ template)',
+    stress: 'The empty-formula `=` press: both slots □, caret in the LHS. Type into the LHS, then into the RHS; BS at the RHS □.',
+    keys: '=',
+    envelope: EMPTY_ENV,
+    caret: EMPTY,
+  },
+  {
+    id: 'A-03',
+    rules: ['A1', 'A4'],
+    category: 'A',
+    label: 'mid-row split result `a+b = c` (caret at the RHS start)',
+    stress: 'The `a+b|c` + `=` landing: the WHOLE `a+b` is the LHS. Walk lhs↔rhs across the `=` glyph; BS at the RHS start removes the glyph and splices the row back.',
+    envelope: env(asg(op('add', sym('a'), sym('b')), sym('c'))),
+    caret: tk(['rhs'], 0),
+  },
+  {
+    id: 'A-04',
+    rules: ['A3', 'A5'],
+    category: 'A',
+    label: '□=□ (both slots empty, caret in the LHS)',
+    stress: 'The both-empty assign: □ persists in both slots regardless of caret. Rename the LHS into a symbol (assignment-ness flips live); press `=` again inside a slot (silent no-op); BS at a □.',
+    envelope: env(asg(null, null)),
+    caret: sl([], 'lhs'),
+  },
+  {
+    id: 'A-05',
+    rules: ['A3', 'A4'],
+    category: 'A',
+    label: '`x = □` (empty RHS, caret at the RHS □)',
+    stress: 'The token-end `=` landing: LHS grabbed whole, RHS □. Type the value; BS at the RHS □ takes the A4 glyph rule.',
+    envelope: env(asg(sym('x'), null)),
+    caret: sl([], 'rhs'),
+  },
+  {
+    id: 'A-06',
+    rules: ['A1', 'A4'],
+    category: 'A',
+    label: 'the split number `12 = 3` (from `12|3` + `=`)',
+    stress: 'A number token split mid-token by `=`. BS/Del at the `=` glyph splices the halves back into one number (merge table).',
+    envelope: env(asg(num(12), num(3))),
+    caret: tk(['rhs'], 0),
+  },
+  {
+    id: 'A-07',
+    rules: ['A2', 'A5'],
+    category: 'A',
+    label: 'multi-node LHS `a+b = 5` (declined evaluation, stored)',
+    stress: 'A row LHS is a normal storable state: edit it letter-wise, rename it into a bare symbol (assignment-ness flips declined→live), or break it (live→declined). No dissolve either way.',
+    envelope: env(asg(op('add', sym('a'), sym('b')), num(5))),
+    caret: rw(['lhs'], 1),
+  },
+  {
+    id: 'A-08',
+    rules: ['A5', 'A6'],
+    category: 'A',
+    label: 'a mid-row assign `x + (a = b) + y`',
+    stress: 'The assign as a root-row cell: walk → through lhs→rhs→next cell; `=` inside its slots is a silent no-op; BS into it from the row seam descends into the rhs.',
+    envelope: env(op('add', sym('x'), asg(sym('a'), sym('b')), sym('y'))),
+    caret: tk([1, 'lhs'], 0),
+  },
+  {
+    id: 'A-09',
+    rules: ['A1', 'A4', 'C1'],
+    category: 'A',
+    label: 'structure RHS `x = ½` (caret in front of the fraction)',
+    stress: 'The `=` with a container RHS: the caret at the RHS start is the slot-boundary flank. Click the `=` glyph halves (lhs end / rhs start); BS at the rhs start splices into an implicit pair.',
+    envelope: env(asg(sym('x'), frac(num(1), num(2)))),
+    caret: { kind: 'node', path: ['rhs'], side: 'left' }, // the slot-boundary flank in front of the fraction
+  },
+  {
+    id: 'A-10',
+    rules: ['A1', 'A5', 'S-051'],
+    category: 'A',
+    label: 'type `5m=` from empty (unit settle, then split — unit LHS)',
+    stress: 'The S-051 leave fires on `=`: the `5m` run converts to an attached unit first, then the `=` splits — a unit LHS is DECLINED evaluation but stores and renders.',
+    keys: '5m=',
+    envelope: EMPTY_ENV,
+    caret: EMPTY,
   },
 ];

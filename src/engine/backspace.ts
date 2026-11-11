@@ -627,6 +627,144 @@ function gapMerge(env: Envelope, rowPath: Path, i: number): { readonly ops: read
   return { ops: [{ op: 'place', node, at: replacePosOfRef(ref), to }], caret: to };
 }
 
+// ——— A4: the assign's `=` glyph is a BINDING glyph (2026-11-11) ———
+//
+// Ruling A4: BS/Del at the `=` glyph removes the glyph; the lhs and rhs
+// content splice back together into ONE plain row at the assign's position
+// (the insertion undone; the one undo unit per A1 covers it). The trigger
+// stations are the rhs start (BS — A3: "BS at an RHS start/□ = the A4 glyph
+// rule": the rhs □ slot caret, the rhs content's left-edge stations — token
+// offset 0, row seam 0, the slot-boundary left flank) and the lhs end (the
+// forward-Del mirror). Splice semantics: an extendable op-row side absorbs
+// the other side (same-op rows concatenate, else the other side joins as a
+// cell); two non-row sides fuse per the OA-seam-family merge table (num-num
+// digit concatenation, sym-num digit-glue, sym-sym letter glue) and otherwise
+// bond into an implicit pair (unconditional — A4 removes the glyph, the pair
+// stores and renders with its seam marker if illegal); one empty side
+// promotes the other; both empty → outright death. One place op = one undo
+// unit. Judgment call (announced): BS at the lhs □ takes the same A4 splice —
+// with one side empty the splice coincides with the D6 unwrap-promote.
+
+/** Where the splice caret lands inside the spliced payload. */
+type AssignSplice =
+  | { readonly kind: 'token'; readonly offset: number }
+  | { readonly kind: 'seam'; readonly index: number }
+  | { readonly kind: 'pair' }
+  | { readonly kind: 'side'; readonly facing: 'left' | 'right' };
+
+/** An op row that can absorb another side as cell(s) (not unary/pow — their
+ *  arities are contract-bounded). */
+const extendableRow = (node: NodeJson): boolean => {
+  if (node.type !== 'op') return false;
+  const op = (node as { op: string }).op;
+  return op !== 'pow' && op !== 'unaryMinus' && op !== 'unaryPlus';
+};
+
+/** Splice the assign's two sides into one plain row (or null when both are
+ *  empty). Returns the payload plus where the splice caret lands. */
+function spliceAssignSides(
+  lhs: NodeJson | null,
+  rhs: NodeJson | null,
+): { readonly node: NodeJson; readonly splice: AssignSplice } | null {
+  if (lhs === null && rhs === null) return null;
+  if (lhs === null) return { node: rhs as NodeJson, splice: { kind: 'side', facing: 'left' } };
+  if (rhs === null) return { node: lhs, splice: { kind: 'side', facing: 'right' } };
+  if (extendableRow(lhs) && extendableRow(rhs) &&
+      (lhs as { op: string }).op === (rhs as { op: string }).op &&
+      rowIsImplicit(lhs) === rowIsImplicit(rhs)) {
+    const largs = rowArgs(lhs);
+    return { node: rowClone(lhs, [...largs, ...rowArgs(rhs)]), splice: { kind: 'seam', index: largs.length } };
+  }
+  if (extendableRow(lhs)) {
+    const largs = rowArgs(lhs);
+    return { node: rowClone(lhs, [...largs, rhs]), splice: { kind: 'seam', index: largs.length } };
+  }
+  if (extendableRow(rhs)) {
+    return { node: rowClone(rhs, [lhs, ...rowArgs(rhs)]), splice: { kind: 'seam', index: 0 } };
+  }
+  // Two plain nodes: the OA-seam-family merge table's fusion, else an
+  // implicit pair (storable either way; the glyph removal is unconditional).
+  if (lhs.type === 'num' && rhs.type === 'num') {
+    const merged = numFromText(tokenText(lhs) + tokenText(rhs));
+    if (merged !== null) return { node: merged, splice: { kind: 'token', offset: tokenText(lhs).length } };
+  } else if (lhs.type === 'sym' && rhs.type === 'num' && !tokenText(rhs).includes('.')) {
+    return { node: symOf(tokenText(lhs) + tokenText(rhs)), splice: { kind: 'token', offset: tokenText(lhs).length } };
+  } else if (lhs.type === 'sym' && rhs.type === 'sym') {
+    return { node: symOf(tokenText(lhs) + tokenText(rhs)), splice: { kind: 'token', offset: tokenText(lhs).length } };
+  }
+  return { node: implicitPair(lhs, rhs), splice: { kind: 'pair' } };
+}
+
+/** A4: remove the assign's `=` glyph, splicing lhs+rhs into one plain row at
+ *  the assign's position. One place op = one undo unit. */
+function assignGlyphDelete(env: Envelope, assignPath: Path, station: Caret): BackspaceDecision {
+  const node = nodeAt(env, assignPath) as NodeJson;
+  const spliced = spliceAssignSides(slotValue(node, 'lhs'), slotValue(node, 'rhs'));
+  const ref = refOfPath(assignPath);
+  if (spliced === null) return outrightDeath(env, assignPath, 'glyph'); // both slots empty: outright death
+  const after = withRefSet(env, ref, spliced.node);
+  const contentPath = pathOfRef(ref);
+  let to: Caret;
+  switch (spliced.splice.kind) {
+    case 'token':
+      to = { kind: 'token', path: contentPath, index: spliced.splice.offset };
+      break;
+    case 'seam':
+      to = { kind: 'row', path: contentPath, index: spliced.splice.index };
+      break;
+    case 'pair': {
+      // the glyphBond landing: the RIGHT edge of the new implicit gap
+      const right = rowArgs(spliced.node)[1] ?? null;
+      to = right !== null && isTokenNode(right)
+        ? { kind: 'token', path: [...contentPath, 1], index: 0 }
+        : { kind: 'row', path: contentPath, index: 1 };
+      break;
+    }
+    case 'side':
+      to = spliceStation(after, ref, spliced.splice.facing);
+      break;
+  }
+  return { kind: 'glyph', ops: [{ op: 'place', node: spliced.node, at: replacePosOfRef(ref), to }], caret: to };
+}
+
+/** The A4 forward mirror as a DeleteDecision. */
+function assignGlyphDeleteFwd(env: Envelope, assignPath: Path, caret: Caret): DeleteDecision {
+  const d = assignGlyphDelete(env, assignPath, caret);
+  return { kind: 'glyph', ops: d.ops, caret: d.caret };
+}
+
+/** True when `caret` stands at the assign's rhs-start glyph zone (BS's A4
+ *  trigger): the rhs slot is the caret's addressed slot of an assign parent. */
+const atAssignRhsStart = (env: Envelope, caret: Caret): Path | null => {
+  if (caret.kind !== 'slot' && caret.kind !== 'token' && caret.kind !== 'row' && caret.kind !== 'node') return null;
+  const path = (caret as { path: Path }).path;
+  const ref = refOfPath(path);
+  if (ref.at !== 'slot' || ref.slot !== 'rhs') return null;
+  const parent = nodeAt(env, ref.path);
+  return parent !== null && parent.type === 'assign' ? ref.path : null;
+};
+
+/** True when `caret` stands at the assign's lhs-end glyph zone (Del's A4
+ *  mirror): the caret addresses the lhs slot of an assign parent at its END
+ *  (a token's in-token end, a row's end seam, a container's right flank). */
+const atAssignLhsEnd = (env: Envelope, caret: Caret): Path | null => {
+  if (caret.kind !== 'token' && caret.kind !== 'row' && caret.kind !== 'node') return null;
+  const path = (caret as { path: Path }).path;
+  const ref = refOfPath(path);
+  if (ref.at !== 'slot' || ref.slot !== 'lhs') return null;
+  const parent = nodeAt(env, ref.path);
+  if (parent === null || parent.type !== 'assign') return null;
+  const lhs = slotValue(parent, 'lhs');
+  if (lhs === null) return null; // the lhs □ itself: Del keeps the named no-op
+  if (caret.kind === 'token' && caret.index === tokenText(lhs).length && isTokenNode(lhs)) return ref.path;
+  if (caret.kind === 'row' && caret.path.length === ref.path.length + 1) {
+    const row = nodeAt(env, caret.path);
+    if (row !== null && isRowNode(row) && caret.index >= rowArgs(row).length) return ref.path;
+  }
+  if (caret.kind === 'node' && caret.side === 'right') return ref.path;
+  return null;
+};
+
 // ——— D2 glyph / open fence / head ———
 
 /** D2/S-077 (the owner's B-15 live ruling): the BINDING glyph between two
@@ -838,6 +976,13 @@ function tail(env: Envelope, path: Path, station: Caret, ctx: BsCtx): BackspaceD
     case 'group':
     case 'fn':
       return fencedTail(env, path, node, station, ctx);
+    case 'assign': {
+      // BS with the assign as the left-adjacent visual element descends into
+      // its rhs; an empty rhs takes the A4 glyph rule (the rhs □ reading).
+      const rhs = slotValue(node, 'rhs');
+      if (rhs === null) return assignGlyphDelete(env, path, station);
+      return tail(env, [...path, 'rhs'], station, ctx);
+    }
     case 'fence': {
       const ref = refOfPath(path);
       return { kind: 'token-death', ops: [{ op: 'deleteAt', at: posOfRef(ref) }], caret: freedSpot(ref) };
@@ -924,6 +1069,8 @@ function rowSeam(env: Envelope, rowPath: Path, index: number, station: Caret, ct
       const parent = nodeAt(env, ref.path) as NodeJson;
       if (ref.slot === 'child' && parent.type === 'group') return openFenceDelete(env, ref.path, parent, station);
       if (ref.slot === 'radicand' && parent.type === 'root') return rootStrip(env, ref.path, parent, station);
+      // A4: the rhs row's start seam is the glyph zone right of the `=`.
+      if (ref.slot === 'rhs' && parent.type === 'assign') return assignGlyphDelete(env, ref.path, station);
     }
     // OA-sinarg-merge (ruled 2026-11-10): the function-argument start station
     // (right after the open paren) and the row seam painting at the same spot
@@ -961,6 +1108,11 @@ function stationLeftOf(env: Envelope, caret: Caret, ctx: BsCtx): BackspaceDecisi
       // The owner's B-18 live ruling: the RADICAND start strips the root
       // glyph — the radicand promotes inline, caret still in front of it.
       return rootStrip(env, ref.path, parent, caret);
+    }
+    if (parent.type === 'assign' && ref.slot === 'rhs') {
+      // A4 (2026-11-11): BS at the rhs start (a token's offset 0 landing
+      // here) is the `=` glyph zone — the glyph rule fires.
+      return assignGlyphDelete(env, ref.path, caret);
     }
   }
   return noopDecision(caret); // D4 pattern (region start)
@@ -1007,9 +1159,12 @@ function nodeStation(env: Envelope, caret: Extract<Caret, { kind: 'node' }>, ctx
     // to its left at a bare region = the D4 no-op, as it behaves now).
     if (caret.side === 'left') {
       const ref = refOfPath(caret.path);
-      return ref.at === 'cell'
-        ? rowSeam(env, ref.path, ref.index, caret, ctx)
-        : noopDecision(caret);
+      if (ref.at === 'cell') return rowSeam(env, ref.path, ref.index, caret, ctx);
+      // A4: the left flank of the rhs content (the slot-boundary station in
+      // front of the rhs) is the glyph zone right of the `=`.
+      const assignPath = atAssignRhsStart(env, caret);
+      if (assignPath !== null) return assignGlyphDelete(env, assignPath, caret);
+      return noopDecision(caret);
     }
     switch (node.type) {
       case 'frac':
@@ -1054,6 +1209,7 @@ function nodeStation(env: Envelope, caret: Extract<Caret, { kind: 'node' }>, ctx
     case 'frac':
     case 'pow':
     case 'root':
+    case 'assign':
       return tail(env, caret.path, caret, ctx);
     default:
       return noopDecision(caret);
@@ -1074,6 +1230,11 @@ function slotStation(env: Envelope, caret: Extract<Caret, { kind: 'slot' }>): Ba
     case 'pow':
     case 'root':
       return unwrap(env, caret.path, parent, caret);
+    case 'assign':
+      // A4/A3: BS at either □ of an assign is the `=` glyph rule — the splice
+      // with the other side empty coincides with the D6 unwrap-promote, and
+      // both-empty is the outright death inside assignGlyphDelete.
+      return assignGlyphDelete(env, caret.path, caret);
     default:
       return noopDecision(caret); // an unaddressed slot: D4 pattern
   }
@@ -1330,7 +1491,12 @@ export function decideDelete(env: Envelope, caret: Caret, opts: DeleteOpts = {})
         const spliced = glyphSplice(env, caret.path, caret.index, caret, caret.index === 0 ? 'left' : 'right');
         return { kind: 'glyph', ops: spliced.ops, caret: spliced.caret };
       }
-      if (caret.index >= args.length || args[caret.index] === null) return delNoop(caret);
+      if (caret.index >= args.length || args[caret.index] === null) {
+        // A4 mirror: Del at the lhs row's end seam is the glyph zone left of `=`.
+        const assignPath = atAssignLhsEnd(env, caret);
+        if (assignPath !== null) return assignGlyphDeleteFwd(env, assignPath, caret);
+        return delNoop(caret);
+      }
       const target = args[caret.index] as NodeJson;
       if (isD5Structure(target) || isRowNode(target) || target.type === 'group' || target.type === 'fn') {
         return delNoop(caret); // structures/rows/containers right-adjacent: unruled
@@ -1381,6 +1547,10 @@ function forwardGap(env: Envelope, caret: Caret, ctx: { ctrl: boolean; units: Re
         return flipCloseFwd(env, ref.path, group, caret);
       }
     }
+    // A4 mirror: Del at the lhs content's end (a token's in-token end, a
+    // container's right flank) is the glyph zone left of the `=`.
+    const assignPath = atAssignLhsEnd(env, caret);
+    if (assignPath !== null) return assignGlyphDeleteFwd(env, assignPath, caret);
     return delNoop(caret);
   }
   const row = nodeAt(env, ref.path) as NodeJson;

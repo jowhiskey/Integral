@@ -15,6 +15,7 @@
 
 import type { MathNode } from '../ast/nodes.js';
 import {
+  AssignNode,
   FunctionNode,
   GroupNode,
   NumberNode,
@@ -130,6 +131,10 @@ export interface RenderedMath {
    *  is its own click target (the name carries no uid of its own; closest('[id]')
    *  would otherwise resolve it to the fn's mrow). */
   readonly fnHeads: ReadonlyMap<Element, Path>;
+  /** A1/A4 (2026-11-11): an assign node's `=` glyph <mo> element → the assign's
+   *  path. The binding glyph is the shared gap between the lhs and rhs slots —
+   *  its click target (left half → the lhs end, right half → the rhs start). */
+  readonly assignGlyphs: ReadonlyMap<Element, Path>;
 }
 
 /** Module-level UID counter: ids stay unique across rebuilds and across trees
@@ -156,6 +161,7 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
   const fenceGlyphs = new Map<Element, { path: Path; side: 'open' | 'close' }>();
   const fencesMissingClose = new Map<string, Element>();
   const fnHeads = new Map<Element, Path>();
+  const assignGlyphs = new Map<Element, Path>();
 
   const el = (tag: string): Element => doc.createElementNS(MATHML_NS, tag);
   const mo = (text: string, fence: boolean): Element => {
@@ -465,6 +471,20 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
         // node with its own element); the extent spans the whole fragment.
         return own(path, frag, label);
       }
+      case 'assign': {
+        // A1/A6 (2026-11-11): inline `lhs = rhs` row; an empty slot renders the
+        // standing □ (slotChild's placeholder, parity with the string
+        // renderer). The `=` glyph is the binding-glyph click target (no uid
+        // of its own — registered in assignGlyphs instead).
+        const assign = node as AssignNode;
+        const mrow = el('mrow');
+        mrow.appendChild(slotChild(path, 'lhs', assign.lhs));
+        const eq = mo('=', false);
+        assignGlyphs.set(eq, path);
+        mrow.appendChild(eq);
+        mrow.appendChild(slotChild(path, 'rhs', assign.rhs));
+        return own(path, [mrow], mrow);
+      }
     }
   };
 
@@ -488,5 +508,5 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
     }
   }
 
-  return { math, uidByPath, pathByUid, elementByPath, extents, placeholders, placeholderByCaret, separators, seamGaps, separatorBySeam, bareAnchors, subLabels, fenceGlyphs, fencesMissingClose, fnHeads };
+  return { math, uidByPath, pathByUid, elementByPath, extents, placeholders, placeholderByCaret, separators, seamGaps, separatorBySeam, bareAnchors, subLabels, fenceGlyphs, fencesMissingClose, fnHeads, assignGlyphs };
 }

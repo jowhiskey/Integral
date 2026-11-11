@@ -169,6 +169,21 @@ export const NAV_PROFILES: NavRegistry = {
   // The unit symbol is a string channel, not a slot: only the value is
   // traversable; the unit block as a whole is exit-only.
   unit: { children: 'slots', flow: ['value'] },
+  // Assign (2026-11-11, the `=` key): a chained INLINE layout like pow — lhs
+  // flows right into rhs and back across the `=` glyph zone; no vertical
+  // edges (both slots share the baseline, up/down climbs to the parent like a
+  // row). enterRight defaults to the last flow slot (rhs). Judgment calls
+  // announced in the session report: no side/flank stations on the assign
+  // itself (not in isFlankable/loneRootBorder — it renders as an inline row,
+  // its extent == its content's extent).
+  assign: {
+    children: 'slots',
+    flow: ['lhs', 'rhs'],
+    horizontal: [
+      { from: 'lhs', dir: 'right', to: 'rhs' },
+      { from: 'rhs', dir: 'left', to: 'lhs' },
+    ],
+  },
   // A close-fence glyph token (movable-paren model) is a plain leaf in the
   // row geography — full caret/nav treatment arrives with session 3's fence map.
   fence: LEAF_PROFILE,
