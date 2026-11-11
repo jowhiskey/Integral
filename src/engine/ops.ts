@@ -36,6 +36,7 @@ import {
   type SlotName,
 } from './caret.js';
 import { EngineError } from './errors.js';
+import { cloneEnvelope, samePath } from './internal.js';
 import { NAV_PROFILES, entryStation, rowEndStation, resolveMove, type NavDir } from './nav.js';
 
 /** Where an op acts — always an explicit path, never a policy decision.
@@ -334,10 +335,6 @@ export function undo(state: EditingState): EditingState {
   };
 }
 
-/** Fresh copy of an envelope the reducer owns and may mutate. JSON clone —
- *  structuredClone's type declaration lives in DOM libs, which this subpath
- *  must not pull in. Envelopes are JSON by definition, so nothing survives a
- *  JSON clone that shouldn't. */
 /** Step the redo list forward one unit: replay the undone entry's ops onto
  *  its own before-snapshot. The reducer is pure and deterministic, so the
  *  replay reproduces the post-unit state byte-exactly (tree, caret, and the
@@ -359,8 +356,6 @@ export function redo(state: EditingState): EditingState {
   const applied = applyOps(base, entry.ops);
   return { ...applied, redo: redoRest };
 }
-
-const cloneEnvelope = (env: Envelope): Envelope => JSON.parse(JSON.stringify(env)) as Envelope;
 
 /** One tree-mutating op, log-neutral: serialize + clone, transform the clone
  *  at the JSON level, rebuild through fromJSON (the contract gate), relocate
@@ -437,11 +432,24 @@ function insertInto(env: Envelope, op: InsertOp): void {
       args[at.index] = op.node;
       break;
     }
+    case 'replaceRoot':
+    case 'replaceSlot':
+    case 'replaceCell':
+      replaceInto(env, at, op.node);
+      break;
+  }
+}
+
+/** The occupied-replace transform: swap a root / fixed slot / args cell's
+ *  content for the op's node subtree (strict occupancy — an empty target is
+ *  an error, never a lenient fill). */
+function replaceInto(env: Envelope, at: ReplacePosition, node: NodeJson | null): void {
+  switch (at.at) {
     case 'replaceRoot': {
       if (env.root === null) {
         throw new EngineError('slot-empty', 'replace at root: the formula is empty');
       }
-      env.root = op.node;
+      env.root = node;
       break;
     }
     case 'replaceSlot': {
@@ -449,7 +457,7 @@ function insertInto(env: Envelope, op: InsertOp): void {
       if (slotValue(parent, at.slot) === null) {
         throw new EngineError('slot-empty', `replace: slot '${at.slot}' at [${at.path.join(',')}] is empty`);
       }
-      setSlot(parent, at.slot, op.node);
+      setSlot(parent, at.slot, node);
       break;
     }
     case 'replaceCell': {
@@ -461,7 +469,7 @@ function insertInto(env: Envelope, op: InsertOp): void {
       if (args[at.index] === null) {
         throw new EngineError('slot-empty', `replace: args[${at.index}] is an empty cell, not a node`);
       }
-      args[at.index] = op.node;
+      args[at.index] = node;
       break;
     }
   }
@@ -532,8 +540,6 @@ function requireRowParent(env: Envelope, path: Path): NodeJson {
 }
 
 // ——— Caret relocation (defined per op) ———
-
-const samePath = (a: Path, b: Path): boolean => a.length === b.length && a.every((step, i) => step === b[i]);
 
 /** True iff the caret's address enters the removed subtree through
  *  (…path, slot) — i.e. whatever it pointed at lived inside that subtree. */
@@ -687,31 +693,24 @@ function relocateCaret(
           caretBefore.index === at.index) ||
           (caretBefore.kind === 'node' && samePath(caretBefore.path, at.path))
       ) ? { kind: 'node', path: [...at.path, at.index] } : caretBefore;
-    case 'replaceRoot': {
-      if (op.op !== 'insert') {
-        throw new EngineError('unknown-op', `deleteAt: position '${at.at}' is insert-only`);
-      }
-      return preservedTokenCaret(caretBefore, [], op, before) ?? diveCaret(op.node!, []);
-    }
+    case 'replaceRoot':
     case 'replaceSlot':
+    case 'replaceCell': {
       if (op.op !== 'insert') {
         throw new EngineError('unknown-op', `deleteAt: position '${at.at}' is insert-only`);
       }
+      const contentPath: Path =
+        at.at === 'replaceRoot' ? [] : at.at === 'replaceSlot' ? [...at.path, at.slot] : [...at.path, at.index];
+      const entered =
+        at.at === 'replaceCell'
+          ? enteredThroughCell(caretBefore, at.path, at.index)
+          : at.at === 'replaceSlot'
+            ? enteredThrough(caretBefore, at.path, at.slot)
+            : true; // replaceRoot always dives into the inserted subtree
       return (
-        preservedTokenCaret(caretBefore, [...at.path, at.slot], op, before) ??
-        (enteredThrough(caretBefore, at.path, at.slot)
-          ? diveCaret(op.node!, [...at.path, at.slot])
-          : caretBefore)
+        preservedTokenCaret(caretBefore, contentPath, op, before) ??
+        (entered ? diveCaret(op.node!, contentPath) : caretBefore)
       );
-    case 'replaceCell':
-      if (op.op !== 'insert') {
-        throw new EngineError('unknown-op', `deleteAt: position '${at.at}' is insert-only`);
-      }
-      return (
-        preservedTokenCaret(caretBefore, [...at.path, at.index], op, before) ??
-        (enteredThroughCell(caretBefore, at.path, at.index)
-          ? diveCaret(op.node!, [...at.path, at.index])
-          : caretBefore)
-      );
+    }
   }
 }

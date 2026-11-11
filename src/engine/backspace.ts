@@ -95,6 +95,7 @@ import {
   isRowNode,
   isTokenNode,
   nodeAt,
+  pathOfRef,
   refOfPath,
   rowArgs,
   slotsOf,
@@ -109,7 +110,18 @@ import {
 } from './caret.js';
 
 import { EngineError } from './errors.js';
-
+import {
+  closeFenceToken as fenceToken,
+  isImplicitRow as rowIsImplicit,
+  refPosition,
+  replacePosOfRef,
+  samePath,
+  subLabelShapeOk,
+  subWithLabel,
+  symOf,
+  unitOf,
+  withRefSet,
+} from './internal.js';
 import { entryStation, enterFromSide } from './nav.js';
 
 import { applyOps, envelopeOf, type EditingState, type Op, type Position } from './ops.js';
@@ -169,30 +181,8 @@ const noopDecision = (caret: Caret): BackspaceDecision => ({ kind: 'noop', ops: 
 
 // ——— positions / refs / freed spots ———
 
-const posOfRef = (ref: Ref): Position => {
-  switch (ref.at) {
-    case 'root':
-      return { at: 'root' };
-    case 'slot':
-      return { at: 'slot', path: ref.path, slot: ref.slot };
-    case 'cell':
-      return { at: 'row', path: ref.path, index: ref.index };
-  }
-};
-
-const replacePosOfRef = (ref: Ref): Position => {
-  switch (ref.at) {
-    case 'root':
-      return { at: 'replaceRoot' };
-    case 'slot':
-      return { at: 'replaceSlot', path: ref.path, slot: ref.slot };
-    case 'cell':
-      return { at: 'replaceCell', path: ref.path, index: ref.index };
-  }
-};
-
-const pathOfRef = (ref: Ref): Path =>
-  ref.at === 'root' ? [] : ref.at === 'slot' ? [...ref.path, ref.slot] : [...ref.path, ref.index];
+/** The insert-position a ref addresses (an args cell splices at `row`). */
+const posOfRef = (ref: Ref): Position => refPosition(ref, 'row');
 
 /** The freed spot a removal leaves behind: root → the empty formula, a fixed
  *  slot → its □ caret, an args cell → the row station at the position. */
@@ -207,36 +197,9 @@ const freedSpot = (ref: Ref): Caret => {
   }
 };
 
-// ——— JSON furniture ———
-
-const clone = (env: Envelope): Envelope => JSON.parse(JSON.stringify(env)) as Envelope;
-
-/** A working copy of `env` with `ref`'s content replaced — the tree the
- *  decision's own place/deleteAt op produces (for entry-station lookups). */
-function withRefSet(env: Envelope, ref: Ref, node: NodeJson | null): Envelope {
-  const after = clone(env);
-  if (ref.at === 'root') after.root = node;
-  else if (ref.at === 'slot') {
-    const owner = nodeAt(after, ref.path) as NodeJson;
-    (owner as unknown as Record<string, unknown>)[ref.slot] = node;
-  } else {
-    rowArgs(nodeAt(after, ref.path) as NodeJson)[ref.index] = node;
-  }
-  return after;
-}
-
-const rowIsImplicit = (node: NodeJson): boolean =>
-  node.type === 'op' && (node as { implicit?: boolean }).implicit === true;
-
-const fenceToken: NodeJson = { type: 'fence', side: 'close' };
-
-const symOf = (name: string): NodeJson => ({ type: 'sym', name }) as NodeJson;
-
-const unitOf = (value: NodeJson | null, unit: string): NodeJson => ({ type: 'unit', value, unit }) as NodeJson;
+// ——— JSON furniture (the shared builders live in internal.js) ———
 
 const dfltUnits = (): ReadonlySet<string> => new Set(defaultStaticVocabulary.units);
-
-const samePath = (a: Path, b: Path): boolean => a.length === b.length && a.every((s, i) => s === b[i]);
 
 /** The geometric side a fixed slot occupies on its structure. The splice
  *  caret's facing follows the DELETED slot's side, not declaration order —
@@ -313,6 +276,18 @@ function unitStrip(env: Envelope, path: Path): BackspaceDecision {
 
 // ——— D1 token surgery ———
 
+/** S-104 re-validation on retyping a unit's run: a still-known run stays an
+ *  attached unit; an unknown run reverts to the [value, symbol] pair (its
+ *  symbol cell lives one level deeper, at [...path, 1]). */
+const unitRetype = (
+  value: NodeJson | null,
+  run: string,
+  units: ReadonlySet<string>,
+): { readonly node: NodeJson; readonly reverted: boolean } =>
+  units.has(run)
+    ? { node: unitOf(value, run), reverted: false }
+    : { node: implicitPair(value, symOf(run)), reverted: true };
+
 /** D1: a deletion that empties a token removes the NODE — at an args cell the
  *  cell becomes the PENDING NULL (the glyph survives as dangling; the D2 rule
  *  deletes it next), at a fixed slot the □, at the root the empty formula. */
@@ -364,12 +339,12 @@ function charDrop(env: Envelope, node: NodeJson, path: Path, drop: number, to: C
     const text = tokenText(node);
     const next = text.slice(0, drop) + text.slice(drop + 1);
     if (next === '') return unitStrip(env, path); // the emptied label kills the unit shape
-    if (ctx.units.has(next)) {
-      return { kind: 'char', ops: [{ op: 'place', node: unitOf(value, next), at: replacePosOfRef(ref), to }], caret: to };
+    const re = unitRetype(value, next, ctx.units);
+    if (!re.reverted) {
+      return { kind: 'char', ops: [{ op: 'place', node: re.node, at: replacePosOfRef(ref), to }], caret: to };
     }
-    const runPath = [...pathOfRef(ref), 1];
-    const runTo: Caret = { kind: 'token', path: runPath, index: drop };
-    return { kind: 'char', ops: [{ op: 'place', node: implicitPair(value, symOf(next)), at: replacePosOfRef(ref), to: runTo }], caret: runTo };
+    const runTo: Caret = { kind: 'token', path: [...pathOfRef(ref), 1], index: drop };
+    return { kind: 'char', ops: [{ op: 'place', node: re.node, at: replacePosOfRef(ref), to: runTo }], caret: runTo };
   }
   return noopDecision(to);
 }
@@ -391,31 +366,28 @@ function ctrlLeftRun(env: Envelope, node: NodeJson, path: Path, index: number, c
     const value = (node as { value: NodeJson | null }).value;
     const rest = tokenText(node).slice(index);
     if (rest === '') return unitStrip(env, path); // the emptied label kills the unit shape
-    if (ctx.units.has(rest)) {
-      return { kind: 'char', ops: [{ op: 'place', node: unitOf(value, rest), at: replacePosOfRef(ref), to }], caret: to };
+    const re = unitRetype(value, rest, ctx.units);
+    if (!re.reverted) {
+      return { kind: 'char', ops: [{ op: 'place', node: re.node, at: replacePosOfRef(ref), to }], caret: to };
     }
-    const runPath = [...pathOfRef(ref), 1];
-    const runTo: Caret = { kind: 'token', path: runPath, index: 0 };
-    return { kind: 'char', ops: [{ op: 'place', node: implicitPair(value, symOf(rest)), at: replacePosOfRef(ref), to: runTo }], caret: runTo };
+    const runTo: Caret = { kind: 'token', path: [...pathOfRef(ref), 1], index: 0 };
+    return { kind: 'char', ops: [{ op: 'place', node: re.node, at: replacePosOfRef(ref), to: runTo }], caret: runTo };
   }
   return tokenDeath(env, path, to); // ctrl at a non-text token: the D4 pattern
 }
 
 // ——— sub labels (T9) ———
 
-const SUB_BASE_SHAPE = /^\p{L}[\p{L}\p{N}]*$/u;
-
 function subLabelChar(env: Envelope, node: NodeJson, path: Path, label: SubLabel, index: number, ctx: BsCtx): BackspaceDecision {
-  const labels = node as { base: string; sub: string };
   const text = subLabelText(node, label);
   const drop = index - 1;
   const next = text.slice(0, drop) + text.slice(drop + 1);
   const ref = refOfPath(path);
-  if (label === 'base' && !SUB_BASE_SHAPE.test(next)) {
+  if (!subLabelShapeOk(label, next)) {
     return noopDecision({ kind: 'token', path, index, label }); // a shape-breaking shrink: silent no-op
   }
   const to: Caret = { kind: 'token', path, index: drop, label };
-  const grown = label === 'base' ? ({ type: 'sub', base: next, sub: labels.sub } as NodeJson) : ({ type: 'sub', base: labels.base, sub: next } as NodeJson);
+  const grown = subWithLabel(node, label, next);
   return { kind: 'char', ops: [{ op: 'place', node: grown, at: replacePosOfRef(ref), to }], caret: to };
 }
 
@@ -484,6 +456,12 @@ function rootStrip(env: Envelope, rootPath: Path, root: NodeJson, station: Caret
 
 // ——— fenced containers (D7/D8) ———
 
+/** A fenced container's close state flipped (the movable-paren model). */
+const fenceFlip = (node: NodeJson, close: boolean): NodeJson =>
+  node.type === 'group'
+    ? groupJson((node as { child: NodeJson | null }).child, close)
+    : fnJson((node as { name: string }).name, rowArgs(node), close);
+
 /** BS at a station whose left-adjacent element is the group/fn at `path`:
  *  the movable `)` deletes first (close → false, the chain continues at the
  *  content's right edge), or — already open-ended — the chain descends into
@@ -492,10 +470,7 @@ function fencedTail(env: Envelope, path: Path, node: NodeJson, station: Caret, c
   const ref = refOfPath(path);
   const args = node.type === 'fn' ? rowArgs(node) : null;
   if (isClosed(node)) {
-    const rebuilt =
-      node.type === 'group'
-        ? groupJson((node as { child: NodeJson | null }).child, false)
-        : fnJson((node as { name: string }).name, rowArgs(node), false);
+    const rebuilt = fenceFlip(node, false);
     const after = withRefSet(env, ref, rebuilt);
     const contentPath: Path =
       node.type === 'group' ? [...path, 'child'] : [...path, Math.max((args as (NodeJson | null)[]).length - 1, 0)];
@@ -1072,11 +1047,12 @@ function forwardText(env: Envelope, node: NodeJson, path: Path, keep: string, to
       const strip = unitStrip(env, path); // the emptied label kills the unit shape
       return { kind: 'token-death', ops: strip.ops, caret: strip.caret };
     }
-    if (ctx.units.has(keep)) {
-      return { kind: 'char', ops: [{ op: 'place', node: unitOf(value, keep), at: replacePosOfRef(ref), to }], caret: to };
+    const re = unitRetype(value, keep, ctx.units);
+    if (!re.reverted) {
+      return { kind: 'char', ops: [{ op: 'place', node: re.node, at: replacePosOfRef(ref), to }], caret: to };
     }
     const runTo: Caret = { kind: 'token', path: [...pathOfRef(ref), 1], index: 0 };
-    return { kind: 'char', ops: [{ op: 'place', node: implicitPair(value, symOf(keep)), at: replacePosOfRef(ref), to: runTo }], caret: runTo };
+    return { kind: 'char', ops: [{ op: 'place', node: re.node, at: replacePosOfRef(ref), to: runTo }], caret: runTo };
   }
   if (node.type === 'sym') {
     if (keep === '') return delTokenDeath(env, path, to);
@@ -1114,14 +1090,10 @@ export function decideDelete(env: Envelope, caret: Caret, opts: DeleteOpts = {})
       const node = nodeAt(env, caret.path) as NodeJson;
       if (node.type === 'sub') {
         if (caret.label === undefined || caret.index >= subLabelText(node, caret.label).length) return delNoop(caret);
-        const labels = node as { base: string; sub: string };
         const text = subLabelText(node, caret.label);
         const next = text.slice(0, caret.index) + text.slice(caret.index + 1);
-        if (caret.label === 'base' && !SUB_BASE_SHAPE.test(next)) return delNoop(caret);
-        const grown =
-          caret.label === 'base'
-            ? ({ type: 'sub', base: next, sub: labels.sub } as NodeJson)
-            : ({ type: 'sub', base: labels.base, sub: next } as NodeJson);
+        if (!subLabelShapeOk(caret.label, next)) return delNoop(caret);
+        const grown = subWithLabel(node, caret.label, next);
         return { kind: 'char', ops: [{ op: 'place', node: grown, at: replacePosOfRef(refOfPath(caret.path)), to: caret }], caret };
       }
       const text = tokenText(node);
@@ -1229,10 +1201,7 @@ const isTokenNodeLeft = (node: NodeJson): boolean =>
  *  glyph deletes (close → false), the caret stays at the content end —
  *  `1/(a+b|)` + Del → `1/(a+b|`. One op. */
 function flipCloseFwd(env: Envelope, containerPath: Path, container: NodeJson, caret: Caret): DeleteDecision {
-  const rebuilt =
-    container.type === 'group'
-      ? groupJson((container as { child: NodeJson | null }).child, false)
-      : fnJson((container as { name: string }).name, rowArgs(container), false);
+  const rebuilt = fenceFlip(container, false);
   return {
     kind: 'close-fence',
     ops: [{ op: 'place', node: rebuilt, at: replacePosOfRef(refOfPath(containerPath)), to: caret }],

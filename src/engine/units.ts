@@ -24,19 +24,15 @@ import {
   nodeAt,
   refOfPath,
   rowArgs,
-  setSlot,
   slotValue,
   slotsOf,
   type Caret,
   type Path,
 } from './caret.js';
 import { exitStation } from './nav.js';
+import { isImplicitRow, withRefSet } from './internal.js';
 import { applyOp, envelopeOf, type EditingState } from './ops.js';
 import { unitSetOf } from './policy.js';
-
-/** True iff the node is a glyph-less multiply row (the juxtaposition pair). */
-const isImplicitRow = (node: NodeJson): boolean =>
-  node.type === 'op' && (node as { implicit?: boolean }).implicit === true;
 
 /** The first convertible pair of the envelope, in pre-order: an implicit
  *  multiply row of exactly [num, sym-known]. Null when none exists. */
@@ -125,10 +121,7 @@ export function settleUnits(state: EditingState): EditingState {
       unit: (run as { name: string }).name,
     } as NodeJson;
     const ref = refOfPath(pairPath);
-    const after: Envelope = JSON.parse(JSON.stringify(env)) as Envelope;
-    if (ref.at === 'root') after.root = unitNode;
-    else if (ref.at === 'slot') setSlot(nodeAt(after, ref.path) as NodeJson, ref.slot, unitNode);
-    else rowArgs(nodeAt(after, ref.path) as NodeJson)[ref.index] = unitNode;
+    const after = withRefSet(env, ref, unitNode);
     state = applyOp(state, {
       op: 'place',
       node: unitNode,

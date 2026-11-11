@@ -28,7 +28,7 @@
 //                    twin states) paints MID-WAY between value and label
 //                    (OA-unit-seam-paint, I-22).
 
-import type { Envelope } from '../ast/json.js';
+import type { Envelope, NodeJson } from '../ast/json.js';
 
 import { isRowNode, nodeAt, rowArgs, tokenText, type Caret, type Path } from '../engine/caret.js';
 
@@ -159,6 +159,37 @@ function unitSeamMidX(rendered: RenderedMath, unitPath: Path): number | null {
   return (valueRect.right + labelRect.left) / 2;
 }
 
+/** The element + text length a token caret interpolates over (a sub's own
+ *  label element, the unit's upright label mi, a num/sym's extent rect). */
+function tokenRect(
+  rendered: RenderedMath,
+  caret: Extract<Caret, { kind: 'token' }>,
+  node: NodeJson,
+): { rect: RectLike; len: number } | null {
+  if (node.type === 'sub') {
+    if (caret.label !== 'base' && caret.label !== 'sub') return null;
+    const labels = rendered.subLabels.get(pathKey(caret.path));
+    if (labels === undefined) return null;
+    const el = caret.label === 'base' ? labels.base : labels.script;
+    return { rect: rectOf(el), len: (caret.label === 'base' ? node.base : node.sub).length };
+  }
+  if (node.type === 'unit') {
+    if (caret.label !== undefined) return null;
+    const el = rendered.elementByPath.get(pathKey(caret.path));
+    if (el === undefined) return null;
+    return { rect: rectOf(el), len: node.unit.length };
+  }
+  if (node.type === 'num' || node.type === 'sym') {
+    if (caret.label !== undefined) return null;
+    // Rework 4a: symbols interpolate over their own extent like numbers
+    // (typed syms rest in-token per OA-token-end).
+    const rect = extentRect(rendered, caret.path);
+    if (rect === null) return null;
+    return { rect, len: tokenText(node).length };
+  }
+  return null;
+}
+
 /**
  * Pixel anchor for a caret in a rendered tree. Returns null when the caret does
  * not resolve against the rendered maps (should not happen for engine-valid
@@ -258,34 +289,9 @@ export function caretAnchor(env: Envelope, caret: Caret, rendered: RenderedMath)
       // extent is the stubbed-rect-testable anchor).
       const node = nodeAt(env, caret.path);
       if (node === null) return null;
-      // A sub label (T9) interpolates within its OWN label element; a unit
-      // label (S-104) within the unit's own element — the upright label mi;
-      // numbers interpolate over the node's extent like before.
-      let rect: RectLike | null = null;
-      let len = 0;
-      if (node.type === 'sub') {
-        if (caret.label !== 'base' && caret.label !== 'sub') return null;
-        const labels = rendered.subLabels.get(pathKey(caret.path));
-        if (labels === undefined) return null;
-        const el = caret.label === 'base' ? labels.base : labels.script;
-        rect = rectOf(el);
-        len = (caret.label === 'base' ? node.base : node.sub).length;
-      } else if (node.type === 'unit') {
-        if (caret.label !== undefined) return null;
-        const el = rendered.elementByPath.get(pathKey(caret.path));
-        if (el === undefined) return null;
-        rect = rectOf(el);
-        len = node.unit.length;
-      } else if (node.type === 'num' || node.type === 'sym') {
-        if (caret.label !== undefined) return null;
-        // Rework 4a: symbols interpolate over their own extent like numbers
-        // (typed syms rest in-token per OA-token-end).
-        rect = extentRect(rendered, caret.path);
-        len = tokenText(node).length;
-      } else {
-        return null;
-      }
-      if (rect === null) return null;
+      const tr = tokenRect(rendered, caret, node);
+      if (tr === null) return null;
+      const { rect, len } = tr;
       if (!Number.isInteger(caret.index) || caret.index < 0 || caret.index > len) return null;
       // OA-unit-seam-paint (I-22): the unit seam's two states — the label's
       // offset 0 and the value's end (a token caret on the unit's 'value'

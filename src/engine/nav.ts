@@ -24,7 +24,6 @@
 
 import type { Envelope, NodeJson } from '../ast/json.js';
 import {
-  caretResolvesIn,
   hasSlot,
   isRowNode,
   isTokenNode,
@@ -41,6 +40,7 @@ import {
   type SlotName,
   type SubLabel,
 } from './caret.js';
+import { edgeCell, isImplicitRow } from './internal.js';
 
 /** Arrow directions the move op understands. */
 export type NavDir = 'left' | 'right' | 'up' | 'down';
@@ -270,12 +270,27 @@ function isFlankable(node: NodeJson): boolean {
   return t === 'group' || t === 'fn' || t === 'frac' || t === 'pow' || t === 'root' || t === 'sub';
 }
 
+/** The bare-root border station (4a's lone-root stations): right for
+ *  group/fn/frac/pow/root, left for group/fn/frac/root (the lone pow's
+ *  before-station is retired, T-11); null otherwise. */
+function loneRootBorder(node: NodeJson, dir: Side): Caret | null {
+  const t = node.type;
+  if (dir === 'right') {
+    return t === 'group' || t === 'fn' || t === 'frac' || t === 'pow' || t === 'root'
+      ? { kind: 'node', path: [], side: 'right' }
+      : null;
+  }
+  return t === 'group' || t === 'fn' || t === 'frac' || t === 'root'
+    ? { kind: 'node', path: [], side: 'left' }
+    : null;
+}
+
 /** True iff the args row draws a separator at the boundary on `side` of
  *  cell `i` (explicit op glyphs and fn commas; implicit rows and the row
  *  borders have none). */
 function hasSeparatorAt(row: NodeJson, i: number, side: Side): boolean {
   if (row.type !== 'op' && row.type !== 'fn') return false;
-  if (row.type === 'op' && (row as { implicit?: boolean }).implicit === true) return false;
+  if (isImplicitRow(row)) return false;
   const args = rowArgs(row);
   return side === 'left' ? i > 0 && i < args.length : i >= 0 && i < args.length - 1;
 }
@@ -303,17 +318,8 @@ function cellFlank(env: Envelope, cellPath: Path, side: Side): Caret | null {
  *  of a lone power's base is the N3 no-op; `sub` stays out (leaf ends). */
 function containerExitFlank(env: Envelope, owner: NodeJson, ownerPath: Path, dir: Side): Caret | null {
   if (!isFlankable(owner)) return null;
-  if (ownerPath.length === 0) {
-    const t = owner.type;
-    if (dir === 'right') {
-      return t === 'group' || t === 'fn' || t === 'frac' || t === 'pow' || t === 'root'
-        ? { kind: 'node', path: [], side: 'right' }
-        : null;
-    }
-    return t === 'group' || t === 'fn' || t === 'frac' || t === 'root'
-      ? { kind: 'node', path: [], side: 'left' }
-      : null;
-  }
+
+  if (ownerPath.length === 0) return loneRootBorder(owner, dir);
   // A slot boundary carries its own flank (a slot holds exactly one node —
   // its content edge IS the slot edge; the M-12 group's pre-/post-fence
   // stations, OA-fence-flank); an args cell only when its boundary glyph
@@ -327,22 +333,6 @@ function containerExitFlank(env: Envelope, owner: NodeJson, ownerPath: Path, dir
  *  IS its visual right edge (OA-visual-trumps — no seam/station beyond it). */
 function textLikeEnd(node: NodeJson): boolean {
   return node.type === 'num' || node.type === 'sym' || node.type === 'sub';
-}
-
-/** The edge cell of an args cell that is itself an op row — op rows are
- *  transparent at their flanks: descend to the first/last non-op cell (the
- *  same transparency policy.ts's edgeCell applies at row edges). */
-function edgeCellOf(env: Envelope, from: Path, side: 'first' | 'last'): { node: NodeJson | null; path: Path } {
-  let path = from;
-  for (;;) {
-    const node = nodeAt(env, path);
-    if (node === null || node.type !== 'op') return { node, path };
-    const args = rowArgs(node);
-    if (args.length === 0) return { node: null, path };
-    const idx = side === 'last' ? args.length - 1 : 0;
-    if (args[idx] === null) return { node: null, path };
-    path = [...path, idx];
-  }
 }
 
 /**
@@ -367,7 +357,7 @@ function bench(env: Envelope, path: Path, side: Side, registry: NavRegistry): Ca
   switch (node.type) {
     case 'num':
     case 'sym':
-      return { kind: 'token', path, index: side === 'left' ? 0 : tokenText(node).length };
+      return tokenEdgeCaret(path, node, side);
     case 'sub':
       return side === 'left'
         ? { kind: 'token', path, index: 0, label: 'base' }
@@ -404,6 +394,13 @@ function bench(env: Envelope, path: Path, side: Side, registry: NavRegistry): Ca
     }
   }
 }
+
+/** The in-token edge station of a text-like token. */
+const tokenEdgeCaret = (path: Path, node: NodeJson, side: Side): Caret => ({
+  kind: 'token',
+  path,
+  index: side === 'left' ? 0 : tokenText(node).length,
+});
 
 /** Entering the node at `path` from an adjacent row position: consults the
  *  profile's `enterRight` override on the right side (N5/S-094 — a fraction's
@@ -450,7 +447,7 @@ function contentEnd(env: Envelope, path: Path, registry: NavRegistry): Caret | n
     case 'sym':
     case 'unit': {
       const len = tokenText(node).length;
-      return len > 0 ? { kind: 'token', path, index: len } : bench(env, path, 'left', registry);
+      return len > 0 ? tokenEdgeCaret(path, node, 'right') : bench(env, path, 'left', registry);
     }
     case 'sub':
       return { kind: 'token', path, index: subLabelText(node, 'sub').length, label: 'sub' };
@@ -518,7 +515,7 @@ export function rowEndStation(env: Envelope, ownerPath: Path, dir: Side, registr
   // row ending in a structure keeps the outer seam (same rule as a direct
   // structure cell below).
   if (cell.type === 'op') {
-    const edge = edgeCellOf(env, [...ownerPath, i], dir === 'right' ? 'last' : 'first');
+    const edge = edgeCell(env, [...ownerPath, i], dir === 'right' ? 'last' : 'first');
     if (edge.node !== null && (textLikeEnd(edge.node) || edge.node.type === 'unit')) {
       return bench(env, edge.path, dir, registry);
     }
@@ -571,17 +568,7 @@ function climb(env: Envelope, path: Path, dir: NavDir, registry: NavRegistry): C
     if (dir !== 'left' && dir !== 'right') return null;
     const node = env.root;
     if (node === null) return null;
-    const t = node.type;
-    if (dir === 'right') {
-      if (t === 'group' || t === 'fn' || t === 'frac' || t === 'pow' || t === 'root') {
-        return { kind: 'node', path: [], side: 'right' };
-      }
-      return null;
-    }
-    if (t === 'group' || t === 'fn' || t === 'frac' || t === 'root') {
-      return { kind: 'node', path: [], side: 'left' };
-    }
-    return null;
+    return loneRootBorder(node, dir);
   }
   const ownerPath = path.slice(0, -1);
   const step = path[path.length - 1];
@@ -715,6 +702,36 @@ export function edgeStation(env: Envelope, path: Path, side: 'left' | 'right'): 
   return null;
 }
 
+/** One horizontal step of an args-row caret: the neighboring cell on the
+ *  side (dived when filled, a pending null rests as its seam) or the climb
+ *  when the row runs out. */
+function rowStep(
+  env: Envelope,
+  caret: Extract<Caret, { kind: 'row' }>,
+  dir: 'left' | 'right',
+  registry: NavRegistry,
+): Caret | null {
+  const row = nodeAt(env, caret.path);
+  if (row === null || !isRowNode(row)) return null;
+  const args = rowArgs(row);
+  if (dir === 'right') {
+    if (caret.index >= args.length) return climb(env, caret.path, dir, registry);
+    if (args[caret.index] !== null) return bench(env, [...caret.path, caret.index], 'left', registry);
+    // The caret sits IN the empty cell at its index: moving right leaves
+    // it for the next cell (or the next gap, or the row's right exit).
+    const next = caret.index + 1;
+    if (next >= args.length) return climb(env, caret.path, dir, registry);
+    return args[next] === null
+      ? { kind: 'row', path: caret.path, index: next }
+      : bench(env, [...caret.path, next], 'left', registry);
+  }
+  if (caret.index <= 0) return climb(env, caret.path, dir, registry);
+  const prev = caret.index - 1;
+  return args[prev] === null
+    ? { kind: 'row', path: caret.path, index: prev }
+    : enterFromSide(env, [...caret.path, prev], 'right', registry);
+}
+
 /**
  * Resolve one relative movement against an envelope. Returns the target
  * caret, or null when the movement has no target (a defined no-op). Pure:
@@ -779,24 +796,8 @@ export function resolveMove(
     case 'row': {
       const row = nodeAt(env, caret.path);
       if (row === null || !isRowNode(row)) return null;
-      const args = rowArgs(row);
       if (dir === 'up' || dir === 'down') return climb(env, caret.path, dir, registry);
-      if (dir === 'right') {
-        if (caret.index >= args.length) return climb(env, caret.path, dir, registry);
-        if (args[caret.index] !== null) return bench(env, [...caret.path, caret.index], 'left', registry);
-        // The caret sits IN the empty cell at its index: moving right leaves
-        // it for the next cell (or the next gap, or the row's right exit).
-        const next = caret.index + 1;
-        if (next >= args.length) return climb(env, caret.path, dir, registry);
-        return args[next] === null
-          ? { kind: 'row', path: caret.path, index: next }
-          : bench(env, [...caret.path, next], 'left', registry);
-      }
-      if (caret.index <= 0) return climb(env, caret.path, dir, registry);
-      const prev = caret.index - 1;
-      return args[prev] === null
-        ? { kind: 'row', path: caret.path, index: prev }
-        : enterFromSide(env, [...caret.path, prev], 'right', registry);
+      return rowStep(env, caret, dir, registry);
     }
 
     case 'token': {
@@ -929,10 +930,8 @@ function nodeRegionBoundary(env: Envelope, path: Path, side: Side, registry: Nav
   switch (node.type) {
     case 'num':
     case 'sym':
-    case 'unit': {
-      const len = tokenText(node).length;
-      return { kind: 'token', path, index: side === 'left' ? 0 : len };
-    }
+    case 'unit':
+      return tokenEdgeCaret(path, node, side);
     case 'sub':
       return side === 'left'
         ? { kind: 'token', path, index: 0, label: 'base' }

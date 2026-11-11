@@ -130,14 +130,8 @@ export function hitFromMouseEvent(event: MouseEvent, rendered: RenderedMath): Cl
   if (head !== undefined) {
     return { kind: 'fnHead', path: head, fraction: fnHeadBlockFraction(event.clientX, head, rendered) ?? fractionOf(event.clientX, target) };
   }
-  for (const [key, labels] of rendered.subLabels) {
-    if (labels.base === target) {
-      return { kind: 'subLabel', path: JSON.parse(key) as Path, label: 'base', fraction: fractionOf(event.clientX, target) };
-    }
-    if (labels.script === target) {
-      return { kind: 'subLabel', path: JSON.parse(key) as Path, label: 'sub', fraction: fractionOf(event.clientX, target) };
-    }
-  }
+  const sub = subLabelHit(rendered, target, event.clientX);
+  if (sub !== null) return sub;
   const idEl = target.closest('[id]');
   if (idEl !== null) {
     const path = rendered.pathByUid.get(idEl.getAttribute('id') ?? '');
@@ -149,6 +143,24 @@ export function hitFromMouseEvent(event: MouseEvent, rendered: RenderedMath): Cl
   // rendered element (K-08 fix) — the pure none-hit stays as the fallback when
   // nothing is rendered (the empty formula).
   return nearestBackgroundHit(event.clientX, rendered) ?? { kind: 'none', fraction: fractionOf(event.clientX, rendered.math) };
+}
+
+/** A click's two candidate stations in near/far order (left half → [a, b]). */
+const clickHalves = (fraction: number, a: Caret | null, b: Caret | null): [Caret | null, Caret | null] =>
+  fraction < 0.5 ? [a, b] : [b, a];
+
+/** The subLabel hit when `target` is one of a sub's two label elements (T9). */
+function subLabelHit(rendered: RenderedMath, target: Element, clientX: number): ClickHit | null {
+  for (const [key, labels] of rendered.subLabels) {
+    const path = JSON.parse(key) as Path;
+    if (labels.base === target) {
+      return { kind: 'subLabel', path, label: 'base', fraction: fractionOf(clientX, target) };
+    }
+    if (labels.script === target) {
+      return { kind: 'subLabel', path, label: 'sub', fraction: fractionOf(clientX, target) };
+    }
+  }
+  return null;
 }
 
 /** The click fraction within a function's whole `name(` head block (the name
@@ -210,10 +222,10 @@ function nearestBackgroundHit(clientX: number, rendered: RenderedMath): ClickHit
   }
   for (const [key, labels] of rendered.subLabels) {
     const path = JSON.parse(key) as Path;
-    const rb = labels.base.getBoundingClientRect();
-    consider(rb.left, rb.right, labels.base, (f) => ({ kind: 'subLabel', path, label: 'base', fraction: f }));
-    const rs = labels.script.getBoundingClientRect();
-    consider(rs.left, rs.right, labels.script, (f) => ({ kind: 'subLabel', path, label: 'sub', fraction: f }));
+    for (const [label, el] of [['base', labels.base], ['sub', labels.script]] as const) {
+      const r = el.getBoundingClientRect();
+      consider(r.left, r.right, el, (f) => ({ kind: 'subLabel', path, label, fraction: f }));
+    }
   }
   for (const [key, ext] of rendered.extents) {
     const own = rendered.elementByPath.get(key);
@@ -285,9 +297,7 @@ export function caretFromHit(env: Envelope, hit: ClickHit, registry: NavRegistry
       // argument's start). The fraction is measured within the whole block.
       const before = edgeStation(env, hit.path, 'left');
       const after = entryStation(env, hit.path, 'left', registry) ?? { kind: 'node', path: hit.path };
-      const near = hit.fraction < 0.5 ? before : after;
-      const far = hit.fraction < 0.5 ? after : before;
-      caret = firstResolving(env, [near, far]) ?? fallback;
+      caret = firstResolving(env, clickHalves(hit.fraction, before, after)) ?? fallback;
       break;
     }
     case 'subLabel': {
@@ -304,8 +314,7 @@ export function caretFromHit(env: Envelope, hit: ClickHit, registry: NavRegistry
       const open = hit.side === 'open';
       const outside = edgeStation(env, hit.path, open ? 'left' : 'right');
       const inside = entryStation(env, hit.path, open ? 'left' : 'right', registry);
-      const near = open ? (hit.fraction < 0.5 ? outside : inside) : (hit.fraction < 0.5 ? inside : outside);
-      const far = open ? (hit.fraction < 0.5 ? inside : outside) : (hit.fraction < 0.5 ? outside : inside);
+      const [near, far] = clickHalves(hit.fraction, open ? outside : inside, open ? inside : outside);
       caret = firstResolving(env, [near, far, { kind: 'node', path: hit.path }]) ?? fallback;
       break;
     }

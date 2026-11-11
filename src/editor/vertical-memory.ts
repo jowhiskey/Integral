@@ -31,12 +31,14 @@ import {
   nodeAt,
   resolveMove,
   rowArgs,
+  sameCaret,
   type Caret,
   type NavDir,
   type NavRegistry,
   type Path,
   type SlotName,
 } from '../engine/index.js';
+import { samePath } from '../engine/internal.js';
 
 /** One child region of a vertically aligned parent: the parent's path + slot. */
 export interface MemoryRegion {
@@ -69,28 +71,24 @@ function ownRegions(registry: NavRegistry, env: Envelope, structurePath: Path): 
     .map((edge) => ({ parentPath: structurePath, slot: edge.from }));
 }
 
-/** The structures whose vertical layer `caret` sits strictly INSIDE of:
- *  every ancestor entered through one of the structure's own vertical
- *  slots (the parent chain of regionOf, all the way out). */
-function enclosingLayerStructures(env: Envelope, caret: Caret, registry: NavRegistry): Path[] {
+/** The caret's enclosing vertical regions, deepest first (every slot entry
+ *  on its path whose parent has a vertical edge from that slot). */
+function verticalRegions(env: Envelope, caret: Caret, registry: NavRegistry): MemoryRegion[] {
   if (caret.kind === 'empty') return [];
   const path: readonly (number | SlotName)[] =
     caret.kind === 'slot' ? [...caret.path, caret.slot] : caret.path;
-  const out: Path[] = [];
+  const out: MemoryRegion[] = [];
   for (let k = path.length - 1; k >= 0; k -= 1) {
     const step = path[k];
     if (typeof step !== 'string') continue;
     const parentPath = path.slice(0, k) as Path;
     const parent = nodeAt(env, parentPath);
-    if (parent !== null && hasVerticalEdge(registry, parent, step) && !out.some((p) => samePath(p, parentPath))) {
-      out.push(parentPath);
+    if (parent !== null && hasVerticalEdge(registry, parent, step) && !out.some((r) => samePath(r.parentPath, parentPath))) {
+      out.push({ parentPath, slot: step });
     }
   }
   return out;
 }
-
-const samePath = (a: Path, b: Path): boolean =>
-  a.length === b.length && a.every((s, i) => s === b[i]);
 
 /**
  * 4b-1 (OA-vmem-nesting): the structures a ←/→ press EXITS. The ONE
@@ -106,9 +104,10 @@ export function exitedStructures(
   registry: NavRegistry = NAV_PROFILES,
 ): MemoryRegion[] {
   const wiped: MemoryRegion[] = [];
-  for (const structure of enclosingLayerStructures(env, from, registry)) {
-    const stillInside = enclosingLayerStructures(env, to, registry).some((p) => samePath(p, structure));
-    if (!stillInside) wiped.push(...ownRegions(registry, env, structure));
+  const toStructures = verticalRegions(env, to, registry).map((r) => r.parentPath);
+  for (const region of verticalRegions(env, from, registry)) {
+    const stillInside = toStructures.some((p) => samePath(p, region.parentPath));
+    if (!stillInside) wiped.push(...ownRegions(registry, env, region.parentPath));
   }
   return wiped;
 }
@@ -134,21 +133,8 @@ export function wipeSideways(
  *  Null for the empty-formula caret and for positions outside any vertically
  *  aligned region (group children, unit values, row seams, the root itself). */
 export function regionOf(env: Envelope, caret: Caret, registry: NavRegistry = NAV_PROFILES): MemoryRegion | null {
-  if (caret.kind === 'empty') return null;
-  const path: readonly (number | SlotName)[] =
-    caret.kind === 'slot' ? [...caret.path, caret.slot] : caret.path;
-  for (let k = path.length - 1; k >= 0; k--) {
-    const step = path[k];
-    if (typeof step !== 'string') continue;
-    const parent = nodeAt(env, path.slice(0, k) as Path);
-    if (parent !== null && hasVerticalEdge(registry, parent, step)) {
-      return { parentPath: path.slice(0, k) as Path, slot: step };
-    }
-  }
-  return null;
+  return verticalRegions(env, caret, registry)[0] ?? null;
 }
-
-const sameCaret = (a: Caret, b: Caret): boolean => JSON.stringify(a) === JSON.stringify(b);
 
 /**
  * OA-vmem-nesting (4b-1, owner amendment): a vertical DESCENT whose target

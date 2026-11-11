@@ -154,6 +154,24 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
     m.textContent = text;
     return m;
   };
+  /** Register a separator glyph (operator glyph, fn comma) as its seam. */
+  const registerSeparator = (sep: Element, path: Path, index: number): void => {
+    separators.set(sep, { path, index });
+    separatorBySeam.set(`${pathKey(path)}/${index}`, sep);
+  };
+
+  /** The movable close fence: appended when present; close:false binds the
+   *  container element to the missing-close map instead. */
+  const appendCloseFence = (mrow: Element, path: Path, close: boolean): void => {
+    if (close) {
+      const closeEl = mo(')', true);
+      fenceGlyphs.set(closeEl, { path, side: 'close' });
+      mrow.appendChild(closeEl);
+    } else {
+      fencesMissingClose.set(pathKey(path), mrow);
+    }
+  };
+
   const placeholder = (caret: Caret): Element => {
     const mi = el('mi');
     mi.textContent = EMPTY_SLOT_TEXT;
@@ -234,8 +252,7 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
       }
       if (i > 0 && !node.implicit) {
         const sep = mo(display, false);
-        separators.set(sep, { path, index: i });
-    separatorBySeam.set(`${pathKey(path)}/${i}`, sep);
+        registerSeparator(sep, path, i);
         sepEls[i] = sep;
         out.push(sep);
       }
@@ -282,8 +299,7 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
           // anchors at the lead glyph's right edge (never invisible).
           const mrow = el('mrow');
           const lead = mo(display, false);
-          separators.set(lead, { path, index: 0 });
-          separatorBySeam.set(`${pathKey(path)}/0`, lead);
+          registerSeparator(lead, path, 0);
           mrow.appendChild(lead);
           const sepEls: (Element | undefined)[] = [lead];
           const bareCells: number[] = [];
@@ -333,8 +349,7 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
         fn.args.forEach((arg, i) => {
           if (i > 0) {
             const comma = mo(',', false);
-            separators.set(comma, { path, index: i });
-            separatorBySeam.set(`${pathKey(path)}/${i}`, comma);
+            registerSeparator(comma, path, i);
             sepEls[i] = comma;
             mrow.appendChild(comma);
             if (arg === null) bareCells.push(i);
@@ -346,13 +361,7 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
         anchorBareCells(path, mrow, bareCells, sepEls);
         // close = false: the movable closing fence is absent — the row stands
         // open (the missing-close state stays addressable through the map).
-        if (fn.close) {
-          const close = mo(')', true);
-          fenceGlyphs.set(close, { path, side: 'close' });
-          mrow.appendChild(close);
-        } else {
-          fencesMissingClose.set(pathKey(path), mrow);
-        }
+        appendCloseFence(mrow, path, fn.close);
         return own(path, [mrow], mrow);
       }
       case 'fence': {
@@ -371,13 +380,7 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
         mrow.appendChild(openFence);
         for (const f of hostedChild(path, group.child, openFence)) mrow.appendChild(f);
         // close = false: see the fn case.
-        if (group.close) {
-          const close = mo(')', true);
-          fenceGlyphs.set(close, { path, side: 'close' });
-          mrow.appendChild(close);
-        } else {
-          fencesMissingClose.set(pathKey(path), mrow);
-        }
+        appendCloseFence(mrow, path, group.close);
         return own(path, [mrow], mrow);
       }
       case 'frac': {

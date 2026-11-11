@@ -52,6 +52,21 @@ import {
   type SubLabel,
 } from './caret.js';
 import { EngineError } from './errors.js';
+
+import {
+  closeFenceToken,
+  edgeCell,
+  isImplicitRow as rowImplicit,
+  refPosition,
+  replacePosOfRef,
+  subLabelShapeOk,
+  subOf as subJson,
+  subWithLabel,
+  symOf as symFromText,
+  unitOf as unitJson,
+  withRefSet,
+} from './internal.js';
+
 import { edgeStation, entryStation, exitStation } from './nav.js';
 import {
   applyOp,
@@ -86,9 +101,6 @@ export type TypedToken = StructureToken | { readonly t: 'leaf'; readonly node: N
 
 // ——— Node JSON helpers (fromJSON gates every produced tree) ———
 
-const rowImplicit = (node: NodeJson): boolean =>
-  node.type === 'op' && (node as { implicit?: boolean }).implicit === true;
-
 /** A head-less re-bind pair (D7's own retyping surface, S-077/S-086): an
  *  implicit juxtaposition row whose LAST cell is a dangling close-fence
  *  token — the surviving payload of a head/open-fence delete. Its cells
@@ -120,27 +132,11 @@ export const numFromText = (text: string): NodeJson | null => {
   return text.endsWith('.') ? ({ type: 'num', value, dot: true } as NodeJson) : ({ type: 'num', value } as NodeJson);
 };
 
-const symFromText = (name: string): NodeJson => ({ type: 'sym', name }) as NodeJson;
-
-const unitJson = (value: NodeJson, unit: string): NodeJson => ({ type: 'unit', value, unit }) as NodeJson;
-
-const subJson = (base: string, sub: string): NodeJson => ({ type: 'sub', base, sub }) as NodeJson;
-
 /** The session's unit name set (S-051: the vocabulary the conversion and
  *  fromJSON both gate against — the session's own list, never the default
  *  when a custom vocabulary was opened with). */
 export const unitSetOf = (state: EditingState): ReadonlySet<string> =>
   new Set(state.vocabulary?.units ?? defaultStaticVocabulary.units);
-
-/** ——— Sub labels (T9 vocabulary ruling, 2026-11-09) ———
- *  A sub node's label strings glue letters/digits exactly like symbol
- *  names, but the grown label must keep its contracted identifier shape —
- *  fromJSON rejects anything else. A glue that breaks the shape is a silent
- *  no-op. */
-const SUB_BASE_SHAPE = /^\p{L}[\p{L}\p{N}]*$/u;
-const SUB_SUB_SHAPE = /^[\p{L}\p{N}]+$/u;
-const subLabelShapeOk = (label: SubLabel, grown: string): boolean =>
-  label === 'base' ? SUB_BASE_SHAPE.test(grown) : SUB_SUB_SHAPE.test(grown);
 
 /** ——— Unit label runs (S-104) ———
  *  Attached units are granular: the label is a letter run addressed by
@@ -187,29 +183,12 @@ export function rowClone(kind: NodeJson, cells: readonly (NodeJson | null)[]): N
 
 // ——— Positions ———
 
-const posOf = (ref: Ref): Position => {
-  switch (ref.at) {
-    case 'root':
-      return { at: 'root' };
-    case 'slot':
-      return { at: 'slot', path: ref.path, slot: ref.slot };
-    case 'cell':
-      return { at: 'fill', path: ref.path, index: ref.index };
-  }
-};
+/** The insert-position a ref addresses (an args cell fills its pending null). */
+const posOf = (ref: Ref): Position => refPosition(ref, 'fill');
 
-const replacePosOf = (ref: Ref): Position => {
-  switch (ref.at) {
-    case 'root':
-      return { at: 'replaceRoot' };
-    case 'slot':
-      return { at: 'replaceSlot', path: ref.path, slot: ref.slot };
-    case 'cell':
-      return { at: 'replaceCell', path: ref.path, index: ref.index };
-  }
-};
+const replacePosOf = replacePosOfRef;
 
-const pathOf = (ref: Ref): Path => pathOfRef(ref);
+const pathOf = pathOfRef;
 
 // ——— Ancestor walks (caret-path prefixes, deepest first) ———
 
@@ -246,27 +225,6 @@ function nearestFnOf(env: Envelope, caret: Caret): Ancestor | null {
 }
 
 // ——— Edge descent: op rows are transparent at their flanks ———
-
-/** The visually adjacent content of the node at `path` on the given side:
- *  op rows (explicit or implicit) are transparent at their edges — a row's
- *  last/first cell is what the shared gap actually touches, recursively.
- *  Everything else (leaves, structures, fn rows — fence-bounded) is atomic. */
-function edgeCell(
-  env: Envelope,
-  from: Path,
-  side: 'first' | 'last',
-): { readonly node: NodeJson | null; readonly path: Path } {
-  let path = from;
-  for (;;) {
-    const node = nodeAt(env, path) as NodeJson | null;
-    if (node === null || node.type !== 'op') return { node, path };
-    const args = rowArgs(node);
-    if (args.length === 0) return { node: null, path };
-    const idx = side === 'last' ? args.length - 1 : 0;
-    if (args[idx] === null) return { node: null, path };
-    path = [...path, idx];
-  }
-}
 
 // ——— Stations ———
 
@@ -312,6 +270,14 @@ type Station = TokenStation | SeamStation | AfterStation | VoidStation;
  *  is a sub (T9), else the node's own token text. */
 const stationText = (station: TokenStation): string =>
   station.label !== undefined ? subLabelText(station.node, station.label) : tokenText(station.node);
+
+/** One half of a split num/sym token text; null when unrepresentable. */
+const tokenHalf = (node: NodeJson, s: string): NodeJson | null =>
+  node.type === 'sym' ? symFromText(s) : numFromText(s);
+
+/** The juxtapose side a token offset reads as (edge before/after, interior split). */
+const juxtaposeSide = (offset: number, len: number): 'before' | 'after' | 'split' =>
+  offset === 0 ? 'before' : offset === len ? 'after' : 'split';
 
 function stationOf(env: Envelope, caret: Caret): Station {
   switch (caret.kind) {
@@ -452,6 +418,11 @@ function pairCaret(base: Path, cell: number, newTok: NodeJson): Caret {
   return { kind: 'token', path: [...base, cell], index: tokenText(newTok).length };
 }
 
+/** A leaf typed into a VOID station fills it mechanically, caret at the
+ *  fresh token's end (OA-token-end). */
+const voidPlace = (ctx: Ctx, station: VoidStation, payload: NodeJson): EditingState =>
+  place(ctx, payload, posOf(station.ref), tokenEndCaret(pathOf(station.ref), payload));
+
 /** The shared before/after flag of the flank stations (4b-1 OA-flank-stations):
  *  true = the LEFT flank pairs a typed token directly BEFORE the structure. */
 interface FlankPair {
@@ -479,8 +450,8 @@ function juxtaposeToken(ctx: Ctx, station: TokenStation, newTok: NodeJson, side:
   const at = replacePosOf(ref);
   const base = pathOf(ref);
   if (side === 'split' && offset > 0 && offset < text.length) {
-    const left = node.type === 'sym' ? symFromText(text.slice(0, offset)) : numFromText(text.slice(0, offset));
-    const right = node.type === 'sym' ? symFromText(text.slice(offset)) : numFromText(text.slice(offset));
+    const left = tokenHalf(node, text.slice(0, offset));
+    const right = tokenHalf(node, text.slice(offset));
     if (left === null || right === null) return ctx.state;
     const payload = { type: 'op', op: 'multiply', args: [left, newTok, right], implicit: true } as NodeJson;
     return place(ctx, payload, at, pairCaret(base, 1, newTok));
@@ -560,6 +531,26 @@ function seamPendingFill(
   return null;
 }
 
+/** Juxtapose `payload` before the seam's right-adjacent cell. */
+const juxtaposeRight = (
+  ctx: Ctx,
+  target: { readonly node: NodeJson | null; readonly path: Path },
+  payload: NodeJson,
+  to: Caret,
+): EditingState => place(ctx, implicitPair(payload, target.node), replacePosOf(refOfPath(target.path)), to);
+
+/** Juxtapose `payload` after the seam's left-adjacent cell (the mirror). */
+const juxtaposeLeft = (
+  ctx: Ctx,
+  target: { readonly node: NodeJson | null; readonly path: Path },
+  payload: NodeJson,
+  to: Caret,
+): EditingState => place(ctx, implicitPair(target.node, payload), replacePosOf(refOfPath(target.path)), to);
+
+/** Splice `payload` in as a fresh cell at the seam. */
+const spliceCell = (ctx: Ctx, station: SeamStation, payload: NodeJson, to: (path: Path) => Caret): EditingState =>
+  place(ctx, payload, { at: 'row', path: station.path, index: station.index }, to([...station.path, station.index]));
+
 // ——— Digits ———
 
 function digitKey(ctx: Ctx, station: Station, digits: string): EditingState {
@@ -567,7 +558,7 @@ function digitKey(ctx: Ctx, station: Station, digits: string): EditingState {
   if (num === null) return ctx.state;
   switch (station.kind) {
     case 'void':
-      return place(ctx, num, posOf(station.ref), tokenEndCaret(pathOf(station.ref), num));
+      return voidPlace(ctx, station, num);
     case 'tok':
       return digitAtToken(ctx, station, digits, num);
     case 'after':
@@ -612,21 +603,15 @@ function digitKey(ctx: Ctx, station: Station, digits: string): EditingState {
       //    caret is the typed number's in-token end (OA-token-end — the
       //    pair seam right of it painted at the same spot).
       if (seam.right !== null && seam.right.node !== null) {
-        return place(ctx, implicitPair(num, seam.right.node), replacePosOf(refOfPath(seam.right.path)), {
-          kind: 'token', path: [...seam.right.path, 0], index: digits.length,
-        });
+        return juxtaposeRight(ctx, seam.right, num, { kind: 'token', path: [...seam.right.path, 0], index: digits.length });
       }
       // 5. row end: juxtapose onto the left cell ([x, 5] + `7` → x+5·7 —
       //    with the Space flag on, the S-098 editing state).
       if (seam.left !== null && seam.left.node !== null) {
-        return place(ctx, implicitPair(seam.left.node, num), replacePosOf(refOfPath(seam.left.path)), {
-          kind: 'token', path: [...seam.left.path, 1], index: digits.length,
-        });
+        return juxtaposeLeft(ctx, seam.left, num, { kind: 'token', path: [...seam.left.path, 1], index: digits.length });
       }
       // 6. no neighbor at all (an empty row): a fresh cell.
-      return place(ctx, num, { at: 'row', path: station.path, index: station.index }, {
-        kind: 'token', path: [...station.path, station.index], index: digits.length,
-      });
+      return spliceCell(ctx, station, num, (p) => ({ kind: 'token', path: p, index: digits.length }));
     }
   }
 }
@@ -679,10 +664,7 @@ function digitAtToken(ctx: Ctx, station: TokenStation, digits: string, num: Node
     // (the base needs a leading letter; the script label is alnum).
     const grown = text.slice(0, offset) + digits + text.slice(offset);
     if (subLabelShapeOk(station.label, grown)) {
-      const labels = node as { base: string; sub: string };
-      const next =
-        station.label === 'base' ? subJson(grown, labels.sub) : subJson(labels.base, grown);
-      return place(ctx, next, replacePosOf(ref), {
+      return place(ctx, subWithLabel(node, station.label, grown), replacePosOf(ref), {
         kind: 'token', path: station.path, index: offset + digits.length, label: station.label,
       });
     }
@@ -706,7 +688,7 @@ function letterKey(ctx: Ctx, station: Station, letters: string): EditingState {
   const sym = symFromText(letters);
   switch (station.kind) {
     case 'void':
-      return place(ctx, sym, posOf(station.ref), tokenEndCaret(pathOf(station.ref), sym));
+      return voidPlace(ctx, station, sym);
     case 'tok':
       return letterAtToken(ctx, station, letters, sym);
     case 'after':
@@ -762,18 +744,12 @@ function letterKey(ctx: Ctx, station: Station, letters: string): EditingState {
       // evaluation — the ruling annotation, not a typing restriction). The
       // caret is the fresh symbol's in-token end (OA-token-end).
       if (seam.right !== null && seam.right.node !== null) {
-        return place(ctx, implicitPair(sym, seam.right.node), replacePosOf(refOfPath(seam.right.path)), {
-          kind: 'token', path: [...seam.right.path, 0], index: letters.length,
-        });
+        return juxtaposeRight(ctx, seam.right, sym, { kind: 'token', path: [...seam.right.path, 0], index: letters.length });
       }
       if (seam.left !== null && seam.left.node !== null) {
-        return place(ctx, implicitPair(seam.left.node, sym), replacePosOf(refOfPath(seam.left.path)), {
-          kind: 'token', path: [...seam.left.path, 1], index: letters.length,
-        });
+        return juxtaposeLeft(ctx, seam.left, sym, { kind: 'token', path: [...seam.left.path, 1], index: letters.length });
       }
-      return place(ctx, sym, { at: 'row', path: station.path, index: station.index }, {
-        kind: 'token', path: [...station.path, station.index], index: letters.length,
-      });
+      return spliceCell(ctx, station, sym, (p) => ({ kind: 'token', path: p, index: letters.length }));
     }
   }
 }
@@ -792,7 +768,7 @@ function letterAtToken(ctx: Ctx, station: TokenStation, letters: string, sym: No
     // S-104: a letter inside/after a unit label extends the run (against
     // the armed boundary it juxtaposes a separate symbol instead, S-021).
     if (ctx.flagged) {
-      return juxtaposeToken(ctx, station, sym, offset === 0 ? 'before' : offset === text.length ? 'after' : 'split');
+      return juxtaposeToken(ctx, station, sym, juxtaposeSide(offset, text.length));
     }
     const grown = text.slice(0, offset) + letters + text.slice(offset);
     return unitGrow(
@@ -806,10 +782,7 @@ function letterAtToken(ctx: Ctx, station: TokenStation, letters: string, sym: No
     // a silent no-op (fromJSON would reject the grown label).
     const grown = text.slice(0, offset) + letters + text.slice(offset);
     if (subLabelShapeOk(station.label, grown)) {
-      const labels = node as { base: string; sub: string };
-      const next =
-        station.label === 'base' ? subJson(grown, labels.sub) : subJson(labels.base, grown);
-      return place(ctx, next, replacePosOf(ref), {
+      return place(ctx, subWithLabel(node, station.label, grown), replacePosOf(ref), {
         kind: 'token', path: station.path, index: offset + letters.length, label: station.label,
       });
     }
@@ -834,7 +807,7 @@ function letterAtToken(ctx: Ctx, station: TokenStation, letters: string, sym: No
   }
   // A letter into a number: S-031's number·symbol·number split inside,
   // S-032's juxtaposed symbol at the edges — a letter never joins a number.
-  return juxtaposeToken(ctx, station, sym, offset === 0 ? 'before' : offset === text.length ? 'after' : 'split');
+  return juxtaposeToken(ctx, station, sym, juxtaposeSide(offset, text.length));
 }
 
 // ——— The dot key (T4) ———
@@ -844,7 +817,7 @@ function dotKey(ctx: Ctx, station: Station): EditingState {
   if (dotted === null) return ctx.state;
   switch (station.kind) {
     case 'void':
-      return place(ctx, dotted, posOf(station.ref), { kind: 'token', path: pathOf(station.ref), index: 2 });
+      return voidPlace(ctx, station, dotted);
     case 'tok': {
       const { node, ref, offset } = station;
       const text = stationText(station);
@@ -868,7 +841,7 @@ function dotKey(ctx: Ctx, station: Station): EditingState {
         }
       }
       // Symbols never absorb dots: the `0.` is born adjacent (S-012/S-033).
-      return juxtaposeToken(ctx, station, dotted, offset === 0 ? 'before' : offset === text.length ? 'after' : 'split');
+      return juxtaposeToken(ctx, station, dotted, juxtaposeSide(offset, text.length));
     }
     case 'after':
       // 4b-1 OA-flank-stations: the left flank pairs the fresh `0.` directly
@@ -892,20 +865,14 @@ function dotKey(ctx: Ctx, station: Station): EditingState {
       // 2. juxtapose onto the right cell — the caret sits in the new `0.`
       //    directly after its dot.
       if (seam.right !== null && seam.right.node !== null) {
-        return place(ctx, implicitPair(dotted, seam.right.node), replacePosOf(refOfPath(seam.right.path)), {
-          kind: 'token', path: [...seam.right.path, 0], index: 2,
-        });
+        return juxtaposeRight(ctx, seam.right, dotted, { kind: 'token', path: [...seam.right.path, 0], index: 2 });
       }
       // 3. row end: juxtapose onto the left cell (S-012: `a` ” juxtaposed
       //    with `0.`).
       if (seam.left !== null && seam.left.node !== null) {
-        return place(ctx, implicitPair(seam.left.node, dotted), replacePosOf(refOfPath(seam.left.path)), {
-          kind: 'token', path: [...seam.left.path, 1], index: 2,
-        });
+        return juxtaposeLeft(ctx, seam.left, dotted, { kind: 'token', path: [...seam.left.path, 1], index: 2 });
       }
-      return place(ctx, dotted, { at: 'row', path: station.path, index: station.index }, {
-        kind: 'token', path: [...station.path, station.index], index: 2,
-      });
+      return spliceCell(ctx, station, dotted, (p) => ({ kind: 'token', path: p, index: 2 }));
     }
   }
 }
@@ -978,8 +945,8 @@ function opKey(ctx: Ctx, station: Station, fn: OperatorFn): EditingState {
       }
       // Interior offset: different-type input splits the token (T3/S-029) —
       // and a same-op parent row extends its flat chain instead of nesting.
-      const left = node.type === 'sym' ? symFromText(text.slice(0, offset)) : numFromText(text.slice(0, offset));
-      const right = node.type === 'sym' ? symFromText(text.slice(offset)) : numFromText(text.slice(offset));
+      const left = tokenHalf(node, text.slice(0, offset));
+      const right = tokenHalf(node, text.slice(offset));
       if (left === null || right === null) return ctx.state;
       if (ref.at === 'cell') {
         const parent = nodeAt(ctx.env, ref.path) as NodeJson;
@@ -1059,6 +1026,19 @@ function wrapAtSeam(ctx: Ctx, station: SeamStation, fn: OperatorFn): EditingStat
 const knownFunctions = (state: EditingState): ReadonlySet<string> =>
   new Set(state.vocabulary?.functions ?? defaultStaticVocabulary.functions);
 
+/** The T5 paren-conversion of a known-function symbol head into the atomic
+ *  fn (caret in the first arg); structural (U1/S-085): its own undo unit. */
+function convertHead(ctx: Ctx, node: NodeJson, path: Path, ref: Ref): EditingState {
+  const bare = contentRightOf(ctx.env, ref);
+  return place(
+    ctx,
+    fnJson(tokenText(node), [null], !bare),
+    replacePosOf(ref),
+    { kind: 'row', path, index: 0 },
+    { structural: true },
+  );
+}
+
 /** T10: the auto closing fence is added ONLY when no elements stand to the
  *  right of the caret (content right of the symbol inside its row). */
 function contentRightOf(env: Envelope, ref: Ref): boolean {
@@ -1105,17 +1085,14 @@ function openKey(ctx: Ctx, station: Station): EditingState {
       // T5: `(` after a symbol whose name matches a known function converts
       // it into the atomic head (the caret inside the first argument).
       if (node.type === 'sym' && knownFunctions(ctx.state).has(tokenText(node))) {
-        const bare = contentRightOf(ctx.env, ref);
         // structural (U1/S-085): the `(`-press + conversion is its own undo
         // unit — it never coalesces into the preceding typing run.
-        return place(ctx, fnJson(tokenText(node), [null], !bare), replacePosOf(ref), {
-          kind: 'row', path: pathOf(ref), index: 0,
-        }, { structural: true });
+        return convertHead(ctx, node, station.path, ref);
       }
       // T6: a group with both fences at the caret; content to the left
       // stays outside (the juxtaposition pairing handles that).
       const group = groupJson(null, true);
-      return juxtaposeToken(ctx, station, group, offset === 0 ? 'before' : offset === stationText(station).length ? 'after' : 'split');
+      return juxtaposeToken(ctx, station, group, juxtaposeSide(offset, stationText(station).length));
     }
     case 'after':
       // 4b-1 OA-flank-stations: at the left flank the fresh group pairs
@@ -1131,29 +1108,19 @@ function openKey(ctx: Ctx, station: Station): EditingState {
       // T5 at a glyph-free gap: the left-adjacent symbol converts.
       if (seam.left !== null && seam.left.node !== null && seam.left.node.type === 'sym' &&
           knownFunctions(ctx.state).has(tokenText(seam.left.node))) {
-        const leftRef = refOfPath(seam.left.path);
-        const bare = contentRightOf(ctx.env, leftRef);
         // structural (U1/S-085): the `(`-press + conversion is its own unit.
-        return place(ctx, fnJson(tokenText(seam.left.node), [null], !bare), replacePosOf(leftRef), {
-          kind: 'row', path: seam.left.path, index: 0,
-        }, { structural: true });
+        return convertHead(ctx, seam.left.node, seam.left.path, refOfPath(seam.left.path));
       }
       const group = groupJson(null, true);
       // T6's content-to-the-left reading: the left partner wins where both
       // sides are free.
       if (seam.left !== null && seam.left.node !== null && seam.freeLeft) {
-        return place(ctx, implicitPair(seam.left.node, group), replacePosOf(refOfPath(seam.left.path)), {
-          kind: 'slot', path: [...seam.left.path, 1], slot: 'child',
-        });
+        return juxtaposeLeft(ctx, seam.left, group, { kind: 'slot', path: [...seam.left.path, 1], slot: 'child' });
       }
       if (seam.right !== null && seam.right.node !== null) {
-        return place(ctx, implicitPair(group, seam.right.node), replacePosOf(refOfPath(seam.right.path)), {
-          kind: 'slot', path: [...seam.right.path, 0], slot: 'child',
-        });
+        return juxtaposeRight(ctx, seam.right, group, { kind: 'slot', path: [...seam.right.path, 0], slot: 'child' });
       }
-      return place(ctx, group, { at: 'row', path: station.path, index: station.index }, {
-        kind: 'slot', path: [...station.path, station.index], slot: 'child',
-      });
+      return spliceCell(ctx, station, group, (p) => ({ kind: 'slot', path: p, slot: 'child' }));
     }
   }
 }
@@ -1168,14 +1135,7 @@ function completeFence(ctx: Ctx, target: Ancestor): EditingState {
       ? groupJson((target.node as { child: NodeJson | null }).child, true)
       : fnJson((target.node as { name: string }).name, rowArgs(target.node), true);
   const ref = refOfPath(target.path);
-  const after: Envelope = JSON.parse(JSON.stringify(ctx.env)) as Envelope;
-  if (ref.at === 'root') {
-    after.root = rebuilt;
-  } else if (ref.at === 'slot') {
-    (nodeAt(after, ref.path) as unknown as Record<string, unknown>)[ref.slot] = rebuilt;
-  } else {
-    rowArgs(nodeAt(after, ref.path) as NodeJson)[ref.index] = rebuilt;
-  }
+  const after = withRefSet(ctx.env, ref, rebuilt);
   // OA-closeparen-exit (ruled 2026-11-10, the M-12/S-097 case): the retyped
   // close paren that completes a fence lands the caret immediately after the
   // completed group — its RIGHT FLANK station, INSIDE the enclosing structure
@@ -1192,12 +1152,12 @@ function completeFence(ctx: Ctx, target: Ancestor): EditingState {
 function closeKey(ctx: Ctx, station: Station): EditingState {
   const unclosed = unclosedOf(ctx.env, ctx.caret);
   if (unclosed !== null) return completeFence(ctx, unclosed);
-  const fence: NodeJson = { type: 'fence', side: 'close' };
+  const fence: NodeJson = closeFenceToken;
   switch (station.kind) {
     case 'void':
       return place(ctx, fence, posOf(station.ref), { kind: 'node', path: pathOf(station.ref) });
     case 'tok':
-      return juxtaposeToken(ctx, station, fence, station.offset === 0 ? 'before' : station.offset === stationText(station).length ? 'after' : 'split');
+      return juxtaposeToken(ctx, station, fence, juxtaposeSide(station.offset, stationText(station).length));
     case 'after':
       // 4b-1 OA-flank-stations: at the left flank the dangling close token
       // pairs directly BEFORE the structure (caret on the fence cell's
@@ -1208,18 +1168,12 @@ function closeKey(ctx: Ctx, station: Station): EditingState {
     case 'seam': {
       const seam = seamOf(ctx.env, station);
       if (seam.left !== null && seam.left.node !== null && seam.freeLeft) {
-        return place(ctx, implicitPair(seam.left.node, fence), replacePosOf(refOfPath(seam.left.path)), {
-          kind: 'row', path: seam.left.path, index: 2,
-        });
+        return juxtaposeLeft(ctx, seam.left, fence, { kind: 'row', path: seam.left.path, index: 2 });
       }
       if (seam.right !== null && seam.right.node !== null) {
-        return place(ctx, implicitPair(fence, seam.right.node), replacePosOf(refOfPath(seam.right.path)), {
-          kind: 'row', path: seam.right.path, index: 1,
-        });
+        return juxtaposeRight(ctx, seam.right, fence, { kind: 'row', path: seam.right.path, index: 1 });
       }
-      return place(ctx, fence, { at: 'row', path: station.path, index: station.index }, {
-        kind: 'row', path: station.path, index: station.index + 1,
-      });
+      return spliceCell(ctx, station, fence, (p) => ({ kind: 'row', path: p, index: station.index + 1 }));
     }
   }
 }
@@ -1263,8 +1217,8 @@ function spaceKey(ctx: Ctx, station: Station): EditingState {
         // two symbols (S-021's same-type state) or S-098's forced
         // number-number adjacency (the editing state; refuses evaluation).
         // (A sub label's halves are unrepresentable — a silent no-op.)
-        const left = node.type === 'sym' ? symFromText(text.slice(0, offset)) : numFromText(text.slice(0, offset));
-        const right = node.type === 'sym' ? symFromText(text.slice(offset)) : numFromText(text.slice(offset));
+        const left = tokenHalf(node, text.slice(0, offset));
+        const right = tokenHalf(node, text.slice(offset));
         if (left === null || right === null) return ctx.state;
         return place(ctx, implicitPair(left, right), replacePosOf(ref), {
           kind: 'row', path: pathOf(ref), index: 1,
@@ -1336,12 +1290,12 @@ function structureKey(ctx: Ctx, station: Station, kind: 'divide' | 'pow'): Editi
       }
       let left: NodeJson | null = null;
       if (offset > 0) {
-        left = node.type === 'sym' ? symFromText(text.slice(0, offset)) : numFromText(text.slice(0, offset));
+        left = tokenHalf(node, text.slice(0, offset));
         if (left === null) return ctx.state; // unrepresentable half: silent no-op
       }
       let right: NodeJson | null = null;
       if (offset < text.length) {
-        right = node.type === 'sym' ? symFromText(text.slice(offset)) : numFromText(text.slice(offset));
+        right = tokenHalf(node, text.slice(offset));
         if (right === null) return ctx.state; // unrepresentable half: silent no-op
       }
       const structPath = pathOf(ref);
@@ -1378,25 +1332,12 @@ function structureKey(ctx: Ctx, station: Station, kind: 'divide' | 'pow'): Editi
       // operand); so does the right edge's leading pending cell; at a row
       // start the template juxtaposes before the right cell; with nothing
       // adjacent at all it splices in as a fresh cell at the seam.
-      if (station.index > 0 && station.args[station.index - 1] === null) {
-        const idx = station.index - 1;
-        return place(ctx, empty, { at: 'fill', path: station.path, index: idx }, {
-          kind: 'slot', path: [...station.path, idx], slot: entrySlot,
-        });
-      }
-      if (seam.right !== null && seam.right.node === null) {
-        return place(ctx, empty, { at: 'fill', path: seam.right.path, index: 0 }, {
-          kind: 'slot', path: [...seam.right.path, 0], slot: entrySlot,
-        });
-      }
+      const filled = seamPendingFill(ctx, station, seam, empty, (p) => ({ kind: 'slot', path: p, slot: entrySlot }));
+      if (filled !== null) return filled;
       if (seam.right !== null && seam.right.node !== null) {
-        return place(ctx, implicitPair(empty, seam.right.node), replacePosOf(refOfPath(seam.right.path)), {
-          kind: 'slot', path: [...seam.right.path, 0], slot: entrySlot,
-        });
+        return juxtaposeRight(ctx, seam.right, empty, { kind: 'slot', path: [...seam.right.path, 0], slot: entrySlot });
       }
-      return place(ctx, empty, { at: 'row', path: station.path, index: station.index }, {
-        kind: 'slot', path: [...station.path, station.index], slot: entrySlot,
-      });
+      return spliceCell(ctx, station, empty, (p) => ({ kind: 'slot', path: p, slot: entrySlot }));
     }
   }
 }
@@ -1495,8 +1436,8 @@ export function insertRoot(state: EditingState, opts: { readonly mroot?: boolean
         });
       }
       if (offset < text.length) {
-        const left = node.type === 'sym' ? symFromText(text.slice(0, offset)) : numFromText(text.slice(0, offset));
-        const right = node.type === 'sym' ? symFromText(text.slice(offset)) : numFromText(text.slice(offset));
+        const left = tokenHalf(node, text.slice(0, offset));
+        const right = tokenHalf(node, text.slice(offset));
         if (left === null || right === null) return ctx.state; // unrepresentable half: silent no-op
         return place(ctx, implicitPair(left, rootOf(right)), replacePosOf(ref), {
           kind: 'token', path: [...base, 1, 'radicand'], index: 0,
@@ -1580,7 +1521,7 @@ export function insertSubscript(state: EditingState): EditingState {
       if (node.type === 'sym' && subLabelShapeOk('base', tokenText(node))) {
         return place(ctx, subJson(tokenText(node), ''), replacePosOf(ref), scriptCaret(station.path));
       }
-      return juxtaposeToken(ctx, station, empty, offset === 0 ? 'before' : offset === stationText(station).length ? 'after' : 'split');
+      return juxtaposeToken(ctx, station, empty, juxtaposeSide(offset, stationText(station).length));
     }
     case 'after':
       return pairAgainst(ctx, station, empty, (cell) => ({
@@ -1592,19 +1533,12 @@ export function insertSubscript(state: EditingState): EditingState {
           subLabelShapeOk('base', tokenText(seam.left.node))) {
         return place(ctx, subJson(tokenText(seam.left.node), ''), replacePosOf(refOfPath(seam.left.path)), scriptCaret(seam.left.path));
       }
-      if (station.index > 0 && station.args[station.index - 1] === null) {
-        const idx = station.index - 1;
-        return place(ctx, empty, { at: 'fill', path: station.path, index: idx }, baseCaret([...station.path, idx]));
-      }
-      if (seam.right !== null && seam.right.node === null) {
-        return place(ctx, empty, { at: 'fill', path: seam.right.path, index: 0 }, baseCaret([...seam.right.path, 0]));
-      }
+      const filled = seamPendingFill(ctx, station, seam, empty, baseCaret);
+      if (filled !== null) return filled;
       if (seam.right !== null && seam.right.node !== null) {
-        return place(ctx, implicitPair(empty, seam.right.node), replacePosOf(refOfPath(seam.right.path)), {
-          kind: 'token', path: [...seam.right.path, 0], index: 0, label: 'base',
-        });
+        return juxtaposeRight(ctx, seam.right, empty, { kind: 'token', path: [...seam.right.path, 0], index: 0, label: 'base' });
       }
-      return place(ctx, empty, { at: 'row', path: station.path, index: station.index }, baseCaret([...station.path, station.index]));
+      return spliceCell(ctx, station, empty, baseCaret);
     }
   }
 }

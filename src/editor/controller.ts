@@ -34,7 +34,6 @@ import {
   typeToken,
   undo,
   unitSetOf,
-  type BackspaceDecision,
   type Caret,
   type EditingState,
   type NavDir,
@@ -175,6 +174,33 @@ export class EditorController {
     return this.state;
   }
 
+  /** Set the state, rebuild, notify — the one commit path for tree changes. */
+  private commitState(next: EditingState): void {
+    this.state = next;
+    this.render();
+    this.onStateChange?.(this.state);
+  }
+
+  /** Pure caret placement (movement/clicks): no log entry, overlay re-anchor
+   *  only (no MathML rebuild), notify. */
+  private setCaretState(caret: Caret): void {
+    this.state = { root: this.state.root, caret, log: this.state.log, redo: this.state.redo, vocabulary: this.state.vocabulary };
+    this.updateCaret();
+    this.onCaretChange?.(caret);
+    this.onStateChange?.(this.state);
+  }
+
+  /** Run an engine call, swallowing typed EngineError rejections (defined
+   *  no-ops at the DOM boundary); anything else propagates. Null = rejected. */
+  private tryEngine<T>(fn: () => T): T | null {
+    try {
+      return fn();
+    } catch (e) {
+      if (e instanceof EngineError) return null;
+      throw e;
+    }
+  }
+
   /** The current tree envelope (what the host persists). */
   getEnvelope(): Envelope {
     return envelopeOf(this.state);
@@ -188,29 +214,21 @@ export class EditorController {
   /** Apply an editing op (logs; undoable) and rebuild. */
   apply(op: Op): void {
     this.lastAction = 'other'; // a host-applied op is a non-typing action (U1)
-    this.state = applyOp(this.state, op);
-    this.render();
-    this.onStateChange?.(this.state);
+    this.commitState(applyOp(this.state, op));
   }
 
   /** Step the op log back one entry and rebuild. */
   undo(): void {
     this.lastAction = 'other'; // history keys are non-typing actions (U1)
     this.takeHighlight(); // any input that is not the confirming BS clears it (D5)
-    const next = undo(this.state);
-    if (next !== this.state) this.state = next;
-    this.render();
-    this.onStateChange?.(this.state);
+    this.commitState(undo(this.state));
   }
 
   /** Step the redo list forward one entry and rebuild. */
   redo(): void {
     this.lastAction = 'other'; // history keys are non-typing actions (U1)
     this.takeHighlight(); // any input that is not the confirming BS clears it (D5)
-    const next = engineRedo(this.state);
-    if (next !== this.state) this.state = next;
-    this.render();
-    this.onStateChange?.(this.state);
+    this.commitState(engineRedo(this.state));
   }
 
   /** The live vertical-memory map (read-only view; tests/hosts may inspect it). */
@@ -242,9 +260,7 @@ export class EditorController {
     const next = settleUnits(base);
     if (next === base) return false;
     this.lastAction = 'other'; // the settle is a non-typing edit — it closes the run (U1)
-    this.state = next;
-    this.render();
-    this.onStateChange?.(this.state);
+    this.commitState(next);
     return true;
   }
 
@@ -296,50 +312,32 @@ export class EditorController {
    *  no-op, never thrown to the DOM. */
   private backspaceKey(ctrl: boolean, confirm: Path | null): void {
     this.lastAction = 'other'; // Backspace is a non-typing action — it closes the run (U1)
-    let decision: BackspaceDecision;
-    try {
-      decision = decideBackspace(toJSON(this.state.root), this.state.caret, {
+    const decision = this.tryEngine(() =>
+      decideBackspace(toJSON(this.state.root), this.state.caret, {
         ctrl,
         highlighted: confirm,
         units: unitSetOf(this.state),
-      });
-    } catch (e) {
-      if (e instanceof EngineError) return;
-      throw e;
-    }
+      }),
+    );
+    if (decision === null) return;
     if (decision.kind === 'highlight' && decision.target !== undefined) {
       this.highlighted = decision.target;
       this.paintHighlight(this.highlighted, true);
       return;
     }
-    let next: EditingState;
-    try {
-      next = applyOps(this.state, decision.ops); // U1: one key = one undo unit ({ops:[...]})
-    } catch (e) {
-      if (e instanceof EngineError) return;
-      throw e;
-    }
-    if (next === this.state) return; // defined no-op
-    this.state = next;
-    this.render();
-    this.onStateChange?.(this.state);
+    // U1: one key = one undo unit ({ops:[...]})
+    const next = this.tryEngine(() => applyOps(this.state, decision.ops));
+    if (next === null || next === this.state) return; // rejected or defined no-op
+    this.commitState(next);
   }
 
   /** One forward Delete key (the D1/D3 mirrors + the named no-op defaults):
    *  at most one op = one log entry; a defined no-op changes nothing. */
   private deleteKey(ctrl: boolean): void {
     this.lastAction = 'other'; // Delete is a non-typing action — it closes the run (U1)
-    let next: EditingState;
-    try {
-      next = forwardDelete(this.state, { ctrl });
-    } catch (e) {
-      if (e instanceof EngineError) return;
-      throw e;
-    }
-    if (next === this.state) return; // defined no-op
-    this.state = next;
-    this.render();
-    this.onStateChange?.(this.state);
+    const next = this.tryEngine(() => forwardDelete(this.state, { ctrl }));
+    if (next === null || next === this.state) return; // rejected or defined no-op
+    this.commitState(next);
   }
   /**
    * Pure caret placement (the click path): validated against the tree, applied as
@@ -356,11 +354,8 @@ export class EditorController {
     this.pendingDeadPow = false;
     this.takeHighlight(); // a click is not the confirming BS (D5)
     this.lastAction = 'other'; // a click closes the open typing run (U1)
-    this.state = { root: this.state.root, caret, log: this.state.log, redo: this.state.redo, vocabulary: this.state.vocabulary };
     // clicks write no memory entries (and V2 never clears anything)
-    this.updateCaret();
-    this.onCaretChange?.(caret);
-    this.onStateChange?.(this.state);
+    this.setCaretState(caret);
   }
 
   /**
@@ -415,18 +410,10 @@ export class EditorController {
    *  rejected call is a defined no-op — no state change, no exception to the
    *  DOM (the typeKey pattern). */
   private applyEngineFn(fn: () => EditingState): void {
-    let next: EditingState;
-    try {
-      next = fn();
-    } catch (e) {
-      if (e instanceof EngineError) return;
-      throw e;
-    }
-    if (next === this.state) return;
+    const next = this.tryEngine(fn);
+    if (next === null || next === this.state) return;
     this.lastAction = 'other'; // a vocabulary insertion is a non-typing action (U1)
-    this.state = next;
-    this.render();
-    this.onStateChange?.(this.state);
+    this.commitState(next);
   }
 
   /** K2/K3 blur-commit (rework session 5): end the editing session — discard
@@ -462,12 +449,18 @@ export class EditorController {
    *  caret. Ch null/'' = the empty □ exponent (the character could not be
    *  recovered — retyped by hand); KEYMAP-unknown characters are swallowed
    *  (never re-dispatched). */
-  private resolvePendingPow(ch: string | null): void {
+  /** Resolve the pending dead-^ with (at most) one typed token: the power
+   *  materializes first, then the token lands at the fresh exponent caret.
+   *  Undefined token = the empty □ exponent; a `pow` token is the swallow case. */
+  private resolvePendingPowToken(token: TypedToken | undefined): void {
     if (!this.pendingDeadPow) return;
     this.pendingDeadPow = false;
     this.typeKey({ t: 'pow' });
-    const token = ch === null || ch === '' ? undefined : KEYMAP[ch];
     if (token !== undefined && token.t !== 'pow') this.typeKey(token);
+  }
+
+  private resolvePendingPow(ch: string | null): void {
+    this.resolvePendingPowToken(ch === null || ch === '' ? undefined : KEYMAP[ch]);
   }
 
   private readonly handleCompositionEnd = (event: CompositionEvent): void => {
@@ -515,7 +508,6 @@ export class EditorController {
       return;
     }
     if (this.pendingDeadPow) {
-      this.pendingDeadPow = false;
       if (action.kind === 'type') {
         // The next typing key resolves the pending: the deferred `^` op runs
         // first (its own log entry — undo parity with a non-dead layout's `^`
@@ -524,8 +516,7 @@ export class EditorController {
         // resolves to the empty □ exponent (S-035 B). The OS-emitted literal
         // `^` is the swallow case: its whole job was the creation.
         event.preventDefault();
-        this.typeKey({ t: 'pow' });
-        if (action.token !== undefined && action.token.t !== 'pow') this.typeKey(action.token);
+        this.resolvePendingPowToken(action.token);
         return;
       }
       const composed = deadComposedBase(event.key);
@@ -534,17 +525,15 @@ export class EditorController {
         // session 3): with the pending armed, NO composition ever fires and
         // the composed output rides the follow-up keydown as a two-character
         // key value (`key === "^2"`). Consume it: the character after the
-        // dead accent resolves the pending power per S-034. (Inline like the
-        // type-resolution branch above — resolvePendingPow would return
-        // immediately: the pending flag is already consumed here.)
+        // dead accent resolves the pending power per S-034. (The token
+        // variant of resolvePendingPow — the pending flag is consumed inside.)
         event.preventDefault();
-        this.typeKey({ t: 'pow' });
-        const token = KEYMAP[composed];
-        if (token !== undefined && token.t !== 'pow') this.typeKey(token);
+        this.resolvePendingPowToken(KEYMAP[composed]);
         return;
       }
       // Any other key press discards the pending — the key then does its
       // ordinary job ("as if ^ had never been pressed"): fall through.
+      this.pendingDeadPow = false;
     }
     switch (action.kind) {
       case 'ignore':
@@ -602,10 +591,7 @@ export class EditorController {
       if (res.caret === caret) return; // defined no-op: nothing written, nothing moved
       if (res.fired) {
         // Stored position won: pure caret placement, never logged, no MathML rebuild.
-        this.state = { root: this.state.root, caret: res.caret, log: this.state.log, redo: this.state.redo, vocabulary: this.state.vocabulary };
-        this.updateCaret();
-        this.onCaretChange?.(res.caret);
-        this.onStateChange?.(this.state);
+        this.setCaretState(res.caret);
         return;
       }
     }
@@ -633,10 +619,7 @@ export class EditorController {
     this.lastAction = 'other';
     const target = resolveBoundary(toJSON(this.state.root), this.state.caret, side);
     if (target === null || sameCaret(target, this.state.caret)) return; // N3-class no-op at the formula ends
-    this.state = { root: this.state.root, caret: target, log: this.state.log, redo: this.state.redo, vocabulary: this.state.vocabulary };
-    this.updateCaret();
-    this.onCaretChange?.(target);
-    this.onStateChange?.(this.state);
+    this.setCaretState(target);
   }
 
   /** One printable key → exactly one engine typeToken (the literal typing
@@ -671,9 +654,7 @@ export class EditorController {
     // coalesce requested but the log grew anyway → the engine split the unit
     // (a structural conversion, S-085) — the run is closed.
     this.lastAction = typingClass && !(coalesce && next.log.length > logLen) ? 'typing' : 'other';
-    this.state = next;
-    this.render();
-    this.onStateChange?.(this.state);
+    this.commitState(next);
   }
 
   /** Detach the listeners (the rendered DOM stays as-is). */
