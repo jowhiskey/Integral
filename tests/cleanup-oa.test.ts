@@ -47,7 +47,10 @@ describe('cleanup — OA-del-glyph (ruled 2026-11-10; corrected reading after th
     expect(d.kind).toBe('glyph'); // OA-del-glyph — no longer the parked no-op
     s = forwardDelete(s); // the + and its pending cell splice away → the frac unwraps
     expect(j(envelopeOf(s).root)).toBe(j(frac(num(1), num(2))));
-    expect(s.caret).toEqual(tok(['num'], 0));
+    // re-pinned 2026-11-11 (OA-promote-border, log rec-mwcb8j6u-7): the caret
+    // rests at the promoted fraction's LEFT border station — in front of it,
+    // not inside the numerator (the old tok(['num'], 0) landing was the bug)
+    expect(s.caret).toEqual(node([], 'left'));
   });
 
   it('the trailing pending cell (`x+|`) has nothing right of the caret → stays the named no-op (Del works rightward)', () => {

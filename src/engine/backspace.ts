@@ -122,7 +122,7 @@ import {
   unitOf,
   withRefSet,
 } from './internal.js';
-import { entryStation, enterFromSide } from './nav.js';
+import { edgeStation, entryStation, enterFromSide } from './nav.js';
 
 import { applyOps, envelopeOf, type EditingState, type Op, type Position } from './ops.js';
 
@@ -597,7 +597,14 @@ function glyphSplice(env: Envelope, rowPath: Path, nullIndex: number, station: C
   }
   if (cells.length === 1 && cells[0] !== null) {
     const after = withRefSet(env, ref, cells[0]);
-    const to = spliceStation(after, ref, facing);
+    // OA-promote-border (2026-11-11 micro-fix session, log rec-mwcb8j6u-7): a
+    // flankable structure promoted to a bare root/slot position by the glyph
+    // removal lands at its border/flank station (in front of / behind it —
+    // OA-lone-root-stations / the slot-boundary flank), never inside its first
+    // slot (the pre-fix landing dived into the fraction's numerator).
+    const contentPath = pathOfRef(ref);
+    const flank = ref.at === 'root' || ref.at === 'slot' ? edgeStation(after, contentPath, facing) : null;
+    const to = flank ?? spliceStation(after, ref, facing);
     return { kind: 'glyph', ops: [{ op: 'place', node: cells[0], at: replacePosOfRef(ref), to }], caret: to };
   }
   const to: Caret = { kind: 'row', path: rowPath, index: Math.min(nullIndex, cells.length) };

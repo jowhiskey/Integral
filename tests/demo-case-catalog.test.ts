@@ -64,8 +64,10 @@ describe('demo case catalog — structure and hygiene', () => {
     // unit-seam caret paints midway between value and label, consistently).
     // the 2026-11-11 micro-fix session adds OA-invisible-death (an all-null
     // implicit row renders nothing, so the deletion that empties it kills the
-    // row chain instead of leaving it in the AST).
-    const RULE_PATTERN = /^(T\d\d?|N\d|C\d|D\d|U\d|K\d|S-\d{3}|OA-(digit-glue|juxtaposition|projection|fence|dot-eval|mixed|root-grab|sub-label|visual-trumps|token-end|vertical-default|flank-stations|fence-flank|seam-caret-height|vmem-nesting|index-horizontal|del-glyph|closeparen-exit|sinarg-merge|glyph-click-halves|unit-single-seam|unit-seam-paint|after-structure-shift|undo-burst|invisible-death))$/;
+    // row chain instead of leaving it in the AST) and OA-promote-border (a
+    // structure promoted to a bare root/slot by a glyph removal lands at its
+    // border station, in front of / behind it, never inside its first slot).
+    const RULE_PATTERN = /^(T\d\d?|N\d|C\d|D\d|U\d|K\d|S-\d{3}|OA-(digit-glue|juxtaposition|projection|fence|dot-eval|mixed|root-grab|sub-label|visual-trumps|token-end|vertical-default|flank-stations|fence-flank|seam-caret-height|vmem-nesting|index-horizontal|del-glyph|closeparen-exit|sinarg-merge|glyph-click-halves|unit-single-seam|unit-seam-paint|after-structure-shift|undo-burst|invisible-death|promote-border))$/;
     for (const c of CASES) {
       expect(c.rules.length > 0, `${c.id} carries at least one rule ref`).toBe(true);
       for (const rule of c.rules) {

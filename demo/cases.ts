@@ -1095,6 +1095,15 @@ export const CASES: readonly CatalogCase[] = [
     envelope: env(jmp(null, unit(num(50), 'mm'))),
     caret: tk([1], 0),
   },
+  {
+    id: 'B-36',
+    rules: ['OA-promote-border', 'OA-del-glyph', 'D2', 'OA-flank-stations'],
+    category: 'B',
+    label: 'a + 1/2, caret at a’s start (log rec-mwcb8j6u-7)',
+    stress: 'Delete (removes a → |+1/2), Delete again (the dangling + goes, the fraction promotes to the root) — the caret rests at the fraction’s LEFT border station, in front of it, not inside the numerator.',
+    envelope: env(op('add', sym('a'), frac(num(1), num(2)))),
+    caret: tk([0], 0),
+  },
 
   // ——— M: navigation (horizontal + vertical) ———
   {

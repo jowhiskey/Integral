@@ -284,9 +284,10 @@ describe('D2 — backspace at gaps (S-064/S-066 A/S-077)', () => {
   it('BS at the gap before a function is the ordinary gap rule (S-077): the leading dangling + deletes, never the fn', () => {
     const state = backspace(at(op('add', null, fn('sin', [sym('a')])), rowc([], 1)));
     expect(j(envelopeOf(state).root)).toBe(j(fn('sin', [sym('a')])));
-    // 4a re-pin (OA-visual-trumps): the freed spot is the content end bench —
-    // the argument's in-token end (the old node caret painted the same spot)
-    expect(state.caret).toEqual({ kind: 'token', path: [0], index: 1 }); // the promoted content's right edge (sin(a|)
+    // re-pinned 2026-11-11 (OA-promote-border, the B-33-family landing ruling):
+    // the promoted fn lands at its RIGHT border station (behind it) — the old
+    // 4a content-end bench (token [0] @1) dived inside the function
+    expect(state.caret).toEqual({ kind: 'node', path: [], side: 'right' });
     legal(state);
   });
 });

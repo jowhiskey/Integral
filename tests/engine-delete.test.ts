@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import { fromJSON } from '../src/ast/serialize.js';
 
 import {
+  backspace,
   caretResolves,
   decideDelete,
   forwardDelete,
@@ -108,7 +109,10 @@ describe("Forward Delete at the gap (the D2 mirror: the right-adjacent token FIR
     // `|x+1/2` → DEL → `|+1/2` → DEL → `|1/2`
     const stall = forwardDelete(at(op('add', null, frac(num(1), num(2))), rowc([], 0)));
     expect(j(envelopeOf(stall).root)).toBe(j(frac(num(1), num(2)))); // the + and its pending cell splice away
-    expect(stall.caret).toEqual(tokc(['num'], 0));
+    // re-pinned 2026-11-11 (OA-promote-border, log rec-mwcb8j6u-7): the promoted
+    // fraction lands at its LEFT border station — in front of it, never inside
+    // the numerator (the old tokc(['num'], 0) landing was the reported bug)
+    expect(stall.caret).toEqual({ kind: 'node', path: [], side: 'left' });
     legal(stall);
   });
 
@@ -192,6 +196,47 @@ describe('Forward Delete — the NAMED silent no-op defaults (unruled mirrors, t
   it('the fn arguments mirror the gap rule for TEXT tokens; comma-crossing matches the collapsed station', () => {
     const state = forwardDelete(at(fn('sin', [sym('ab'), sym('c')]), rowc([], 1)));
     expect(j(envelopeOf(state).root)).toBe(j(fn('sin', [sym('ab'), null]))); // c had one char — the freed arg is the □
+    legal(state);
+  });
+});
+
+// ——— OA-promote-border (2026-11-11 micro-fix session, log rec-mwcb8j6u-7) ———
+
+describe('OA-promote-border — a flankable structure promoted to a bare root/slot position by a glyph removal lands at its border/flank station, never inside its first slot (log rec-mwcb8j6u-7)', () => {
+  it('Del through a pending cell: a + 1/2, caret at a’s start, Delete ×2 — the dangling + goes, the fraction promotes to the root, the caret rests at its LEFT border station (in front of it)', () => {
+    let state = forwardDelete(at(op('add', sym('a'), frac(num(1), num(2))), tokc([0], 0)));
+    expect(j(envelopeOf(state).root)).toBe(j(op('add', null, frac(num(1), num(2)))));
+    expect(state.caret).toEqual(rowc([], 0));
+    legal(state);
+    state = forwardDelete(state);
+    expect(j(envelopeOf(state).root)).toBe(j(frac(num(1), num(2))));
+    expect(state.caret).toEqual({ kind: 'node', path: [], side: 'left' }); // OA-lone-root-stations: in front of the fraction, not token ['num'] @0
+    legal(state);
+    expect(state.log.length).toBe(2); // one undo unit per Del
+  });
+
+  it('the BS mirror: 1/2 + x, caret past x, Backspace ×2 — the trailing pending cell’s glyph goes, the fraction promotes to the root, the caret at its RIGHT border station', () => {
+    let state = at(op('add', frac(num(1), num(2)), sym('x')), rowc([], 2));
+    state = backspace(state); // x dies → [frac, null], caret at the pending cell
+    expect(j(envelopeOf(state).root)).toBe(j(op('add', frac(num(1), num(2)), null)));
+    expect(state.caret).toEqual(rowc([], 1));
+    state = backspace(state); // the dangling + goes → the fraction at the root
+    expect(j(envelopeOf(state).root)).toBe(j(frac(num(1), num(2))));
+    expect(state.caret).toEqual({ kind: 'node', path: [], side: 'right' }); // behind the fraction
+    legal(state);
+  });
+
+  it('promotion into a SLOT lands at the slot-boundary flank station', () => {
+    const state = forwardDelete(at(frac(op('add', null, frac(num(3), num(4))), num(2)), rowc(['num'], 0)));
+    expect(j(envelopeOf(state).root)).toBe(j(frac(frac(num(3), num(4)), num(2))));
+    expect(state.caret).toEqual({ kind: 'node', path: ['num'], side: 'left' });
+    legal(state);
+  });
+
+  it('a promoted TOKEN (non-flankable) keeps the entry-station landing — unchanged', () => {
+    const state = forwardDelete(at(op('add', null, sym('x')), rowc([], 0)));
+    expect(j(envelopeOf(state).root)).toBe(j(sym('x')));
+    expect(state.caret).toEqual(tokc([], 0));
     legal(state);
   });
 });
