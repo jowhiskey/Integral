@@ -366,9 +366,11 @@ describe('OA-seam-family (4): Space-split and typed juxtapositions get identical
     expect(j(envelopeOf(a).root)).toBe(j(imp(num(5), num(5))));
     expect(mathOf(envelopeOf(a).root)).toBe(mathOf(envelopeOf(b).root));
     expect(mathOf(envelopeOf(a).root)).toContain(SEAM); // the wide red gap (S-021’s no-visible-mark clause superseded)
-    // the same seam treatment: from the Space-split landing (row#1) the walk reaches both edge stations
+    // the same seam treatment: from the Space-split landing (row#1 ≡ the right
+    // edge station, dogfood rec-mwcmu8sa-8) ← reaches the left edge, → skips the
+    // twin and reaches the second number's end
     expect(envMoved(envelopeOf(b).root, rowc([], 1), 'left')).toEqual(tok([0], 1));
-    expect(envMoved(envelopeOf(b).root, rowc([], 1), 'right')).toEqual(tok([1], 0));
+    expect(envMoved(envelopeOf(b).root, rowc([], 1), 'right')).toEqual(tok([1], 1));
     // and the gap is deletable from that landing: BS → `55`
     const merged = backspace(b);
     expect(j(envelopeOf(merged).root)).toBe(j(num(55)));
@@ -391,5 +393,74 @@ describe('OA-seam-family (3): the unit→symbol conversion double seam resolves 
     expect(envMoved(envelopeOf(st).root, tok([1], 0), 'left')).toEqual(tok([0], 1)); // one step across into the number
     // no seam marker renders (legal pair)
     expect(mathOf(envelopeOf(st).root)).not.toContain('integral-seam');
+  });
+});
+
+// ——— dogfood cluster 2026-11-11T21-35 (integral-testlog-cluster-2026-11-11T21-35-20-171Z.json, 9 recordings) ———
+// Each pin cites its rec- id. The recorded comments are the owner's rulings.
+
+describe('dogfood cluster 2026-11-11: seam landings + walk twins (rec- ids cited)', () => {
+  it('rec-mwcm8ovm-0 / rec-mwcmjcwr-3 / rec-mwcmw6mq-9: BS emptying the right cell of an implicit pair lands at the LEFT cell’s right edge ("after the 5" / "after the a"), not the row seam', () => {
+    let st = backspace(at(imp(num(5), sym('ab')), tok([1], 2)));
+    expect(j(envelopeOf(st).root)).toBe(j(imp(num(5), sym('a'))));
+    expect(st.caret).toEqual(tok([1], 1));
+    st = backspace(st);
+    expect(j(envelopeOf(st).root)).toBe(j(imp(num(5), null)));
+    expect(st.caret).toEqual(tok([0], 1)); // after the 5
+    st = backspace(at(imp(sym('a'), sym('a')), tok([1], 1)));
+    expect(j(envelopeOf(st).root)).toBe(j(imp(sym('a'), null)));
+    expect(st.caret).toEqual(tok([0], 1)); // right edge of the left "a"
+    st = backspace(at(imp(sym('a'), sym('b')), tok([1], 1)));
+    expect(j(envelopeOf(st).root)).toBe(j(imp(sym('a'), null)));
+    expect(st.caret).toEqual(tok([0], 1));
+    expect(backspace(st).caret).toEqual({ kind: 'empty' });
+  });
+
+  it('rec-mwcmb8ok-1: → from the left edge of an illegal gap with a container right cell rests at the gap’s RIGHT edge (the row seam, in front of `(`) — no dive', () => {
+    const g = imp(sym('b'), group(op('add', sym('a'), sym('b'))));
+    expect(envMoved(g, tok([0], 1), 'right')).toEqual(rowc([], 1)); // the right edge of the gap
+    expect(envMoved(g, rowc([], 1), 'right')).toEqual(tok([1, 'child', 0], 0)); // then the dive
+    expect(envMoved(g, tok([1, 'child', 0], 0), 'left')).toEqual(rowc([], 1)); // ← back out rests at the right edge too
+    expect(envMoved(g, rowc([], 1), 'left')).toEqual(tok([0], 1)); // then the left edge
+  });
+
+  it('rec-mwcmhuyq-2: BS deleting the binding glyph bonds the pair with the caret at the gap’s RIGHT edge (not the left operand’s end)', () => {
+    const st = backspace(at(op('add', num(5), num(5)), tok([1], 0)));
+    expect(j(envelopeOf(st).root)).toBe(j(imp(num(5), num(5))));
+    expect(st.caret).toEqual(tok([1], 0)); // the right edge of the wide gap
+  });
+
+  it('rec-mwcmu8sa-8: → from the row seam of an illegal pair with a token right cell skips the twin — ONE press reaches after b (no mechanical no-op)', () => {
+    const st = typeToken(at(sym('ab'), tok([], 1)), space);
+    expect(j(envelopeOf(st).root)).toBe(j(imp(sym('a'), sym('b'))));
+    expect(st.caret).toEqual(rowc([], 1));
+    expect(envMoved(envelopeOf(st).root, st.caret, 'right')).toEqual(tok([1], 1)); // one press, after b
+    // the right-edge station is still reachable from the left edge, and back
+    expect(envMoved(envelopeOf(st).root, tok([0], 1), 'right')).toEqual(tok([1], 0));
+    expect(envMoved(envelopeOf(st).root, tok([1], 0), 'left')).toEqual(tok([0], 1));
+    expect(envMoved(envelopeOf(st).root, rowc([], 1), 'left')).toEqual(tok([0], 1));
+  });
+
+  it('rec-mwcmzfd6-b: ← from the row end of an illegal pair lands at the last cell’s left edge ("left of the second 5") — not locked', () => {
+    let st = typeToken(at(num(5), tok([], 1)), space);
+    st = typeToken(st, d('5'));
+    expect(j(envelopeOf(st).root)).toBe(j(imp(num(5), num(5))));
+    expect(st.caret).toEqual(rowc([], 2));
+    expect(envMoved(envelopeOf(st).root, st.caret, 'left')).toEqual(tok([1], 0));
+  });
+
+  it('rec-mwcmo3bd-6 / rec-mwcmq3pj-7: a structure key at either edge station of an illegal gap grabs BOTH cells across the gap (the pair collapses into the structure)', () => {
+    // right-edge station: `/` at tok([1],0) — "a" lands in the numerator, caret at the denominator start
+    let st = typeToken(at(imp(sym('a'), sym('b')), tok([1], 0)), { t: 'divide' });
+    expect(j(envelopeOf(st).root)).toBe(j(frac(sym('a'), sym('b'))));
+    expect(st.caret).toEqual(tok(['den'], 0));
+    // left-edge station: `/` at tok([0],1) — "b" lands in the denominator, caret after "a" in the numerator
+    st = typeToken(at(imp(sym('a'), sym('b')), tok([0], 1)), { t: 'divide' });
+    expect(j(envelopeOf(st).root)).toBe(j(frac(sym('a'), sym('b'))));
+    expect(st.caret).toEqual(tok(['num'], 1));
+    // `^` rides the same structure-key path
+    st = typeToken(at(imp(sym('a'), sym('b')), tok([0], 1)), { t: 'pow' });
+    expect(j(envelopeOf(st).root)).toBe(j({ type: 'pow', base: sym('a'), exp: sym('b') }));
+    expect(st.caret).toEqual(tok(['base'], 1));
   });
 });

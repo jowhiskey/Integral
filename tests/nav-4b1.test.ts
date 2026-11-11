@@ -332,12 +332,11 @@ describe('4b-1 — the twin-elimination corollary (the nav-key corollary, OA-vis
   });
 
   it('named pin: the eliminated glyphBond/glyphSplice seams — BS results rest at colonial canonical states, never the twin seam', () => {
-    // `ab+|c` → the pair: B-33 (2) re-pin (owner ruling, cleanup-session leftover
-    // list) — the caret rests at the LEFT operand's right edge (ab's end);
-    // the pre-fix landing at c's offset 0 (the V-16/V-17 class) is retired; the
-    // pair seam never rests
+    // `ab+|c` → the pair: dogfood cluster 2026-11-11 re-pin (rec-mwcmhuyq-2,
+    // supersedes B-33 (2)'s left-edge landing) — the caret rests at the gap's
+    // RIGHT edge (c's offset 0)
     const d = decideBackspace(envRoot({ type: 'op', op: 'add', args: [sym('ab'), sym('c')] }), seam([], 1));
-    expect(d.caret).toEqual(tok([0], 2));
+    expect(d.caret).toEqual(tok([1], 0));
     // `x + |y` — never produced: the seam twins y@0 and a → press from it would paint in place
     const env = envRoot({ type: 'op', op: 'add', args: [sym('x'), sym('y')] });
     const twin = seam([], 1);

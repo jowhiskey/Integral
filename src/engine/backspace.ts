@@ -123,7 +123,7 @@ import {
   unitOf,
   withRefSet,
 } from './internal.js';
-import { edgeStation, entryStation, enterFromSide } from './nav.js';
+import { edgeStation, entryStation } from './nav.js';
 
 import { applyOps, envelopeOf, type EditingState, type Op, type Position } from './ops.js';
 
@@ -323,7 +323,15 @@ function tokenDeath(env: Envelope, path: Path, station?: Caret): BackspaceDecisi
     const death = invisibleRowDeath(env, ref.path, ref.index);
     if (death !== null) return death;
   }
-  const freed: Caret = { kind: 'row', path: ref.path, index: ref.index };
+  // Dogfood cluster 2026-11-11 (rec-mwcm8ovm-0 / rec-mwcmjcwr-3 / rec-mwcmw6mq-9):
+  // emptying a cell whose LEFT neighbor in an implicit row is a filled token
+  // lands at that token's right edge ("after the 5" / "after the a") — the row
+  // seam is that token end's twin there.
+  const leftCell = ref.index > 0 ? rowArgs(row)[ref.index - 1] : null;
+  const freed: Caret =
+    rowIsImplicit(row) && leftCell !== null && isTokenNode(leftCell)
+      ? { kind: 'token', path: [...ref.path, ref.index - 1], index: tokenText(leftCell).length }
+      : { kind: 'row', path: ref.path, index: ref.index };
   return { kind: 'token-death', ops: [{ op: 'place', node: rowClone(row, cells), at: replacePosOfRef(refOfPath(ref.path)), to: freed }], caret: freed };
 }
 
@@ -625,13 +633,11 @@ function gapMerge(env: Envelope, rowPath: Path, i: number): { readonly ops: read
  *  filled cells deletes — the operands bond into their own implicit
  *  juxtaposition pair at the left cell's position (`x + frac` → the pair
  *  `x·frac`); a two-cell row unwraps to the pair at the row's position. The
- *  One op. B-33 (2) (owner ruling, the consolidated cleanup session's
- *  leftover list, 2026-11-10): the caret rests at the LEFT operand's right
- *  edge — `x+|1/2` → `x|1/2` — via the nav-canonical right edge
- *  (enterFromSide, so a structure operand lands at its S-094 horizontal
- *  boundary: a frac's numerator end). The pre-fix 4b-1 landing (the right
- *  operand's left entry, painting inside the bonded fraction's numerator)
- *  is retired. */
+ *  One op. B-33 (2) (2026-11-10) had the caret rest at the LEFT operand's
+ *  right edge — SUPERSEDED by the dogfood cluster 2026-11-11 (rec-mwcmhuyq-2):
+ *  now that OA-seam-family makes the pair's two gap edges distinct stations,
+ *  the caret rests at the RIGHT edge of the new implicit gap (the right cell's
+ *  offset 0 for a token, the row seam for a container). */
 function glyphBond(env: Envelope, rowPath: Path, left: number): BackspaceDecision {
   const row = nodeAt(env, rowPath) as NodeJson;
   const args = rowArgs(row);
@@ -640,9 +646,16 @@ function glyphBond(env: Envelope, rowPath: Path, left: number): BackspaceDecisio
   const cells = [...args.slice(0, left), bond, ...args.slice(left + 2)];
   const promoted = cells.length === 1;
   const node = promoted ? bond : rowClone(row, cells);
-  const after = withRefSet(env, ref, node);
   const bondPath = promoted ? pathOfRef(ref) : [...rowPath, left];
-  const to = enterFromSide(after, [...bondPath, 0], 'right') ?? { kind: 'row', path: bondPath, index: 0 };
+  // Dogfood cluster 2026-11-11 (rec-mwcmhuyq-2; supersedes B-33 (2)'s left-edge
+  // landing now that the pair's two gap edges are distinct stations): the caret
+  // rests at the RIGHT edge of the new implicit gap — the right cell's offset 0
+  // for a token, the row seam for a container.
+  const bondRight = rowArgs(bond)[1] ?? null;
+  const to: Caret =
+    bondRight !== null && isTokenNode(bondRight)
+      ? { kind: 'token', path: [...bondPath, 1], index: 0 }
+      : { kind: 'row', path: bondPath, index: 1 };
   return { kind: 'glyph', ops: [{ op: 'place', node, at: replacePosOfRef(ref), to }], caret: to };
 }
 

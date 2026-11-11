@@ -1325,6 +1325,38 @@ function structureKey(ctx: Ctx, station: Station, kind: 'divide' | 'pow'): Editi
           : { kind: 'slot', path: structPath, slot: rightSlot };
         return place(ctx, mk(offset === 0 ? null : node, offset === 0 ? node : null), replacePosOf(ref), to);
       }
+      // Dogfood cluster 2026-11-11 (rec-mwcmo3bd-6 / rec-mwcmq3pj-7): a structure
+      // key at an EDGE station of an ILLEGAL implicit pair's gap grabs BOTH
+      // cells across the gap — the pair collapses into the structure; the
+      // caret keeps its side of the splice (left-edge press → the left slot's
+      // end, right-edge press → the right slot's start). Legal pairs redirect
+      // to the seam station in typeToken and keep the seam reading above.
+      if (ref.at === 'cell') {
+        const row = nodeAt(ctx.env, ref.path);
+        if (row !== null && rowImplicit(row)) {
+          const args = rowArgs(row);
+          const i = ref.index;
+          const rightEdge =
+            offset === 0 && i > 0 && args[i - 1] !== null && args[i] !== null &&
+            !pairLegalJson(args[i - 1] as NodeJson, args[i] as NodeJson);
+          const leftEdge =
+            offset === text.length && i + 1 < args.length && args[i] !== null && args[i + 1] !== null &&
+            !pairLegalJson(args[i] as NodeJson, args[i + 1] as NodeJson);
+          if (rightEdge || leftEdge) {
+            const lo = rightEdge ? i - 1 : i;
+            const struct = rightEdge ? mk(args[lo] as NodeJson, node) : mk(node, args[lo + 1] as NodeJson);
+            const cells = [...args.slice(0, lo), struct, ...args.slice(lo + 2)];
+            const rowRef = refOfPath(ref.path);
+            const promoted = cells.length === 1;
+            const newNode = promoted ? struct : rowClone(row, cells);
+            const structPath = promoted ? pathOf(rowRef) : [...ref.path, lo];
+            const to: Caret = rightEdge
+              ? { kind: 'token', path: [...structPath, rightSlot], index: 0 }
+              : { kind: 'token', path: [...structPath, leftSlot], index: text.length };
+            return place(ctx, newNode, replacePosOf(rowRef), to);
+          }
+        }
+      }
       let left: NodeJson | null = null;
       if (offset > 0) {
         left = tokenHalf(node, text.slice(0, offset));

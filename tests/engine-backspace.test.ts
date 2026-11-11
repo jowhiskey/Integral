@@ -195,17 +195,18 @@ describe('D2 — backspace at gaps (S-064/S-066 A/S-077)', () => {
     // unwraps to the pair at its position
     let state = backspace(at(op('add', sym('ab'), sym('c')), rowc([], 1)));
     expect(j(envelopeOf(state).root)).toBe(j(jmp(sym('ab'), sym('c'))));
-    // B-33 (2) re-pin (owner ruling, cleanup-session leftover list): the caret
-    // rests at the LEFT operand's right edge (ab's end) — the old 4b-1
-    // landing on the right operand's left entry (c@0) is retired.
-    expect(state.caret).toEqual(tokc([0], 2));
+    // dogfood cluster 2026-11-11 re-pin (rec-mwcmhuyq-2, supersedes B-33 (2)'s
+    // left-edge landing): the caret rests at the gap's RIGHT edge — c's offset 0
+    expect(state.caret).toEqual(tokc([1], 0));
     expect(state.log.length).toBe(1);
     legal(state);
     // `x + |1/2`: NO highlight from the before-side — the plus dies and the
-    // operands juxtapose (`x 1/2`); the caret lands at `x|1/2` (B-33 (2))
+    // operands juxtapose (`x 1/2`); the caret lands at the gap's RIGHT edge —
+    // in front of the fraction, never into the numerator
     state = backspace(at(op('add', sym('x'), frac(num(1), num(2))), rowc([], 1)));
     expect(j(envelopeOf(state).root)).toBe(j(jmp(sym('x'), frac(num(1), num(2)))));
-    expect(state.caret).toEqual(tokc([0], 1)); // B-33 (2) — not into the numerator
+    // dogfood cluster 2026-11-11 re-pin (rec-mwcmhuyq-2, supersedes B-33 (2))
+    expect(state.caret).toEqual(rowc([], 1));
     legal(state);
     // the gap before a function deletes the `+` too — never the fn (S-077)
     state = backspace(at(op('add', sym('x'), fn('sin', [sym('a')])), rowc([], 1)));
@@ -214,9 +215,9 @@ describe('D2 — backspace at gaps (S-064/S-066 A/S-077)', () => {
     // a longer row keeps its cells: a+b+|c → a + b·c (the pair nests in place)
     state = backspace(at(op('add', sym('a'), sym('b'), sym('c')), rowc([], 2)));
     expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('a'), jmp(sym('b'), sym('c')))));
-    // B-33 (2) re-pin: the freed spot's canonical state is the LEFT operand's
-    // right edge (b's end), not the bonded right operand's left entry.
-    expect(state.caret).toEqual(tokc([1, 0], 1));
+    // dogfood cluster 2026-11-11 re-pin (rec-mwcmhuyq-2, supersedes B-33 (2)):
+    // the freed spot lands at the nested pair's RIGHT edge — c's offset 0
+    expect(state.caret).toEqual(tokc([1, 1], 0));
     legal(state);
     // the Ctrl variant keeps the glyph-delete (a one-character glyph has no run)
     state = backspace(at(op('add', sym('x'), frac(num(1), num(2))), rowc([], 1)), { ctrl: true });
@@ -893,11 +894,13 @@ describe('OA-invisible-death — an all-null implicit (glyph-less) row renders n
     expect(s.caret).toEqual(tokc([1, 1], 1));
     s = backspace(s); // the emptied symbol → the pending null cell (D1 token-death)
     expect(j(envelopeOf(s).root)).toBe(j(jmp(null, jmp(num(50), null))));
-    expect(s.caret).toEqual(rowc([1], 1));
+    // dogfood cluster 2026-11-11 re-pin (rec-mwcm8ovm-0): the landing is the LEFT
+    // neighbor's right edge — after the 50 — not the row seam
+    expect(s.caret).toEqual(tokc([1, 0], 2));
     legal(s);
-    s = backspace(s); // 50 → 5 (the gap consumes the last char, caret stays at the gap — S-064)
+    s = backspace(s); // 50 → 5 (ordinary in-token char drop now, caret at 5's end)
     expect(j(envelopeOf(s).root)).toBe(j(jmp(null, jmp(num(5), null))));
-    expect(s.caret).toEqual(rowc([1], 1));
+    expect(s.caret).toEqual(tokc([1, 0], 1));
     s = backspace(s); // 5 dies → the inner row becomes all-null implicit → CASCADE kills the outer row too → EMPTY formula (OA-invisible-death)
     expect(j(envelopeOf(s).root)).toBe('null');
     expect(s.caret).toEqual({ kind: 'empty' });
@@ -910,10 +913,14 @@ describe('OA-invisible-death — an all-null implicit (glyph-less) row renders n
     let s = at(jmp(sym('a'), jmp(num(5), sym('x'))), tokc([1, 1], 1));
     s = backspace(s); // x dies
     expect(j(envelopeOf(s).root)).toBe(j(jmp(sym('a'), jmp(num(5), null))));
-    expect(s.caret).toEqual(rowc([1], 1));
+    // dogfood cluster 2026-11-11 re-pin (rec-mwcmw6mq-9): the landing is the
+    // left neighbor's right edge — after the 5
+    expect(s.caret).toEqual(tokc([1, 0], 1));
     s = backspace(s); // 5 dies → the inner row is all-null implicit → dies; the outer row keeps a → pending null at cell 1
     expect(j(envelopeOf(s).root)).toBe(j(jmp(sym('a'), null)));
-    expect(s.caret).toEqual(rowc([], 1));
+    // dogfood cluster 2026-11-11 re-pin (rec-mwcmw6mq-9): the cascade lands at
+    // the surviving left token's right edge — after the "a"
+    expect(s.caret).toEqual(tokc([0], 1));
     legal(s);
   });
 

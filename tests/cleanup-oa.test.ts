@@ -63,9 +63,9 @@ describe('cleanup — OA-del-glyph (ruled 2026-11-10; corrected reading after th
     expect(d.kind).toBe('glyph'); // OA-del-glyph
     const s = forwardDelete(at(root, node([1], 'right')));
     expect(j(envelopeOf(s).root)).toBe(j(op('add', sym('x'), imp(frac(num(1), num(2)), sym('y')))));
-    // B-33 (2) re-pin: the bond lands at the LEFT operand's right edge — the
-    // frac's S-094 horizontal boundary (its numerator's end), not y's offset 0
-    expect(s.caret).toEqual(tok([1, 0, 'num'], 1));
+    // dogfood cluster 2026-11-11 re-pin (rec-mwcmhuyq-2, supersedes B-33 (2)'s
+    // left-edge landing): the bond lands at the gap's RIGHT edge — y's offset 0
+    expect(s.caret).toEqual(tok([1, 1], 0));
   });
 
   it('at a FILLED seam the glyph is LEFT of the caret — Del keeps the D1/D3 mirror (unchanged); row end / □ stay no-ops; Ctrl+Del keeps the whole-token mirror', () => {
@@ -82,13 +82,15 @@ describe('cleanup — OA-del-glyph (ruled 2026-11-10; corrected reading after th
 });
 
 describe('fix round — B-33 (the consolidated cleanup session’s reported leftovers, owner-ruled 2026-11-10)', () => {
-  it('B-33 (1): Del at the before-glyph token-end station (`x|+1/2`) removes the `+` — the cells bond into the implicit pair, the caret stays at x’s end', () => {
+  it('B-33 (1): Del at the before-glyph token-end station (`x|+1/2`) removes the `+` — the cells bond into the implicit pair, the caret rests at the gap’s right edge', () => {
     const root = op('add', sym('x'), frac(num(1), num(2)));
     const d = decideDelete(envRoot(root), tok([0], 1));
     expect(d.kind).toBe('glyph'); // OA-del-glyph rightward — no longer the silent no-op
     const s = forwardDelete(at(root, tok([0], 1)));
     expect(j(envelopeOf(s).root)).toBe(j(imp(sym('x'), frac(num(1), num(2))))); // `x 1/2`
-    expect(s.caret).toEqual(tok([0], 1)); // B-33 (2): the left operand’s right edge — `x|1/2`
+    // dogfood cluster 2026-11-11 re-pin (rec-mwcmhuyq-2, supersedes B-33 (2)):
+    // the right edge of the new implicit gap — in front of the fraction
+    expect(s.caret).toEqual(rowc([], 1));
     expect(s.log.length).toBe(1);
     expect(caretResolvesIn(envRoot(JSON.parse(j(envelopeOf(s).root))), s.caret)).toBe(true);
   });
@@ -97,7 +99,7 @@ describe('fix round — B-33 (the consolidated cleanup session’s reported left
     // a token right cell bonds too: `x|+y` → `x y`
     let s = forwardDelete(at(op('add', sym('x'), sym('y')), tok([0], 1)));
     expect(j(envelopeOf(s).root)).toBe(j(imp(sym('x'), sym('y'))));
-    expect(s.caret).toEqual(tok([0], 1));
+    expect(s.caret).toEqual(tok([1], 0)); // dogfood rec-mwcmhuyq-2: the gap's right edge (token right cell)
     // a node-on-token caret reads as the same right edge
     expect(decideDelete(envRoot(op('add', sym('x'), frac(num(1), num(2)))), node([0])).kind).toBe('glyph');
     // the behind-glyph row seam keeps the D1/D3 mirror (the glyph there is Backspace’s)
@@ -115,13 +117,16 @@ describe('fix round — B-33 (the consolidated cleanup session’s reported left
     expect(s.caret).toEqual(tok([], 1));
   });
 
-  it('B-33 (2): BS at `x+|1/2` deletes the glyph and lands at the LEFT operand’s right edge — `x|1/2`, never into the numerator', () => {
+  it('B-33 (2): BS at `x+|1/2` deletes the glyph and lands at the gap’s RIGHT edge — in front of the fraction, never into the numerator', () => {
     const root = op('add', sym('x'), frac(num(1), num(2)));
     const d = decideBackspace(envRoot(root), rowc([], 1));
     expect(d.kind).toBe('glyph');
     const s = backspace(at(root, rowc([], 1)));
     expect(j(envelopeOf(s).root)).toBe(j(imp(sym('x'), frac(num(1), num(2)))));
-    expect(s.caret).toEqual(tok([0], 1)); // B-33 (2) — the old landing tok([1,'num'],0) is retired
+    // dogfood cluster 2026-11-11 re-pin (rec-mwcmhuyq-2, supersedes B-33 (2)'s
+    // left-edge landing): the right edge of the gap — the row seam in front of
+    // the fraction (container right cell)
+    expect(s.caret).toEqual(rowc([], 1));
     // the landing is a normal nav walk stop (no twin): → from it enters the fraction’s numerator
     expect(resolveMove(envRoot(JSON.parse(j(envelopeOf(s).root))), s.caret, 'right')).toEqual(tok([1, 'num'], 0));
   });

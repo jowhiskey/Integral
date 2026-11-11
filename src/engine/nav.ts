@@ -668,13 +668,20 @@ function climb(env: Envelope, path: Path, dir: NavDir, registry: NavRegistry): C
       const legal = dir === 'right'
         ? pairLegalJson(args[step] as NodeJson, args[next] as NodeJson)
         : pairLegalJson(args[next] as NodeJson, args[step] as NodeJson);
-      if (legal) {
-        if (dir === 'right') {
+      if (dir === 'right') {
+        // A container right cell: the gap's right edge (the row seam) is a rest
+        // station — the legal pair's seam, the illegal pair's right edge
+        // (dogfood rec-mwcmb8ok-1) — never dive straight across.
+        if (!isTokenNode(args[next] as NodeJson)) return { kind: 'row', path: ownerPath, index: next };
+        if (legal) {
           return legalGapSeam(env, ownerPath, next) ?? enterFromSide(env, [...ownerPath, next], 'left', registry);
         }
-        const seam = legalGapSeam(env, ownerPath, step);
-        if (seam !== null && !isTokenNode(args[step] as NodeJson)) return seam;
-        return legalGapLeftEntry(env, ownerPath, step, registry);
+      } else {
+        // Exiting a container right cell across the gap rests at the gap's
+        // right edge (the row seam) first (rec-mwcmb8ok-1); a legal token gap
+        // keeps the left entry (the left end is the seam's twin).
+        if (!isTokenNode(args[step] as NodeJson)) return { kind: 'row', path: ownerPath, index: step };
+        if (legal) return legalGapLeftEntry(env, ownerPath, step, registry);
       }
     }
     // 4b-1 OA-flank-stations: crossing the separator glyph INTO a whole
@@ -778,7 +785,21 @@ function rowStep(
   const args = rowArgs(row);
   if (dir === 'right') {
     if (caret.index >= args.length) return climb(env, caret.path, dir, registry);
-    if (args[caret.index] !== null) return bench(env, [...caret.path, caret.index], 'left', registry);
+    if (args[caret.index] !== null) {
+      // OA-seam-family twin (dogfood rec-mwcmu8sa-8): in an implicit pair gap
+      // the row seam IS the right token cell's offset 0 — one press skips it.
+      if (
+        isImplicitRow(row) && caret.index > 0 && args[caret.index - 1] !== null &&
+        isTokenNode(args[caret.index] as NodeJson)
+      ) {
+        return {
+          kind: 'token',
+          path: [...caret.path, caret.index],
+          index: Math.min(1, tokenText(args[caret.index] as NodeJson).length),
+        };
+      }
+      return bench(env, [...caret.path, caret.index], 'left', registry);
+    }
     // The caret sits IN the empty cell at its index: moving right leaves
     // it for the next cell (or the next gap, or the row's right exit).
     const next = caret.index + 1;
@@ -790,9 +811,19 @@ function rowStep(
   if (caret.index <= 0) return climb(env, caret.path, dir, registry);
   const prev = caret.index - 1;
   if (args[prev] === null) return { kind: 'row', path: caret.path, index: prev };
+  // OA-seam-family twin (dogfood rec-mwcmzfd6-b): at an implicit row's END the
+  // seam IS the last token cell's in-token end — ← steps into the token
+  // ("left of the second 5"); the pair-gap check below only applies mid-row.
+  if (caret.index >= args.length && isImplicitRow(row) && isTokenNode(args[prev] as NodeJson)) {
+    return {
+      kind: 'token',
+      path: [...caret.path, prev],
+      index: Math.max(tokenText(args[prev] as NodeJson).length - 1, 0),
+    };
+  }
   // OA-seam-family (1): ← from a legal pair's row gap lands on the left
   // number's last interior offset (the left end is the seam's twin).
-  if (isImplicitRow(row) && args[caret.index] !== null && pairLegalJson(args[prev] as NodeJson, args[caret.index] as NodeJson)) {
+  if (caret.index < args.length && isImplicitRow(row) && args[caret.index] !== null && pairLegalJson(args[prev] as NodeJson, args[caret.index] as NodeJson)) {
     return legalGapLeftEntry(env, caret.path, caret.index, registry);
   }
   return enterFromSide(env, [...caret.path, prev], 'right', registry);
