@@ -623,7 +623,7 @@ export const CASES: readonly CatalogCase[] = [
     rules: ['T3', 'S-021', 'S-022', 'S-098'],
     category: 'I',
     label: 'the number 12, caret between the digits',
-    stress: 'Space inside a token — press Space (the split into adjacent numbers; the silent S-098 refusal + seam marker).',
+    stress: 'Space inside a token — press Space (the split into adjacent numbers; the silent S-098 refusal + the wide red seam marker).',
     envelope: env(num(12)),
     caret: tk([], 1),
   },
@@ -1748,7 +1748,7 @@ export const CASES: readonly CatalogCase[] = [
     rules: ['OA-juxtaposition', 'S-098'],
     category: 'V',
     label: '5 next to 3 (number-number — forbidden adjacency with the S-098 seam)',
-    stress: 'A subtle seam/background marker renders between the two nodes — probe its visibility/styling (live-check item).',
+    stress: 'The wide RED `.integral-seam` carrier renders between the two nodes (OA-seam-family: an illegal split is an error state) — probe its visibility, the two edge stations, and gap deletion (live-check item).',
     envelope: env(jmp(num(5), num(3))),
     caret: rw([], 1),
   },
@@ -1827,10 +1827,10 @@ export const CASES: readonly CatalogCase[] = [
     rules: ['T3', 'S-021', 'S-022', 'S-098'],
     category: 'V',
     label: 'the number 12 split by Space: 1·2 glyph-less adjacency',
-    stress: 'The Space-forced number-number editing state: storable, renders the subtle S-098 seam marker, refused at evaluation while it persists.',
+    stress: 'The Space-forced number-number editing state: storable, renders the wide red S-098 seam carrier, refused at evaluation while it persists.',
     envelope: env(jmp(num(1), num(2))),
-    // 4b-1 reseed (OA-visual-trumps, twin elimination): the pair's inner
-    // seam painted exactly where 2's offset 0 paints — the canonical state.
+    // the right-edge station of the wide gap — OA-seam-family (2): on an
+    // ILLEGAL split both edge stations survive as distinct states.
     caret: tk([1], 0),
   },
   {

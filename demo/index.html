@@ -478,14 +478,16 @@
         cursor: pointer;
       }
 
-      /* S-098 seam marker: the subtle styling hook rendered between two adjacent
-         numbers of a glyph-less multiply row (the forbidden number-number
-         adjacency). Visible but quieter than an error. The carrier is a classed
-         mspace that carries its own height/depth (MathML Core), so the host
-         paints a visible tint with a plain background — no layout workarounds.
-         Restyle to taste in the live check. */
+      /* OA-seam-family (2) seam marker: the wide red error carrier rendered
+         between two adjacent cells of a glyph-less row whose pair is ILLEGAL
+         (num-num S-098, sym-before-X, fn/unit-before-X). An illegal split is an
+         error state and renders as one — visibly wide (the two edge stations
+         are two distinct spots) and red. The carrier mspace carries its own
+         height/depth (MathML Core) plus an inline red background (rendered by
+         default even where the host styles nothing); this class rule is the
+         host-side styling hook. Legal pairs render no marker at all. */
       math .integral-seam {
-        background: rgba(198, 40, 40, 0.3);
+        background: #c62828;
         border-radius: 2px;
       }
     </style>

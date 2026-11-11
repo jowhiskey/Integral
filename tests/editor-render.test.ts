@@ -228,17 +228,23 @@ describe('editor renderer: per-type pinned structure', () => {
     const i5x = built('implicitRow');
     expect(shape(i5x.math)).toBe('<math><mrow><mn>#5</mn><mi>#x</mi></mrow></math>');
     expect(i5x.separators.size).toBe(0);
-    // S-098 seam: the classed mspace renders between the two numbers. It
-    // carries explicit height/depth (rework 2b-1 — mspace defaults to height
-    // 0, which paints nothing for a background tint; the element itself is
-    // the visible box now, mirroring the string renderer's SEAM_MARKER bytes).
+    // OA-seam-family (2) seam: the classed mspace renders between the two
+    // numbers — VISIBLY WIDE + RED (inline style), mirroring the string
+    // renderer's SEAM_MARKER bytes; explicit height/depth (rework 2b-1 —
+    // mspace defaults to height 0, which paints nothing for a background).
+    // It is also registered as the gap's click target.
     const seam = built('implicitSeam');
     expect(shape(seam.math)).toBe('<math><mrow><mn>#5</mn><mspace></mspace><mn>#3</mn></mrow></math>');
     const seamEl = seam.math.querySelector('mspace')!;
     expect(seamEl.getAttribute('class')).toBe('integral-seam');
-    expect(seamEl.getAttribute('width')).toBe('0.1667em');
+    expect(seamEl.getAttribute('width')).toBe('0.5em');
     expect(seamEl.getAttribute('height')).toBe('0.75em');
     expect(seamEl.getAttribute('depth')).toBe('0.2em');
+    expect(seamEl.getAttribute('style')).toBe('background:#c62828');
+    expect(seam.seamGaps.get(seamEl)).toEqual({ path: [], index: 1 });
+    // a legal pair renders NO seam element at all (plain glyph-less spacing)
+    expect(built('implicitRow').math.querySelector('.integral-seam')).toBeNull();
+    expect(built('implicitRow').seamGaps.size).toBe(0);
     // Bare rows: null cells emit NO placeholder element, but get caret anchors.
     expect(shape(built('leadingNull').math)).toBe('<math><mrow><mo>#−</mo><mi>#x</mi></mrow></math>');
     expect(built('leadingNull').placeholders.size).toBe(0);

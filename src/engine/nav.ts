@@ -40,7 +40,7 @@ import {
   type SlotName,
   type SubLabel,
 } from './caret.js';
-import { edgeCell, isImplicitRow } from './internal.js';
+import { edgeCell, isImplicitRow, pairLegalJson } from './internal.js';
 
 /** Arrow directions the move op understands. */
 export type NavDir = 'left' | 'right' | 'up' | 'down';
@@ -283,6 +283,48 @@ function loneRootBorder(node: NodeJson, dir: Side): Caret | null {
   return t === 'group' || t === 'fn' || t === 'frac' || t === 'root'
     ? { kind: 'node', path: [], side: 'left' }
     : null;
+}
+
+// ——— The implicit-pair gap (OA-seam-family, 2026-11-11) ———
+//
+// A glyph-less juxtaposition gap bifurcates on the existing pair predicate:
+// a LEGAL pair (num|group before non-num) is ONE caret station at the gap —
+// the right cell's offset 0 for a text token, the row seam for a container
+// (the `50|mm` unit pattern generalized: the left cell's in-token end is the
+// seam's twin, skipped on the walk — "→ from the number's end skips past the
+// seam"). An ILLEGAL split (num-num S-098, sym-before-X, fn/unit-before-X)
+// keeps BOTH edge stations (the gap renders visibly wide, so the two edges
+// are two distinct visual spots).
+
+/** The ONE seam station of a legal pair gap between cells `i-1` and `i` of
+ *  the implicit row at `rowPath`: the right cell's offset 0 for a text token,
+ *  the row seam for a container. Null when the row is not implicit, the
+ *  bounds/cells do not hold, or the pair is illegal. */
+function legalGapSeam(env: Envelope, rowPath: Path, i: number): Caret | null {
+  const row = nodeAt(env, rowPath);
+  if (row === null || !isImplicitRow(row)) return null;
+  const args = rowArgs(row);
+  if (i <= 0 || i >= args.length) return null;
+  const left = args[i - 1];
+  const right = args[i];
+  if (left === null || right === null || !pairLegalJson(left, right)) return null;
+  return isTokenNode(right)
+    ? { kind: 'token', path: [...rowPath, i], index: 0 }
+    : { kind: 'row', path: rowPath, index: i };
+}
+
+/** The left-side entry of a legal pair gap: the left number's last INTERIOR
+ *  offset (the `50|mm` pattern — the left cell's end is the seam's twin, so
+ *  ← from the seam never rests on it); a group left cell keeps its ordinary
+ *  right-edge entry (groups have no in-token end). */
+function legalGapLeftEntry(env: Envelope, rowPath: Path, i: number, registry: NavRegistry): Caret {
+  const row = nodeAt(env, rowPath);
+  const args = row === null ? [] : rowArgs(row);
+  const left = i > 0 ? args[i - 1] : null;
+  if (left !== null && (left.type === 'num' || left.type === 'sym')) {
+    return { kind: 'token', path: [...rowPath, i - 1], index: Math.max(tokenText(left).length - 1, 0) };
+  }
+  return enterFromSide(env, [...rowPath, i - 1], 'right', registry) ?? { kind: 'row', path: rowPath, index: i };
 }
 
 /** True iff the args row draws a separator at the boundary on `side` of
@@ -615,6 +657,26 @@ function climb(env: Envelope, path: Path, dir: NavDir, registry: NavRegistry): C
       return climb(env, ownerPath, dir, registry);
     }
     if (args[next] === null) return { kind: 'row', path: ownerPath, index: next };
+    // OA-seam-family (1): crossing a LEGAL implicit pair's gap rests at the
+    // ONE seam station — moving right into the right cell, or moving left out
+    // of a container right cell back to the row gap. (A token right cell's
+    // own offset-0 exit is owned by the token handler; here the left entry
+    // skips the left cell's end twin.)
+    if (isImplicitRow(owner) && args[step] !== null && args[next] !== null) {
+      // the gap's pair is (left, right) = (args[next], args[step]) moving left,
+      // (args[step], args[next]) moving right
+      const legal = dir === 'right'
+        ? pairLegalJson(args[step] as NodeJson, args[next] as NodeJson)
+        : pairLegalJson(args[next] as NodeJson, args[step] as NodeJson);
+      if (legal) {
+        if (dir === 'right') {
+          return legalGapSeam(env, ownerPath, next) ?? enterFromSide(env, [...ownerPath, next], 'left', registry);
+        }
+        const seam = legalGapSeam(env, ownerPath, step);
+        if (seam !== null && !isTokenNode(args[step] as NodeJson)) return seam;
+        return legalGapLeftEntry(env, ownerPath, step, registry);
+      }
+    }
     // 4b-1 OA-flank-stations: crossing the separator glyph INTO a whole
     // container cell rests at its flank — the station directly against the
     // structure's edge (typing inserts directly adjacent, D5 fires from
@@ -727,9 +789,13 @@ function rowStep(
   }
   if (caret.index <= 0) return climb(env, caret.path, dir, registry);
   const prev = caret.index - 1;
-  return args[prev] === null
-    ? { kind: 'row', path: caret.path, index: prev }
-    : enterFromSide(env, [...caret.path, prev], 'right', registry);
+  if (args[prev] === null) return { kind: 'row', path: caret.path, index: prev };
+  // OA-seam-family (1): ← from a legal pair's row gap lands on the left
+  // number's last interior offset (the left end is the seam's twin).
+  if (isImplicitRow(row) && args[caret.index] !== null && pairLegalJson(args[prev] as NodeJson, args[caret.index] as NodeJson)) {
+    return legalGapLeftEntry(env, caret.path, caret.index, registry);
+  }
+  return enterFromSide(env, [...caret.path, prev], 'right', registry);
 }
 
 /**
@@ -860,6 +926,43 @@ export function resolveMove(
           if (owner !== null && owner.type === 'unit' && llen > 0) {
             if (caret.index === len) return { kind: 'token', path: ref.path, index: Math.min(1, llen) };
             if (caret.index === len - 1) return { kind: 'token', path: ref.path, index: 0 };
+          }
+        }
+      }
+      // OA-seam-family (1): a token edge standing at a LEGAL implicit pair's
+      // gap is the pair's seam (or its twin) — the walk has ONE stop across
+      // the gap. → from the left number's last interior offset lands ON the
+      // seam; → from its end (the twin) skips past the seam; ← from the right
+      // cell's offset 0 lands on the left number's last interior offset.
+      {
+        const ref = refOfPath(caret.path);
+        if (ref.at === 'cell') {
+          const row = nodeAt(env, ref.path);
+          if (row !== null && isImplicitRow(row)) {
+            const args = rowArgs(row);
+            const rightGap =
+              ref.index + 1 < args.length &&
+              args[ref.index] !== null &&
+              args[ref.index + 1] !== null &&
+              pairLegalJson(args[ref.index] as NodeJson, args[ref.index + 1] as NodeJson);
+            const leftGap =
+              ref.index > 0 &&
+              args[ref.index - 1] !== null &&
+              args[ref.index] !== null &&
+              pairLegalJson(args[ref.index - 1] as NodeJson, args[ref.index] as NodeJson);
+            if (dir === 'right' && rightGap) {
+              if (caret.index === len) {
+                const right = args[ref.index + 1] as NodeJson;
+                return isTokenNode(right)
+                  ? { kind: 'token', path: [...ref.path, ref.index + 1], index: Math.min(1, tokenText(right).length) }
+                  : (enterFromSide(env, [...ref.path, ref.index + 1], 'left', registry) ??
+                    legalGapSeam(env, ref.path, ref.index + 1)!);
+              }
+              if (caret.index === len - 1) return legalGapSeam(env, ref.path, ref.index + 1)!;
+            }
+            if (dir === 'left' && leftGap && caret.index === 0) {
+              return legalGapLeftEntry(env, ref.path, ref.index, registry);
+            }
           }
         }
       }

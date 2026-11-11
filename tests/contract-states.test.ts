@@ -29,11 +29,14 @@ import { buildMathML } from '../src/editor/mathml-dom.js';
 import type { Caret } from '../src/engine/index.js';
 import { stubRects } from './editor-support.js';
 
-// S-098 seam carrier (rework 2b-1): the mspace carries explicit MathML Core
-// height/depth — its default height is 0 and a background-only host tint
-// would paint an invisible zero-height strip (the demo CSS hack is deleted;
-// hosts paint a plain tint on the carrier's own box).
-const SEAM = '<mspace class="integral-seam" width="0.1667em" height="0.75em" depth="0.2em"/>';
+// OA-seam-family (2) seam carrier (rework 2b-1 + the 2026-11-11 seam ruling):
+// the mspace carries explicit MathML Core height/depth (its default height is
+// 0 — a background-only paint would render a zero-height strip) and is now
+// VISIBLY WIDE + RED by default (inline style): an illegal split renders as an
+// error state. Rendered between any two adjacent cells of an implicit row
+// whose pair is illegal — not only num-num (S-098).
+const SEAM =
+  '<mspace class="integral-seam" width="0.5em" height="0.75em" depth="0.2em" style="background:#c62828"/>';
 
 const num = (value: number): NodeJson => ({ type: 'num', value });
 const sym = (name: string): NodeJson => ({ type: 'sym', name });
@@ -292,11 +295,27 @@ describe('implicit multiply rows: glyph-less rendering, evaluation, refusal, S-0
     expect(isEvaluable(mixed)).toBe(false);
   });
 
-  it('number next to number refuses (S-098) AND the seam marker renders between them', () => {
+  it('number next to number refuses (S-098) AND the wide red seam marker renders between them', () => {
     const numNum = fromJSON(env(imp(num(5), num(3))))!;
     expect(isEvaluable(numNum)).toBe(false);
     expect(() => numNum.toMathNode()).toThrow(/implicit adjacency/);
     expect(mathOf(imp(num(5), num(3)))).toBe(`<math><mrow><mn>5</mn>${SEAM}<mn>3</mn></mrow></math>`);
+  });
+
+  it('OA-seam-family (2): EVERY illegal pair renders the wide red carrier; legal pairs render NO marker', () => {
+    // sym-before-X and fn/unit-before-X are illegal splits → the marker
+    expect(mathOf(imp(sym('x'), num(3)))).toBe(`<math><mrow><mi>x</mi>${SEAM}<mn>3</mn></mrow></math>`);
+    expect(mathOf(imp(sym('x'), group(rowOf('add', sym('a'), sym('b')))))).toContain(SEAM);
+    expect(mathOf(imp(fnJson('sin', [num(1)]), sym('x')))).toContain(SEAM);
+    expect(mathOf(imp({ type: 'unit', value: num(5), unit: 'mm' }, sym('x')))).toContain(SEAM);
+    // legal pairs (num-before-X, group-before-X): plain glyph-less spacing, NO seam element
+    expect(mathOf(imp(num(5), sym('x')))).not.toContain('integral-seam');
+    expect(mathOf(imp(num(5), group(sym('a'))))).not.toContain('integral-seam');
+    expect(mathOf(imp(group(sym('a')), sym('x')))).not.toContain('integral-seam');
+    expect(mathOf(imp(num(5), { type: 'frac', num: sym('a'), den: num(2) }))).not.toContain('integral-seam');
+    // a 3-cell implicit row: the marker only at the illegal gap (x|23), not the legal one (1|x)
+    const three = mathOf(imp(num(1), sym('x'), num(23)));
+    expect(three).toBe(`<math><mrow><mn>1</mn><mi>x</mi>${SEAM}<mn>23</mn></mrow></math>`);
   });
 
   it('implicit rows with null cells refuse structurally (incomplete rows never evaluate)', () => {

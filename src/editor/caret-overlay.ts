@@ -31,6 +31,7 @@
 import type { Envelope, NodeJson } from '../ast/json.js';
 
 import { isRowNode, nodeAt, rowArgs, tokenText, type Caret, type Path } from '../engine/caret.js';
+import { isImplicitRow, pairLegalJson } from '../engine/internal.js';
 
 import { caretKey, pathKey, type RenderedMath } from './mathml-dom.js';
 
@@ -159,6 +160,60 @@ function unitSeamMidX(rendered: RenderedMath, unitPath: Path): number | null {
   return (valueRect.right + labelRect.left) / 2;
 }
 
+/** OA-seam-family (1): the gap a caret stands at when it is a legal implicit
+ *  pair's seam or one of its edge twins — the right cell's offset 0, the
+ *  left cell's in-token end, or the row gap of a container right cell.
+ *  Null otherwise (illegal splits keep both edge stations — no midway
+ *  paint there; the wide red gap separates them). */
+function pairSeamGap(env: Envelope, caret: Caret): { readonly rowPath: Path; readonly i: number } | null {
+  if (caret.kind === 'token') {
+    const ref = refOfPath(caret.path);
+    if (ref.at !== 'cell') return null;
+    const row = nodeAt(env, ref.path);
+    if (row === null || !isImplicitRow(row)) return null;
+    const args = rowArgs(row);
+    const node = nodeAt(env, caret.path);
+    if (node === null) return null;
+    const len = tokenText(node).length;
+    if (
+      caret.index === 0 && ref.index > 0 && args[ref.index - 1] !== null &&
+      pairLegalJson(args[ref.index - 1] as NodeJson, node)
+    ) {
+      return { rowPath: ref.path, i: ref.index };
+    }
+    if (
+      caret.index === len && ref.index + 1 < args.length && args[ref.index + 1] !== null &&
+      pairLegalJson(node, args[ref.index + 1] as NodeJson)
+    ) {
+      return { rowPath: ref.path, i: ref.index + 1 };
+    }
+    return null;
+  }
+  if (caret.kind === 'row') {
+    const row = nodeAt(env, caret.path);
+    if (row === null || !isImplicitRow(row)) return null;
+    const args = rowArgs(row);
+    if (
+      caret.index > 0 && caret.index < args.length &&
+      args[caret.index - 1] !== null && args[caret.index] !== null &&
+      pairLegalJson(args[caret.index - 1] as NodeJson, args[caret.index] as NodeJson)
+    ) {
+      return { rowPath: caret.path, i: caret.index };
+    }
+  }
+  return null;
+}
+
+/** The midway x between a pair gap's two cells (OA-unit-seam-paint
+ *  generalized: the legal seam paints midway between the left cell's right
+ *  edge and the right cell's left edge). */
+function pairSeamMidX(rendered: RenderedMath, rowPath: Path, i: number): { x: number; top: number; height: number } | null {
+  const l = extentRect(rendered, [...rowPath, i - 1]);
+  const r = extentRect(rendered, [...rowPath, i]);
+  if (l === null || r === null) return null;
+  return { x: (l.right + r.left) / 2, top: l.top, height: l.height };
+}
+
 /** The element + text length a token caret interpolates over (a sub's own
  *  label element, the unit's upright label mi, a num/sym's extent rect). */
 function tokenRect(
@@ -259,6 +314,16 @@ export function caretAnchor(env: Envelope, caret: Caret, rendered: RenderedMath)
         }
         const r = extentRect(rendered, [...caret.path, caret.index]);
         if (r === null) return null;
+        // OA-seam-family (1): a legal pair's row gap paints MID-WAY between
+        // the two cells (OA-unit-seam-paint generalized), at the left cell's
+        // height (OA-seam-caret-height).
+        {
+          const gap = pairSeamGap(env, caret);
+          if (gap !== null) {
+            const mid = pairSeamMidX(rendered, gap.rowPath, gap.i);
+            if (mid !== null) return { x: mid.x, y: mid.top, height: mid.height };
+          }
+        }
         // K-07 / M-15 #5: an interior seam with a separator glyph on its left
         // anchors at the glyph — x at its RIGHT edge (the after-glyph spot,
         // not touching the right neighbor), y/height at the glyph's rect —
@@ -307,6 +372,16 @@ export function caretAnchor(env: Envelope, caret: Caret, rendered: RenderedMath)
         if (unitPath !== null && nodeAt(env, unitPath)?.type === 'unit') {
           const mid = unitSeamMidX(rendered, unitPath);
           if (mid !== null) return { x: mid, y: rect.top, height: rect.height };
+        }
+      }
+      // OA-seam-family (1): a legal pair seam's edge states (the right cell's
+      // offset 0, the left cell's in-token end — the twins) paint MID-WAY
+      // between the two cells, at the left cell's height.
+      {
+        const gap = pairSeamGap(env, caret);
+        if (gap !== null) {
+          const mid = pairSeamMidX(rendered, gap.rowPath, gap.i);
+          if (mid !== null) return { x: mid.x, y: mid.top, height: mid.height };
         }
       }
       const x = len === 0 ? rect.left : rect.left + (caret.index / len) * (rect.right - rect.left);

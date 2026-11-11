@@ -55,15 +55,19 @@ const OP_DISPLAY: Readonly<Record<string, string>> = {
 const EMPTY_SLOT = '<mi>□</mi>';
 
 /**
- * S-098 seam marker: the subtle styling hook rendered between two adjacent
- * NUMBER cells of an implicit-multiply row (the forbidden number-number
- * adjacency). The mspace carries explicit MathML Core height/depth (its
- * default height is 0 — a background-only host tint would paint a
- * zero-height strip), so host CSS paints the quiet highlight as a plain
- * tint; the element itself stays an inert non-spacing carrier. Styling-level
- * only.
+ * OA-seam-family (2) seam marker: rendered between two adjacent cells of an
+ * implicit-multiply row whose pair is ILLEGAL (num-num S-098, sym-before-X,
+ * fn/unit-before-X — the `!implicitPairLegal` splits). An illegal split is an
+ * error state and renders as one: the carrier is VISIBLY WIDE (the two edge
+ * stations are two distinct visual spots) and RED by default (inline style,
+ * so it renders as an error even where the host styles nothing). The mspace
+ * carries explicit MathML Core height/depth (its default height is 0 — a
+ * background-only paint would render a zero-height strip). Legal pairs render
+ * glyph-less with plain spacing and NO marker. Styling-level only — never
+ * stored.
  */
-const SEAM_MARKER = '<mspace class="integral-seam" width="0.1667em" height="0.75em" depth="0.2em"/>';
+const SEAM_MARKER =
+  '<mspace class="integral-seam" width="0.5em" height="0.75em" depth="0.2em" style="background:#c62828"/>';
 
 /** Thin space between a unit's value and its symbol (MathML Core mspace, ~0.167em). */
 const UNIT_SPACE = '<mspace width="0.1667em"/>';
@@ -336,15 +340,17 @@ export class OperatorNode extends MathNode {
    * separator glyphs carry the visual state (leading `+`, trailing `−x+`,
    * interior doubles like `a+b++c` all fall out of the join; an operand-less
    * row renders nothing). Implicit (glyph-less) multiply rows render NO
-   * separator glyphs; the forbidden number-number adjacency (S-098) renders
-   * the seam marker between the two nodes.
+   * separator glyphs; an ILLEGAL pair (OA-seam-family (2): not
+   * implicitPairLegal — num-num S-098, sym-before-X, fn/unit-before-X)
+   * renders the wide red seam marker between the two nodes; legal pairs
+   * render plain glyph-less spacing with no marker.
    */
   private rowTokens(): string {
     const sep = this.implicit ? '' : `<mo>${this.opDisplay()}</mo>`;
     let out = '';
     this.args.forEach((arg, i) => {
       const prev = i > 0 ? this.args[i - 1] : null;
-      if (this.implicit && prev !== null && arg !== null && prev.type === 'num' && arg.type === 'num') {
+      if (this.implicit && prev !== null && arg !== null && !implicitPairLegal(prev, arg)) {
         out += SEAM_MARKER;
       }
       if (i > 0) out += sep;

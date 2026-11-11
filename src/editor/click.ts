@@ -51,6 +51,7 @@ import {
   entryStation,
   exitStation,
   isRowNode,
+  isTokenNode,
   nodeAt,
   resolveMove,
   rowArgs,
@@ -62,6 +63,7 @@ import {
   type Path,
   type SubLabel,
 } from '../engine/index.js';
+import { isImplicitRow, pairLegalJson } from '../engine/internal.js';
 
 import { pathKey, type RenderedMath } from './mathml-dom.js';
 
@@ -70,6 +72,7 @@ export type ClickHit =
   | { readonly kind: 'none'; readonly fraction: number }
   | { readonly kind: 'placeholder'; readonly caret: Caret }
   | { readonly kind: 'separator'; readonly path: Path; readonly index: number; readonly fraction: number }
+  | { readonly kind: 'seamGap'; readonly path: Path; readonly index: number; readonly fraction: number }
   | { readonly kind: 'fence'; readonly path: Path; readonly side: 'open' | 'close'; readonly fraction: number }
   | { readonly kind: 'fnHead'; readonly path: Path; readonly fraction: number }
   | { readonly kind: 'subLabel'; readonly path: Path; readonly label: SubLabel; readonly fraction: number }
@@ -107,6 +110,10 @@ export function hitFromMouseEvent(event: MouseEvent, rendered: RenderedMath): Cl
   if (ph) return { kind: 'placeholder', caret: ph };
   const sep = rendered.separators.get(target);
   if (sep) return { kind: 'separator', path: sep.path, index: sep.index, fraction: fractionOf(event.clientX, target) };
+  // OA-seam-family: the seam-marker mspace of an implicit row is the gap's
+  // own click target (it carries no uid — checked before the closest-uid fallbacks)
+  const gap = rendered.seamGaps.get(target);
+  if (gap) return { kind: 'seamGap', path: gap.path, index: gap.index, fraction: fractionOf(event.clientX, target) };
   // Fence glyphs of containers (group/fn parens) are recognized as fence hits
   // even when the mo carries a uid — a group with an inlined flat row child
   // stamps the OPEN paren with the child row's uid, but the element is still
@@ -212,6 +219,10 @@ function nearestBackgroundHit(clientX: number, rendered: RenderedMath): ClickHit
     const r = el.getBoundingClientRect();
     consider(r.left, r.right, el, (f) => ({ kind: 'separator', path: sep.path, index: sep.index, fraction: f }));
   }
+  for (const [el, gap] of rendered.seamGaps) {
+    const r = el.getBoundingClientRect();
+    consider(r.left, r.right, el, (f) => ({ kind: 'seamGap', path: gap.path, index: gap.index, fraction: f }));
+  }
   for (const [el, f] of rendered.fenceGlyphs) {
     const r = el.getBoundingClientRect();
     consider(r.left, r.right, el, (fr) => ({ kind: 'fence', path: f.path, side: f.side, fraction: fr }));
@@ -287,6 +298,31 @@ export function caretFromHit(env: Envelope, hit: ClickHit, registry: NavRegistry
       } else {
         caret = { kind: 'row', path: hit.path, index: hit.index };
       }
+      break;
+    }
+    case 'seamGap': {
+      // OA-seam-family: a click on the gap's seam marker. A LEGAL pair maps to
+      // the single seam station (the right cell's offset 0 / the row gap);
+      // an ILLEGAL split maps to the two edge stations across the visibly wide
+      // gap — left half → the left cell's right edge, right half → the right
+      // cell's left edge.
+      const row = nodeAt(env, hit.path);
+      const args = row !== null && isRowNode(row) ? rowArgs(row) : [];
+      const left = hit.index > 0 ? args[hit.index - 1] : null;
+      const right = hit.index < args.length ? args[hit.index] : null;
+      if (row !== null && isImplicitRow(row) && left !== null && right !== null) {
+        const rightEdge: Caret = isTokenNode(right)
+          ? { kind: 'token', path: [...hit.path, hit.index], index: 0 }
+          : { kind: 'row', path: hit.path, index: hit.index };
+        if (pairLegalJson(left, right)) {
+          caret = firstResolving(env, [rightEdge, { kind: 'row', path: hit.path, index: hit.index }]) ?? fallback;
+          break;
+        }
+        const leftEdge = entryStation(env, [...hit.path, hit.index - 1], 'right', registry) ?? rightEdge;
+        caret = firstResolving(env, clickHalves(hit.fraction, leftEdge, rightEdge)) ?? fallback;
+        break;
+      }
+      caret = { kind: 'row', path: hit.path, index: hit.index };
       break;
     }
     case 'fnHead': {

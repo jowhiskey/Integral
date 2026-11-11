@@ -57,6 +57,7 @@ import {
   closeFenceToken,
   edgeCell,
   isImplicitRow as rowImplicit,
+  pairLegalJson,
   refPosition,
   replacePosOfRef,
   subLabelShapeOk,
@@ -334,6 +335,42 @@ function stationOf(env: Envelope, caret: Caret): Station {
         ...(caret.label !== undefined ? { label: caret.label } : {}),
       };
   }
+}
+
+/** OA-seam-family (2): a token edge standing at a LEGAL implicit pair's gap
+ *  IS the pair's seam — every typed key re-dispatches through the row seam,
+ *  where the key class decides the channel (digit/`.` → the left number,
+ *  letter → the right side — glue into a symbol or seed a new symbol before a
+ *  group/structure, operator → an ordinary glyph insert between). Both edge
+ *  twins (the right cell's offset 0, the left cell's in-token end) redirect to
+ *  the same seam index. Illegal pairs keep their edge stations' own behavior
+ *  (the key class cannot disambiguate the side there). */
+function legalSeamRedirect(env: Envelope, station: TokenStation): SeamStation | null {
+  const ref = station.ref;
+  if (ref.at !== 'cell') return null;
+  const row = nodeAt(env, ref.path);
+  if (row === null || !rowImplicit(row)) return null;
+  const args = rowArgs(row);
+  const text = stationText(station);
+  if (
+    station.offset === 0 &&
+    ref.index > 0 &&
+    args[ref.index - 1] !== null &&
+    args[ref.index] !== null &&
+    pairLegalJson(args[ref.index - 1] as NodeJson, args[ref.index] as NodeJson)
+  ) {
+    return { kind: 'seam', row, path: ref.path, index: ref.index, args };
+  }
+  if (
+    station.offset === text.length &&
+    ref.index + 1 < args.length &&
+    args[ref.index] !== null &&
+    args[ref.index + 1] !== null &&
+    pairLegalJson(args[ref.index] as NodeJson, args[ref.index + 1] as NodeJson)
+  ) {
+    return { kind: 'seam', row, path: ref.path, index: ref.index + 1, args };
+  }
+  return null;
 }
 
 // ——— Dispatch context and emission helpers ———
@@ -1562,7 +1599,10 @@ export function typeToken(state: EditingState, token: TypedToken, opts: { readon
     );
   }
   const ctx: Ctx = { env, state, caret: state.caret, flagged: state.caret.boundary === true, coalesce: opts.coalesce === true };
-  const station = stationOf(env, state.caret);
+  const station0 = stationOf(env, state.caret);
+  // OA-seam-family (2): at a legal implicit pair's gap the token edge IS the
+  // seam — the typed key decides the channel via the row seam's rules.
+  const station = station0.kind === 'tok' ? (legalSeamRedirect(env, station0) ?? station0) : station0;
   switch (token.t) {
     case 'space':
       return spaceKey(ctx, station);

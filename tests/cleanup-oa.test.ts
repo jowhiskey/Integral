@@ -105,10 +105,14 @@ describe('fix round — B-33 (the consolidated cleanup session’s reported left
     // a dangling glyph ahead (pending cell) keeps the named no-op; the row end too
     expect(decideDelete(envRoot(op('add', sym('x'), null)), tok([0], 1)).kind).toBe('noop');
     expect(decideDelete(envRoot(op('add', sym('x'), sym('y'))), tok([1], 1)).kind).toBe('noop');
-    // an implicit row has no glyph ahead: the D1 mirror on the right token stands
+    // OA-seam-family (6) re-pin (2026-11-11): an implicit row's pair gap —
+    // sym-sym is an ILLEGAL split (two edge stations, wide red gap) — Del at
+    // the LEFT-edge station (x's right edge) deletes the GAP and merges
+    // (`x`+`yz` → `xyz`, caret at the splice offset), superseding the D1
+    // first-char mirror at the two-station juxtaposition seam.
     s = forwardDelete(at(imp(sym('x'), sym('yz')), tok([0], 1)));
-    expect(j(envelopeOf(s).root)).toBe(j(imp(sym('x'), sym('z'))));
-    expect(s.caret).toEqual(tok([0], 1));
+    expect(j(envelopeOf(s).root)).toBe(j(sym('xyz')));
+    expect(s.caret).toEqual(tok([], 1));
   });
 
   it('B-33 (2): BS at `x+|1/2` deletes the glyph and lands at the LEFT operand’s right edge — `x|1/2`, never into the numerator', () => {

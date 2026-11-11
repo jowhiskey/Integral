@@ -21,6 +21,12 @@ export const samePath = (a: Path, b: Path): boolean =>
 export const isImplicitRow = (node: NodeJson): boolean =>
   node.type === 'op' && (node as { implicit?: boolean }).implicit === true;
 
+/** Envelope-level mirror of the AST's `implicitPairLegal` (src/ast/nodes.ts):
+ *  the same predicate the gate and the fold share — left num|group, right
+ *  non-num — for the engine's JSON-level seam consumption (OA-seam-family). */
+export const pairLegalJson = (left: NodeJson, right: NodeJson): boolean =>
+  (left.type === 'num' || left.type === 'group') && right.type !== 'num';
+
 /** The visually adjacent content of the node at `from` on `side` — op rows
  *  are transparent at their edges (descend to the last/first cell). */
 export function edgeCell(

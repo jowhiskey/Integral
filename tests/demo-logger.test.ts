@@ -313,8 +313,8 @@ describe('test logger — recording state machine, baseline, per-action entries'
   });
 });
 
-describe('test logger — I-22 dogfood (the twin step flagged as a mechanical no-op candidate)', () => {
-  it('record `50mm` + `x` + ←←←←: the seam twin (sym@0 then num@2) is caret-only and flagged in the export', async () => {
+describe('test logger — I-22 dogfood (OA-seam-family (1) re-pin 2026-11-11: the legal-pair gap is ONE station)', () => {
+  it('record `50mm` + `x` + ←←←←: the pair gap has ONE stop (sym@0), the next ← lands inside the number (num@1) — the old twin (sym@0 then num@2) is gone', async () => {
     const { target, app } = mountApp();
     await tick();
     const editor = editorOf(target);
@@ -345,21 +345,26 @@ describe('test logger — I-22 dogfood (the twin step flagged as a mechanical no
       expected = applyOp(expected, { op: 'move', dir: 'left' });
       expect(entries[i].caret).toEqual(expected.caret);
     }
-    // the twin: sym@0 then num@2 — two caret-only entries
-    const twinA = entries[8];
-    const twinB = entries[9];
-    expect(twinA.caret).toEqual({ kind: 'token', path: [1], index: 0 }); // sym@0
-    expect(twinB.caret).toEqual({ kind: 'token', path: [0], index: 2 }); // num@2
-    expect(headerKeys(twinA)).toEqual(['caret']);
-    expect(headerKeys(twinB)).toEqual(['caret']);
-    expect(deriveMechanicalNoop(twinA)).toBe(true);
-    expect(deriveMechanicalNoop(twinB)).toBe(true); // jsdom zero rects → no caret-rect diff → flagged
-    // the exported bug file shows the twin flagged (derived at export, not stored)
+    // OA-seam-family (1): the gap of the legal pair 50·mmx has ONE walk stop —
+    // sym@0 is the seam; the next ← crosses the whole gap in ONE step into the
+    // number's last interior offset (num@1), never resting on the old twin
+    // num@2 (the value's end). In jsdom (zero rects) every caret-only entry is
+    // still flag-derived, so the pin here is the walk itself; live, the
+    // num@1 step paints inside the number (a rect diff) and goes quiet.
+    const gapStop = entries[8];
+    const pastGap = entries[9];
+    expect(gapStop.caret).toEqual({ kind: 'token', path: [1], index: 0 }); // sym@0 — the ONE seam station
+    expect(pastGap.caret).toEqual({ kind: 'token', path: [0], index: 1 }); // num@1 — one step across the gap, not the twin num@2
+    expect(headerKeys(gapStop)).toEqual(['caret']);
+    expect(headerKeys(pastGap)).toEqual(['caret']);
+    expect(deriveMechanicalNoop(gapStop)).toBe(true);
+    expect(deriveMechanicalNoop(pastGap)).toBe(true); // jsdom zero rects → no caret-rect diff → flagged
+    // the exported bug file shows the same (derived at export, not stored)
     const file = parseLogFile(rec.exportOne(live.id)!);
     const exported = file.entries as Array<Record<string, unknown>>;
     expect(exported[8].mechanicalNoop).toBe(true);
     expect(exported[9].mechanicalNoop).toBe(true);
-    expect(exported[9].caret).toEqual({ kind: 'token', path: [0], index: 2 });
+    expect(exported[9].caret).toEqual({ kind: 'token', path: [0], index: 1 });
     expect(exported[0].mechanicalNoop).toBe(false);
     expect(localStorage.getItem(STORAGE_KEY)).not.toContain('mechanicalNoop');
     await unmount(app as never);

@@ -113,6 +113,7 @@ import { EngineError } from './errors.js';
 import {
   closeFenceToken as fenceToken,
   isImplicitRow as rowIsImplicit,
+  pairLegalJson,
   refPosition,
   replacePosOfRef,
   samePath,
@@ -150,6 +151,7 @@ export interface BackspaceOpts {
 
 export type BackspaceKind =
   | 'noop' // D4 / region starts / unruled rejections — nothing applied, nothing logged
+  | 'gap' // OA-seam-family (6): the illegal pair's gap deletes and the sides merge (merge table + guard)
   | 'char' // D1/D2: one character leaves a token (dot/unit/sub interplays included)
   | 'token-death' // D1: an emptied token leaves its position (an args cell → the pending null)
   | 'glyph' // D2/S-066 A: a dangling operator glyph goes (pending-cell splice / row unwrap)
@@ -554,6 +556,69 @@ function invisibleRowDeath(env: Envelope, rowPath: Path, becameNull: number | nu
   return top === null ? null : outrightDeath(env, top, 'glyph');
 }
 
+// ——— OA-seam-family (6): the illegal pair's gap is a deletable object ———
+
+/** The gap between cells `i-1` and `i` of the implicit row at `rowPath` is a
+ *  deletable object — only where the pair is ILLEGAL (num-num S-098,
+ *  sym-before-X, fn/unit-before-X; a legal pair's single seam keeps the
+ *  adjacent-characters D2/D1 mirror — no gap object exists there, the tree
+ *  stands). The merge table: (num,num) → digit concatenation into ONE number
+ *  (`5 5` → `55`, `5`+`0.5` → `50.5`, `5.`+`5` → `5.5`, `5`+`5.` → `55.`);
+ *  (sym,num) → digit-glue into the name (`x 5` → `x5`); (sym,sym) → letter
+ *  glue (`x y` → `xy`); glyph-glyph → the adjacent-glyph row state
+ *  (`+ *` → `+*`, the S-001 typing shape). The merge guard — the deletion
+ *  fires IFF the merge lands on a legal state, otherwise SILENT NO-OP (the
+ *  red gap is undeletable there): (a) both sides decimal (the concatenation
+ *  is not a number — numFromText refuses; a split number merges back exactly),
+ *  (b) symbol + decimal number (the dot cannot join a name), (c) mixed pairs
+ *  with no fusion and no legal multiply (sym|group, sym|structure,
+ *  fn/unit|X, group|num — the merge target IS the refused implicit pair).
+ *  One place op = one undo unit; the caret lands at the splice offset (the
+ *  boundary position inside the merged token). Null when no merge applies. */
+function gapMerge(env: Envelope, rowPath: Path, i: number): { readonly ops: readonly Op[]; readonly caret: Caret } | null {
+  const row = nodeAt(env, rowPath);
+  if (row === null || !rowIsImplicit(row)) return null;
+  const args = rowArgs(row);
+  if (i <= 0 || i >= args.length) return null;
+  const left = args[i - 1];
+  const right = args[i];
+  if (left === null || right === null || pairLegalJson(left, right)) return null;
+  let merged: NodeJson | null = null;
+  let tokenSplice: number | null = null; // caret: in-token offset inside the merged token
+  let rowSplice: number | null = null; // caret: row seam inside the merged row
+  if (left.type === 'num' && right.type === 'num') {
+    merged = numFromText(tokenText(left) + tokenText(right)); // null = guard (a)
+    tokenSplice = tokenText(left).length;
+  } else if (left.type === 'sym' && right.type === 'num') {
+    if (tokenText(right).includes('.')) return null; // guard (b)
+    merged = symOf(tokenText(left) + tokenText(right));
+    tokenSplice = tokenText(left).length;
+  } else if (left.type === 'sym' && right.type === 'sym') {
+    merged = symOf(tokenText(left) + tokenText(right));
+    tokenSplice = tokenText(left).length;
+  } else if (left.type === 'op' && right.type === 'op') {
+    // glyph-glyph: the left glyph row's trailing pending cell takes the right
+    // one — the adjacent-glyph state typing would produce (`+*`)
+    const largs = rowArgs(left);
+    if (largs.length === 0 || largs[largs.length - 1] !== null) return null; // guard (c)
+    merged = rowClone(left, [...largs.slice(0, -1), right]);
+    rowSplice = largs.length - 1;
+  } else {
+    return null; // guard (c): no fusion — the merge target is the refused pair
+  }
+  if (merged === null) return null;
+  const cells = [...args.slice(0, i - 1), merged, ...args.slice(i + 1)];
+  const ref = refOfPath(rowPath);
+  const promoted = cells.length === 1;
+  const node = promoted ? merged : rowClone(row, cells);
+  const mergedPath = promoted ? pathOfRef(ref) : [...rowPath, i - 1];
+  const to: Caret =
+    rowSplice !== null
+      ? { kind: 'row', path: mergedPath, index: rowSplice }
+      : { kind: 'token', path: mergedPath, index: tokenSplice as number };
+  return { ops: [{ op: 'place', node, at: replacePosOfRef(ref), to }], caret: to };
+}
+
 // ——— D2 glyph / open fence / head ———
 
 /** D2/S-077 (the owner's B-15 live ruling): the BINDING glyph between two
@@ -784,6 +849,20 @@ function rowSeam(env: Envelope, rowPath: Path, index: number, station: Caret, ct
   }
   const fn = row.type === 'fn';
   const atEnd = index >= args.length;
+
+  // OA-seam-family (6): BS at the right-edge station of an ILLEGAL pair's gap
+  // deletes the gap (the merge) — partially supersedes the D2 left-consume at
+  // the two-station juxtaposition seams. A LEGAL pair's seam keeps the
+  // adjacent-characters rule (falls through to the tail below). The merge
+  // guard: refusal classes are silent no-ops (the red gap is undeletable).
+  if (
+    row.type === 'op' && rowIsImplicit(row) && !atEnd && index > 0 &&
+    args[index - 1] !== null && args[index] !== null &&
+    !pairLegalJson(args[index - 1] as NodeJson, args[index] as NodeJson)
+  ) {
+    const merge = gapMerge(env, rowPath, index);
+    return merge !== null ? { kind: 'gap', ops: merge.ops, caret: merge.caret } : noopDecision(station);
+  }
 
   // D7b: the argument start. With an EMPTY first argument the □ reading wins
   // (S-023 A — "the empty-arg chain is explicitly unchanged"); the head swap
@@ -1074,6 +1153,7 @@ export interface DeleteOpts {
 
 export type DeleteKind =
   | 'noop'
+  | 'gap' // OA-seam-family (6): Del at the left-edge station of an illegal pair's gap merges the sides
   | 'char'
   | 'token-death'
   | 'glyph' // OA-del-glyph: the binding operator glyph removed (Del at an operator gap)
@@ -1293,6 +1373,17 @@ function forwardGap(env: Envelope, caret: Caret, ctx: { ctrl: boolean; units: Re
   const row = nodeAt(env, ref.path) as NodeJson;
   const args = rowArgs(row);
   const next = ref.index + 1;
+  // OA-seam-family (6): Del at the LEFT-edge station of an illegal pair's gap
+  // deletes the gap (the merge) — the forward mirror of BS at the right-edge
+  // station. A legal pair's seam keeps the D1 mirror (the right cell's first
+  // character, below). Guard refusals are silent no-ops.
+  if (
+    row.type === 'op' && rowIsImplicit(row) && next < args.length && args[next] !== null &&
+    !pairLegalJson(args[ref.index] as NodeJson, args[next] as NodeJson)
+  ) {
+    const merge = gapMerge(env, ref.path, next);
+    return merge !== null ? { kind: 'gap', ops: merge.ops, caret: merge.caret } : delNoop(caret);
+  }
   // B-33 (1) + OA-del-glyph (rightward reading): at a cell's right edge —
   // the before-glyph station (a token's in-token end / a node-on-token
   // caret) — Del removes the separator glyph AHEAD when the next cell is

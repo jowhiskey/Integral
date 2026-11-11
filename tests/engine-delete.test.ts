@@ -116,9 +116,10 @@ describe("Forward Delete at the gap (the D2 mirror: the right-adjacent token FIR
     legal(stall);
   });
 
-  it('the node caret on a leaf is its right edge: the FORWARD gap follows (a|bc → a|c through the pair)', () => {
+  it('the node caret on a leaf is its right edge: the FORWARD gap follows — OA-seam-family (6) re-pin (2026-11-11): at an ILLEGAL pair\'s left-edge station Del deletes the GAP and merges (`a`+`bc` → `abc`, caret at the splice offset), superseding the old D1 first-char mirror here', () => {
     const state = forwardDelete(at(jmp(sym('a'), sym('bc')), node([0])));
-    expect(j(envelopeOf(state).root)).toBe(j(jmp(sym('a'), sym('c'))));
+    expect(j(envelopeOf(state).root)).toBe(j(sym('abc')));
+    expect(state.caret).toEqual(tokc([], 1));
     legal(state);
   });
 

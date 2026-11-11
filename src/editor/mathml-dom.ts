@@ -26,6 +26,7 @@ import {
   SymbolNode,
   UNARY_OPS,
   UnitNode,
+  implicitPairLegal,
 } from '../ast/nodes.js';
 
 import type { Caret, Path, SlotName } from '../engine/caret.js';
@@ -51,15 +52,18 @@ const OP_DISPLAY: Readonly<Record<string, string>> = {
 /** Thin space between a unit's value and its symbol (~0.167em). */
 const UNIT_SPACE_WIDTH = '0.1667em';
 
-/** S-098 seam marker (styling-level): the classed mspace between two adjacent
- * number cells of an implicit-multiply row; the host's CSS paints it. The
- * carrier carries its own height/depth (mspace defaults to height 0 — a
- * plain background tint must have a box to paint) — mirrors the string
- * renderer's SEAM_MARKER bytes; the parity pin catches drift. */
+/** OA-seam-family (2) seam marker (styling-level): the classed mspace between
+ * two adjacent cells of an implicit-multiply row whose pair is ILLEGAL (not
+ * implicitPairLegal — num-num S-098, sym-before-X, fn/unit-before-X). The
+ * illegal split renders as an error state: VISIBLY WIDE + RED by default
+ * (inline style — mirrors the string renderer's SEAM_MARKER bytes; the
+ * parity pin catches drift). The carrier carries its own height/depth
+ * (mspace defaults to height 0 — a plain background paint needs a box). */
 const SEAM_CLASS = 'integral-seam';
-const SEAM_WIDTH = '0.1667em';
+const SEAM_WIDTH = '0.5em';
 const SEAM_HEIGHT = '0.75em';
 const SEAM_DEPTH = '0.2em';
+const SEAM_STYLE = 'background:#c62828';
 
 /**
  * A bare-cell caret anchor (an op-row null cell renders NO element — T7 split:
@@ -97,6 +101,11 @@ export interface RenderedMath {
   readonly placeholderByCaret: ReadonlyMap<string, Element>;
   /** row separator <mo> element (operator glyphs, fn commas) → the seam it sits on. */
   readonly separators: ReadonlyMap<Element, { readonly path: Path; readonly index: number }>;
+  /** OA-seam-family (2): the seam-marker mspace element of an implicit row →
+   *  the gap it carries (row path + the boundary index, i.e. between cells
+   *  index-1 and index). Click target for the gap: legal pair → the single
+   *  seam station; illegal split → the two edge stations (wide red gap). */
+  readonly seamGaps: ReadonlyMap<Element, { readonly path: Path; readonly index: number }>;
   /** 4b-1 (OA-seam-caret-height): seam key (`pathKey(rowPath)/index`) → the
    *  separator element rendered AT that boundary — the left-adjacent
    *  element whose height a seam station's caret paints at. */
@@ -140,6 +149,7 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
   const placeholders = new Map<Element, Caret>();
   const placeholderByCaret = new Map<string, Element>();
   const separators = new Map<Element, { path: Path; index: number }>();
+  const seamGaps = new Map<Element, { path: Path; index: number }>();
   const separatorBySeam = new Map<string, Element>();
   const bareAnchors = new Map<string, BareAnchor>();
   const subLabels = new Map<string, { base: Element; script: Element }>();
@@ -232,8 +242,9 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
 
   /** The op row tokens as loose elements — mirrors OperatorNode.rowTokens (the
    *  T7 split, live): a null cell renders BARE (no placeholder element); the
-   *  separator glyphs disappear entirely on implicit multiply rows; the S-098
-   *  forbidden number-number adjacency renders the classed seam mspace. */
+   *  separator glyphs disappear entirely on implicit multiply rows; an
+   *  ILLEGAL pair (not implicitPairLegal) renders the classed seam mspace —
+   *  the wide red carrier, registered as the gap's click target. */
   const rowTokens = (node: OperatorNode, path: Path, rowEl: Element): Element[] => {
     const display = OP_DISPLAY[node.op] ?? node.op;
     const args: (MathNode | null)[] = node.args;
@@ -242,12 +253,14 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
     const out: Element[] = [];
     args.forEach((arg, i) => {
       const prev = i > 0 ? args[i - 1] : null;
-      if (node.implicit && i > 0 && prev !== null && arg !== null && prev.type === 'num' && arg.type === 'num') {
+      if (node.implicit && i > 0 && prev !== null && arg !== null && !implicitPairLegal(prev, arg)) {
         const seam = el('mspace');
         seam.setAttribute('class', SEAM_CLASS);
         seam.setAttribute('width', SEAM_WIDTH);
         seam.setAttribute('height', SEAM_HEIGHT);
         seam.setAttribute('depth', SEAM_DEPTH);
+        seam.setAttribute('style', SEAM_STYLE);
+        seamGaps.set(seam, { path, index: i });
         out.push(seam);
       }
       if (i > 0 && !node.implicit) {
@@ -475,5 +488,5 @@ export function buildMathML(root: MathNode | null, doc: Document): RenderedMath 
     }
   }
 
-  return { math, uidByPath, pathByUid, elementByPath, extents, placeholders, placeholderByCaret, separators, separatorBySeam, bareAnchors, subLabels, fenceGlyphs, fencesMissingClose, fnHeads };
+  return { math, uidByPath, pathByUid, elementByPath, extents, placeholders, placeholderByCaret, separators, seamGaps, separatorBySeam, bareAnchors, subLabels, fenceGlyphs, fencesMissingClose, fnHeads };
 }

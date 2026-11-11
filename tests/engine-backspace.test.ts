@@ -179,11 +179,14 @@ describe('D2 — backspace at gaps (S-064/S-066 A/S-077)', () => {
     expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('a'), sym('b'))));
     expect(state.caret).toEqual(rowc([], 2));
     legal(state);
-    // the glyph-free diverging pair seam (an implicit row): the left cell's
-    // last letter — N2's one-station gap with no glyph in sight
+    // OA-seam-family (6) re-pin (2026-11-11): the glyph-free juxtaposition
+    // seam of an ILLEGAL pair (sym-sym refuses) — BS at the right-edge station
+    // deletes the GAP and merges the sides (letter glue `ab`+`c` → `abc`,
+    // caret at the splice offset) — supersedes the D2 left-consume here.
     state = backspace(at(jmp(sym('ab'), sym('c')), rowc([], 1)));
-    expect(j(envelopeOf(state).root)).toBe(j(jmp(sym('a'), sym('c'))));
-    expect(state.caret).toEqual(rowc([], 1));
+    expect(j(envelopeOf(state).root)).toBe(j(sym('abc')));
+    expect(state.caret).toEqual(tokc([], 2)); // the boundary inside the merged token
+    expect(state.log.length).toBe(1); // one op = one undo unit
     legal(state);
   });
 
