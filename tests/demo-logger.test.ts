@@ -189,7 +189,7 @@ describe('test logger — recording state machine, baseline, per-action entries'
     await unmount(app as never);
   });
 
-  it('click capture: a click inside the editor logs one click entry; the standing IME log records clicks too', async () => {
+  it('click capture: a click inside the editor logs one click entry', async () => {
     const { target, app } = mountApp();
     await tick();
     const editor = editorOf(target);
@@ -204,8 +204,33 @@ describe('test logger — recording state machine, baseline, per-action entries'
     const ce = entries[2];
     expect(ce.input.kind).toBe('click');
     expect((ce.input as { target: string }).target).toBe('[]'); // resolved to the stable path key
-    await waitFor(() => (target.querySelector('[data-ime-lines]')?.textContent ?? '').includes('click'));
-    expect(target.querySelector('[data-ime-lines]')!.textContent).toContain('click');
+    await unmount(app as never);
+  });
+
+  it('the entries list re-renders DURING recording (fresh rows appear without Stop); Record hands focus back to the editor; no keylogger panel', async () => {
+    const { target, app } = mountApp();
+    await tick();
+    const editor = editorOf(target);
+    editor.focus();
+    // real browser: clicking Record moves focus off the editor — simulate that
+    const recordBtn = target.querySelector('button[data-record]') as HTMLButtonElement;
+    recordBtn.focus();
+    expect(document.activeElement).toBe(recordBtn);
+    const ti = target.querySelector('input[data-title]') as HTMLInputElement;
+    ti.value = 'live rows';
+    ti.dispatchEvent(new Event('input', { bubbles: true }));
+    click(recordBtn);
+    expect(app.getRecorder()!.isRecording()).toBe(true);
+    expect(document.activeElement).toBe(editor); // onRecord refocuses the editor so typing is captured
+    await tick();
+    expect(target.querySelectorAll('button[data-entry-seq]').length).toBe(1); // baseline
+    press(editor, '5');
+    await tick();
+    expect(target.querySelectorAll('button[data-entry-seq]').length).toBe(2); // appears WITHOUT Stop
+    press(editor, '0');
+    await tick();
+    expect(target.querySelectorAll('button[data-entry-seq]').length).toBe(3);
+    expect(target.querySelector('[data-ime-lines]')).toBeNull(); // the bottom keylogger panel is gone
     await unmount(app as never);
   });
 

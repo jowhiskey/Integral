@@ -118,7 +118,7 @@
         font-weight: 600;
       }
 
-      /* ——— testing area: editor column + AST-JSON panel + MathML-source panel ——— */
+      /* ——— testing area: editor column + test-logger panel ——— */
       .stage {
         flex: 1 1 0;
         min-height: 0;
@@ -178,7 +178,13 @@
         display: flex;
         flex-direction: column;
         gap: 0.3em;
-        overflow-y: auto;
+        overflow: hidden; /* the entries list and the recordings list scroll internally */
+      }
+      .logger-head,
+      .live-line,
+      .entries-label,
+      .rec-label {
+        flex: 0 0 auto;
       }
       .logger-head {
         display: flex;
@@ -253,9 +259,9 @@
         list-style: none;
         margin: 0;
         padding: 0;
-        overflow-y: auto;
+        flex: 1 1 auto; /* grows with the entries up to the available height… */
         min-height: 4em;
-        max-height: 34vh;
+        overflow-y: auto; /* …and scrolls */
         border: 1px solid #e4e4e4;
         border-radius: 4px;
         background: #fafafa;
@@ -358,6 +364,9 @@
         margin: 0;
         padding: 0;
         font-size: 0.78em;
+        flex: 0 0 auto; /* pinned to the bottom of the logger column */
+        max-height: 22vh;
+        overflow-y: auto;
       }
       ul.recordings li {
         display: flex;
@@ -377,65 +386,11 @@
         text-overflow: ellipsis;
         white-space: nowrap;
       }
-      pre.src {
-        flex: 1 1 0;
-        min-height: 0;
-        margin: 0.15em 0 0;
-        overflow: auto;
-        background: #fafafa;
-        border: 1px solid #e4e4e4;
-        border-radius: 4px;
-        padding: 0.35em 0.5em;
-        font-family: ui-monospace, monospace;
-        font-size: 0.72em;
-        line-height: 1.35;
-        white-space: pre;
-      }
-
       /* ——— the case editor ——— */
       .integral-editor {
         min-height: 1.8em;
         font-size: 1.1em;
         cursor: text; /* the MathML container is a text surface — show the text cursor */
-      }
-
-      /* ——— the IME / dead-key event log (standing IME-debug tool) ——— */
-      .ime-log {
-        flex: 0 0 auto;
-        max-height: 18vh;
-        display: flex;
-        flex-direction: column;
-        border: 1px solid #ccc;
-        border-radius: 6px;
-        padding: 0.3em 0.7em;
-      }
-      .ime-log .label {
-        display: flex;
-        align-items: baseline;
-        gap: 0.8em;
-      }
-      .ime-log .label button {
-        font: inherit;
-        font-size: 0.78em;
-        border: 1px solid #ccc;
-        border-radius: 4px;
-        background: #fafafa;
-        padding: 0.1em 0.6em;
-        cursor: pointer;
-      }
-      .ime-log pre.src {
-        flex: 1 1 auto;
-        min-height: 3em;
-        margin: 0.15em 0 0;
-        overflow: auto;
-        background: #f4f8f3;
-        border: 1px solid #e4e4e4;
-        border-radius: 4px;
-        padding: 0.3em 0.5em;
-        font-family: ui-monospace, monospace;
-        font-size: 0.72em;
-        line-height: 1.35;
-        white-space: pre;
       }
 
       /* ——— T9 insertion vocabulary buttons ——— */

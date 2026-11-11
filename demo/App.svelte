@@ -19,8 +19,9 @@
   //
   // The old live readouts (AST JSON dump, MathML source strip, caret readout)
   // are superseded by the logger surfaces; a compact caret/rejection line
-  // remains in the logger header. The standing IME/dead-key event log (now
-  // including clicks) stays at the bottom.
+  // remains in the logger header. The bottom IME/dead-key keylogger panel is
+  // gone (the engine-side standing event log, 2b-2, is untouched —
+  // demo/ime-logger.ts remains for direct use).
   //
   // Dev-only — not part of the published package.
   import { onMount } from 'svelte';
@@ -28,7 +29,6 @@
   import { buildMathML, EditorController } from '../src/editor/index.js';
   import { caretResolvesIn, type Caret, type EditingState } from '../src/engine/index.js';
   import { CATEGORIES, CASES, type CatalogCase } from './cases.js';
-  import { attachImeLogger, type ImeLogLine } from './ime-logger.js';
   import { Recorder, downloadText } from './recorder.js';
   import {
     deriveMechanicalNoop,
@@ -45,42 +45,39 @@
   /** Compact live line (kept from the old readouts, now inside the logger header). */
   let caretText = $state('—');
   let rejectionText = $state('—');
-  /** The IME / dead-key event log (standing debug tool): latest line first. */
-  let imeLines: readonly ImeLogLine[] = $state([]);
-  const MAX_IME_LINES = 80;
 
   // ——— logger UI state ———
   let title = $state('');
   let paintOn = $state(false);
+  let recordingNow = $state(false);
   let recordings = $state<ReturnType<Recorder['listRecordings']>>([]);
   let openRec: StoredRecording | null = $state(null);
   let openRecId: string | null = $state(null);
+  /** The recording shown in the entries list (the live one while recording). */
+  let activeRec: StoredRecording | null = $state(null);
+  /** Fresh slice of activeRec.entries on every recorder change — the recorder
+   *  mutates its arrays in place, and the panel needs new references to
+   *  re-render (a same-reference value does not propagate in Svelte 5). */
+  let entries: TestEntry[] = $state([]);
   let expanded: number | null = $state(null);
   let previewEl: HTMLDivElement | undefined = $state();
   let drafts = $state<Record<string, string>>({});
-  /** Bump on every recorder change so the panel re-renders (the recorder's
-   *  entry arrays mutate in place — Svelte needs the tick to track them). */
-  let tick = $state(0);
 
   const activeCase = $derived(CASES.find((c) => c.id === activeId) ?? null);
-  const recordingNow = $derived.by(() => {
-    void tick;
-    return recorder?.isRecording() ?? false;
-  });
-  const activeRec = $derived.by(() => {
-    void tick;
-    if (recorder?.isRecording()) return recorder.currentRecording();
-    // re-read by id: setComment replaces the stored object, so a held snapshot would go stale
-    return openRecId !== null && recorder !== null ? recorder.getRecording(openRecId) : openRec;
-  });
-  const activeRecId = $derived.by(() => {
-    void tick;
-    return activeRec?.id ?? null;
-  });
-  const activeEntries = $derived.by(() => {
-    void tick;
-    return activeRec?.entries ?? [];
-  });
+  const activeRecId = $derived(activeRec?.id ?? null);
+
+  /** Re-read the recorder into the panel state (fresh array references). */
+  function refreshPanel(): void {
+    if (recorder === null) return;
+    recordings = recorder.listRecordings();
+    // re-read by id when stopped: setComment replaces the stored object, so a held snapshot would go stale
+    activeRec = recorder.isRecording()
+      ? recorder.currentRecording()
+      : openRecId !== null
+        ? recorder.getRecording(openRecId)
+        : openRec;
+    entries = activeRec?.entries.slice() ?? [];
+  }
 
   /** Citable caret readout: kind + position path (+ slot / row index / token offset). */
   function formatCaret(c: Caret): string {
@@ -148,8 +145,11 @@
       openRecId = null;
       expanded = null;
     }
-    recordings = recorder.listRecordings();
-    tick += 1;
+    recordingNow = recorder.isRecording();
+    refreshPanel();
+    // the Record/Stop click moves focus to the button — hand it back to the
+    // editor so typing right away is captured (the controller's focus gate)
+    caseContainer?.focus();
   }
 
   function onPaintToggle(): void {
@@ -160,15 +160,12 @@
     expanded = expanded === seq ? null : seq;
   }
 
-  const commentOf = (seq: number): string | undefined => {
-    void tick;
-    return activeRec?.comments[String(seq)];
-  };
+  const commentOf = (seq: number): string | undefined => activeRec?.comments[String(seq)];
 
   function pinComment(seq: number): void {
     if (!recorder || activeRecId === null) return;
     recorder.setComment(activeRecId, seq, drafts[`${activeRecId}:${seq}`] ?? '');
-    tick += 1;
+    refreshPanel();
   }
 
   function openRecording(id: string): void {
@@ -176,7 +173,7 @@
     openRec = recorder.getRecording(id);
     openRecId = id;
     expanded = null;
-    tick += 1;
+    refreshPanel();
   }
 
   function deleteRec(id: string): void {
@@ -187,8 +184,7 @@
       openRecId = null;
       expanded = null;
     }
-    recordings = recorder.listRecordings();
-    tick += 1;
+    refreshPanel();
   }
 
   function exportOne(id: string): void {
@@ -212,7 +208,6 @@
   $effect(() => {
     const seq = expanded;
     const el = previewEl;
-    const entries = activeEntries; // tracks tick — re-resolve on new entries too
     if (seq === null || el === undefined) return;
     if (entries.length === 0 || seq >= entries.length) {
       el.replaceChildren();
@@ -260,37 +255,15 @@
       if (caretResolvesIn(committed, caret)) controller.placeCaret(caret); // resume where the caret was
       refresh(controller.getState());
     });
-    // The standing IME / dead-key event log (capture-phase, passive — now
-    // including clicks): attach to the case editor, latest first.
-    attachImeLogger(caseContainer, 'case', (line) => {
-      imeLines = [line, ...imeLines].slice(0, MAX_IME_LINES);
-    });
     // The usability-test recorder: capture-phase input capture + per-entry
     // diff logging around the ONE editor above.
     recorder = new Recorder({
       container: caseContainer,
       getController: () => controller,
-      onChange: () => {
-        if (recorder !== null) {
-          recordings = recorder.listRecordings();
-          tick += 1;
-        }
-      },
+      onChange: () => refreshPanel(),
     });
-    recordings = recorder.listRecordings();
-    tick += 1;
+    refreshPanel();
   });
-
-  /** Collapse the raw lines into the pane's text (seq + surface + line). */
-  const imeText = $derived(
-    imeLines.length === 0
-      ? '(no events yet — focus the editor and type or click; dead-key compositions land here)'
-      : imeLines.map((l) => `${String(l.seq).padStart(3, ' ')} [${l.surface}] ${l.line}`).join('\n'),
-  );
-
-  function clearImeLog(): void {
-    imeLines = [];
-  }
 
   // test/host accessors (the mounted component exposes these)
   export function getActiveCaseId(): string | null {
@@ -376,12 +349,12 @@
       <span class="caret-readout" data-caret>caret {caretText}</span>
       <span class="rejection-readout" data-rejection>rejection {rejectionText}</span>
     </div>
-    {#if activeEntries.length > 0}
+    {#if entries.length > 0}
       <div class="label entries-label">
-        {recordingNow ? 'recording' : 'viewing'} — {activeRec?.title} ({activeEntries.length} entries, click one to expand)
+        {recordingNow ? 'recording' : 'viewing'} — {activeRec?.title} ({entries.length} entries, click one to expand)
       </div>
       <ol class="entries">
-        {#each activeEntries as e (e.seq)}
+        {#each entries as e (e.seq)}
           <li>
             <button type="button" class="entry" data-entry-seq={e.seq} class:expanded={expanded === e.seq} onclick={() => toggleExpand(e.seq)}>
               #{e.seq} {inputSummary(e.input)}
@@ -427,12 +400,4 @@
       {/each}
     </ul>
   </div>
-</div>
-
-<div class="ime-log">
-  <div class="label">
-    IME / dead-key / click event log — the standing IME-debug tool (capture-phase, passive, latest first)
-    <button type="button" data-ime-clear onclick={clearImeLog}>clear</button>
-  </div>
-  <pre class="src" data-ime-lines>{imeText}</pre>
 </div>
