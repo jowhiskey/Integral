@@ -1935,7 +1935,7 @@ export const CASES: readonly CatalogCase[] = [
     rules: ['A1', 'A4'],
     category: 'A',
     label: 'mid-row split result `a+b = c` (caret at the RHS start)',
-    stress: 'The `a+b|c` + `=` landing: the WHOLE `a+b` is the LHS. Walk lhs↔rhs across the `=` glyph; BS at the RHS start removes the glyph and splices the row back.',
+    stress: 'The `a+b|c` + `=` landing: the WHOLE `a+b` is the LHS. Walk lhs↔rhs across the `=` glyph; BS at the RHS start removes the glyph and the junction becomes a GAP (`a+(b c)` implicit pair, no `+`) — BS at that gap then merges the symbols (`a+bc`) (rec-mwcq61uh-0).',
     envelope: env(asg(op('add', sym('a'), sym('b')), sym('c'))),
     caret: tk(['rhs'], 0),
   },

@@ -300,15 +300,34 @@ describe('A3 — empty slots render □ (string renderer pins; DOM parity in the
 // ——— A4: the `=` glyph is a binding glyph — BS/Del splice lhs+rhs into one plain row ———
 
 describe('A4 — BS/Del at the `=` glyph removes it and splices the sides into one plain row', () => {
-  it('BS at the RHS start (token offset 0) — the insertion undone: `a+b|c` split merges back to `a+b+c`', () => {
+  it('BS at the RHS start (token offset 0): the `=` junction becomes a GAP, never an operator (rec-mwcq61uh-0) — `a+b=c` → `a+(b c)` implicit pair, caret at the gap’s right edge', () => {
     const state = at(asg(add(sym('a'), sym('b')), sym('c')), { kind: 'token', path: ['rhs'], index: 0 });
     const dec = decideBackspace(envelopeOf(state), state.caret);
     expect(dec.kind).toBe('glyph');
     const next = backspace(state);
-    expectTree(next, add(sym('a'), sym('b'), sym('c')));
-    expect(next.caret).toEqual({ kind: 'row', path: [], index: 2 });
+    expectTree(next, add(sym('a'), imp(sym('b'), sym('c'))));
+    expect(next.caret).toEqual({ kind: 'token', path: [1, 1], index: 0 });
     expect(next.log.length).toBe(1); // one undo unit
     expectLegal(next);
+    // only a further BS at the gap merges the two symbols to one (the merge table)
+    const merged = backspace(next);
+    expectTree(merged, add(sym('a'), sym('bc')));
+    expect(merged.caret).toEqual({ kind: 'token', path: [1], index: 1 });
+  });
+
+  it('the junction is a gap for every op-row side shape: explicit rhs row, both rows, implicit-row absorb', () => {
+    // explicit rhs row: the lhs pairs with the rhs's FIRST cell
+    const rhsRow = backspace(at(asg(sym('x'), add(sym('c'), sym('d'))), { kind: 'row', path: ['rhs'], index: 0 }));
+    expectTree(rhsRow, add(imp(sym('x'), sym('c')), sym('d')));
+    expect(rhsRow.caret).toEqual({ kind: 'token', path: [0, 1], index: 0 });
+    // both explicit op rows: the lhs's edge cell pairs with the rhs as a whole
+    const both = backspace(at(asg(add(sym('a'), sym('b')), add(sym('c'), sym('d'))), { kind: 'row', path: ['rhs'], index: 0 }));
+    expectTree(both, add(sym('a'), imp(sym('b'), add(sym('c'), sym('d')))));
+    expect(both.caret).toEqual({ kind: 'row', path: [1], index: 1 });
+    // an implicit row absorbs (its junction is already an implicit seam)
+    const implicit = backspace(at(asg(imp(sym('x'), sym('y')), sym('c')), { kind: 'token', path: ['rhs'], index: 0 }));
+    expectTree(implicit, imp(sym('x'), sym('y'), sym('c')));
+    expect(implicit.caret).toEqual({ kind: 'row', path: [], index: 2 });
   });
 
   it('BS at the RHS □ (empty rhs): the lhs promotes at the assign position', () => {
@@ -351,8 +370,8 @@ describe('A4 — BS/Del at the `=` glyph removes it and splices the sides into o
     const flank = forwardDelete(at(asg(g, num(5)), { kind: 'node', path: ['lhs'], side: 'right' }));
     expectTree(flank, imp(g, num(5)));
     const rowEnd = forwardDelete(at(asg(add(sym('a'), sym('b')), num(5)), { kind: 'row', path: ['lhs'], index: 2 }));
-    expectTree(rowEnd, add(sym('a'), sym('b'), num(5)));
-    expect(rowEnd.caret).toEqual({ kind: 'row', path: [], index: 2 });
+    expectTree(rowEnd, add(sym('a'), imp(sym('b'), num(5)))); // the junction is a gap, not a `+`
+    expect(rowEnd.caret).toEqual({ kind: 'token', path: [1, 1], index: 0 });
   });
 
   it('an assign mid-row: the glyph rule splices at the assign cell (sym+sym fuses per the merge table); undo restores the assign', () => {

@@ -635,21 +635,26 @@ function gapMerge(env: Envelope, rowPath: Path, i: number): { readonly ops: read
 // stations are the rhs start (BS — A3: "BS at an RHS start/□ = the A4 glyph
 // rule": the rhs □ slot caret, the rhs content's left-edge stations — token
 // offset 0, row seam 0, the slot-boundary left flank) and the lhs end (the
-// forward-Del mirror). Splice semantics: an extendable op-row side absorbs
-// the other side (same-op rows concatenate, else the other side joins as a
-// cell); two non-row sides fuse per the OA-seam-family merge table (num-num
-// digit concatenation, sym-num digit-glue, sym-sym letter glue) and otherwise
-// bond into an implicit pair (unconditional — A4 removes the glyph, the pair
-// stores and renders with its seam marker if illegal); one empty side
-// promotes the other; both empty → outright death. One place op = one undo
-// unit. Judgment call (announced): BS at the lhs □ takes the same A4 splice —
-// with one side empty the splice coincides with the D6 unwrap-promote.
+// forward-Del mirror). Splice semantics — the `=` junction is always a GAP,
+// never an operator (rec-mwcq61uh-0: an explicit op-row side must NOT absorb
+// the other side as a cell — that manufactures a `+` where the `=` was): an
+// explicit op-row side pairs its EDGE cell with the other side, nested in
+// place (`add(a,b)=c` → `add(a, mul(b,c) implicit)`); two implicit same-op
+// rows concatenate and a lone implicit row absorbs the other side as a cell
+// (their junction is already an implicit seam); two non-row sides fuse per
+// the OA-seam-family merge table (num-num digit concatenation, sym-num
+// digit-glue, sym-sym letter glue) and otherwise bond into an implicit pair
+// (unconditional — A4 removes the glyph, the pair stores and renders with its
+// seam marker if illegal); one empty side promotes the other; both empty →
+// outright death. One place op = one undo unit. Judgment call (announced):
+// BS at the lhs □ takes the same A4 splice — with one side empty the splice
+// coincides with the D6 unwrap-promote.
 
 /** Where the splice caret lands inside the spliced payload. */
 type AssignSplice =
   | { readonly kind: 'token'; readonly offset: number }
   | { readonly kind: 'seam'; readonly index: number }
-  | { readonly kind: 'pair' }
+  | { readonly kind: 'pair'; readonly at: readonly number[] } // the junction pair's path inside the spliced node
   | { readonly kind: 'side'; readonly facing: 'left' | 'right' };
 
 /** An op row that can absorb another side as cell(s) (not unary/pow — their
@@ -670,10 +675,32 @@ function spliceAssignSides(
   if (lhs === null) return { node: rhs as NodeJson, splice: { kind: 'side', facing: 'left' } };
   if (rhs === null) return { node: lhs, splice: { kind: 'side', facing: 'right' } };
   if (extendableRow(lhs) && extendableRow(rhs) &&
-      (lhs as { op: string }).op === (rhs as { op: string }).op &&
-      rowIsImplicit(lhs) === rowIsImplicit(rhs)) {
+      rowIsImplicit(lhs) && rowIsImplicit(rhs) &&
+      (lhs as { op: string }).op === (rhs as { op: string }).op) {
     const largs = rowArgs(lhs);
     return { node: rowClone(lhs, [...largs, ...rowArgs(rhs)]), splice: { kind: 'seam', index: largs.length } };
+  }
+  if (extendableRow(lhs) && !rowIsImplicit(lhs)) {
+    // an explicit op-row: the junction pairs its EDGE cell with the other side
+    const largs = rowArgs(lhs);
+    const last = largs[largs.length - 1];
+    if (largs.length >= 2 && last !== null) {
+      return {
+        node: rowClone(lhs, [...largs.slice(0, -1), implicitPair(last, rhs)]),
+        splice: { kind: 'pair', at: [largs.length - 1] },
+      };
+    }
+    return { node: implicitPair(lhs, rhs), splice: { kind: 'pair', at: [] } };
+  }
+  if (extendableRow(rhs) && !rowIsImplicit(rhs)) {
+    const rargs = rowArgs(rhs);
+    if (rargs.length >= 2 && rargs[0] !== null) {
+      return {
+        node: rowClone(rhs, [implicitPair(lhs, rargs[0] as NodeJson), ...rargs.slice(1)]),
+        splice: { kind: 'pair', at: [0] },
+      };
+    }
+    return { node: implicitPair(lhs, rhs), splice: { kind: 'pair', at: [] } };
   }
   if (extendableRow(lhs)) {
     const largs = rowArgs(lhs);
@@ -692,7 +719,7 @@ function spliceAssignSides(
   } else if (lhs.type === 'sym' && rhs.type === 'sym') {
     return { node: symOf(tokenText(lhs) + tokenText(rhs)), splice: { kind: 'token', offset: tokenText(lhs).length } };
   }
-  return { node: implicitPair(lhs, rhs), splice: { kind: 'pair' } };
+  return { node: implicitPair(lhs, rhs), splice: { kind: 'pair', at: [] } };
 }
 
 /** A4: remove the assign's `=` glyph, splicing lhs+rhs into one plain row at
@@ -714,10 +741,12 @@ function assignGlyphDelete(env: Envelope, assignPath: Path, station: Caret): Bac
       break;
     case 'pair': {
       // the glyphBond landing: the RIGHT edge of the new implicit gap
-      const right = rowArgs(spliced.node)[1] ?? null;
+      const at = spliced.splice.at;
+      const pairNode = at.length === 0 ? spliced.node : rowArgs(spliced.node)[at[0]] as NodeJson;
+      const right = rowArgs(pairNode)[1] ?? null;
       to = right !== null && isTokenNode(right)
-        ? { kind: 'token', path: [...contentPath, 1], index: 0 }
-        : { kind: 'row', path: contentPath, index: 1 };
+        ? { kind: 'token', path: [...contentPath, ...at, 1], index: 0 }
+        : { kind: 'row', path: [...contentPath, ...at], index: 1 };
       break;
     }
     case 'side':
