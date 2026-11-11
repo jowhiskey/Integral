@@ -32,24 +32,104 @@ const SLOTS: Readonly<Record<NodeJson['type'], readonly SlotName[]>> = {
   root: ['radicand', 'index'],
   sub: [],
   unit: ['value'],
+  fence: [], // a close-fence glyph token is a leaf (session 1, additive)
 };
 
 /**
  * The caret, as engine-owned data:
  * - `empty`   — the whole formula is empty (root null); the one defined
  *               empty-formula caret state.
- * - `node`    — on the node at `path` (leaf or container, `[]` = root).
+ * - `node`    — on the node at `path` (leaf or container, `[]` = root). For a
+ *               num/sym leaf it reads as the token's right edge (the station
+ *               a token's continued typing continues from).
+ *               Additive `side` (rework session 4a, owner-ruled 2026-11-09;
+ *               extended in 4b-1, OA-flank-stations):
+ *               `side: 'left'` = the station directly against the
+ *               structure's left edge (the glyph zone between the preceding
+ *               separator and the structure), `side: 'right'` = the mirror
+ *               against its right edge (the outside station D5 fires
+ *               from). Valid on whole containers (group/fn/frac/pow/root +
+ *               sub, 4b-1). Produced by the movement spine at mid-row
+ *               glyph zones and slot/root boundaries (4a's lone-root
+ *               border ruling); never serialized.
  * - `slot`    — in an empty fixed slot of the node at `path`.
  * - `row`     — insertion point into an args row: index 0..args.length
  *               (args.length = after the last arg). A null entry in a row is
  *               not addressed by this — it is an empty slot like any other,
  *               addressed structurally by index when an op targets it.
+ * - `token`   — inside a text-like token: on the node at `path`, at character
+ *               offset `index` (0..len of the addressed text). Numbers and
+ *               symbols (rework session 2a, T3 glue/split at any caret offset;
+ *               the trailing decimal dot of a `dot`-flagged number is part of
+ *               the text). Rework session 2b-2 (S-104): a unit's LABEL is
+ *               letter-wise addressable exactly like a symbol name — attached
+ *               units are granular. A `sub` node's two label strings are
+ *               addressable one at a time (T9 vocabulary ruling, 2026-11-09):
+ *               a token caret on a `sub` carries `label` choosing the string
+ *               `index` addresses ('base' | 'sub' — additive field, present
+ *               exactly for sub nodes; its absence addresses the plain token
+ *               text of num/sym/unit). Function heads stay atomic.
+ * - `boundary` — pure additive flag (on every non-empty kind): armed by the
+ *               Space key at a token edge (S-021/S-022); the NEXT same-type
+ *               input starts a new node instead of gluing; no visible mark,
+ *               never serialized. Any caret relocation or movement produces
+ *               fresh carets without the flag, disarming it.
  */
+export interface CaretBoundary {
+  readonly boundary?: true;
+}
+
+/** Which of a `sub` node's two label strings a token caret addresses
+ *  (T9 vocabulary ruling — required exactly on sub nodes). */
+export type SubLabel = 'base' | 'sub';
+
+/** The whole-structure border sides of a lone container's node caret
+ *  (rework session 4a, additive — `before` reads as left in JSON). */
+export type NodeSide = 'left' | 'right';
+
 export type Caret =
-  | { readonly kind: 'empty' }
-  | { readonly kind: 'node'; readonly path: Path }
-  | { readonly kind: 'slot'; readonly path: Path; readonly slot: SlotName }
-  | { readonly kind: 'row'; readonly path: Path; readonly index: number };
+  | ({ readonly kind: 'empty' } & CaretBoundary)
+  | ({ readonly kind: 'node'; readonly path: Path; readonly side?: NodeSide } & CaretBoundary)
+  | ({ readonly kind: 'slot'; readonly path: Path; readonly slot: SlotName } & CaretBoundary)
+  | ({ readonly kind: 'row'; readonly path: Path; readonly index: number } & CaretBoundary)
+  | ({ readonly kind: 'token'; readonly path: Path; readonly index: number; readonly label?: SubLabel } & CaretBoundary);
+
+/** Byte-level caret equality (JSON of the caret value) — the reducer's
+ *  same-state clamp, the nav resolvers, and the controller's run-boundary
+ *  checks share it. */
+export function sameCaret(a: Caret, b: Caret): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * The rendered text of a number or symbol token (what the editor shows and
+ * what the in-token offset addresses). A `dot`-flagged number's trailing
+ * decimal point is part of the text (`5.` has length 2). A unit's text is its
+ * LABEL string (S-104: attached units are granular — the label is addressed
+ * exactly like a symbol name). A `sub` node's text depends on which label a
+ * specific caret carries — see `subLabelText`; plain `tokenText` does not
+ * address sub. Everything else is not an in-token token (0).
+ */
+export function tokenText(node: NodeJson): string {
+  if (node.type === 'num') return String(node.value) + ((node as { dot?: boolean }).dot === true ? '.' : '');
+  if (node.type === 'sym') return node.name;
+  if (node.type === 'unit') return node.unit;
+  return '';
+}
+
+/** The one sub label string a token caret addresses (T9): the caret's
+ *  `label` field selects it; it is required on sub nodes. */
+export function subLabelText(node: NodeJson, label: SubLabel): string {
+  if (node.type !== 'sub') return '';
+  return label === 'base' ? (node as { base: string }).base : (node as { sub: string }).sub;
+}
+
+/** True iff the node is a text-like in-token token (num, sym, or — since
+ *  S-104 — a unit, whose label is the addressed text). Sub labels are
+ *  addressed caret-wise, not by this predicate. */
+export function isTokenNode(node: NodeJson): boolean {
+  return node.type === 'num' || node.type === 'sym' || node.type === 'unit';
+}
 
 // ——— Refs: where content sits or will land (the envelope-level analog of a
 // caret, used by the policy layers to address insertion/swap targets) ———
@@ -149,8 +229,21 @@ export function caretResolvesIn(env: Envelope, caret: Caret): boolean {
   switch (caret.kind) {
     case 'empty':
       return env.root === null;
-    case 'node':
-      return nodeAt(env, caret.path) !== null;
+    case 'node': {
+      const node = nodeAt(env, caret.path);
+      if (node === null) return false;
+      // The additive border side (4a, extended in 4b-1): guarded to whole
+      // containers — group/fn (fenced) + frac/pow/root (fenceless 2D) +
+      // `sub` (rework 4b-1, OA-flank-stations: a mid-row subscript's edges
+      // are ruled flank stations; a lone sub never PRODUCES one, so the
+      // 4a lone-root behavior stands). Tokens and rows are addressed
+      // in-token / by their own seams.
+      if (caret.side !== undefined) {
+        const t = node.type;
+        return t === 'group' || t === 'fn' || t === 'frac' || t === 'pow' || t === 'root' || t === 'sub';
+      }
+      return true;
+    }
     case 'slot': {
       const parent = nodeAt(env, caret.path);
       return parent !== null && hasSlot(parent, caret.slot) && slotValue(parent, caret.slot) === null;
@@ -161,6 +254,20 @@ export function caretResolvesIn(env: Envelope, caret: Caret): boolean {
       const args = (parent as JsonRecord).args as unknown;
       if (!Array.isArray(args)) return false;
       return caret.index >= 0 && caret.index <= args.length;
+    }
+    case 'token': {
+      const node = nodeAt(env, caret.path);
+      if (node === null) return false;
+      if (node.type === 'sub') {
+        // Sub labels are addressed one at a time (T9): the `label` field is
+        // required here and forbidden everywhere else.
+        if (caret.label !== 'base' && caret.label !== 'sub') return false;
+        const len = subLabelText(node, caret.label).length;
+        return Number.isInteger(caret.index) && caret.index >= 0 && caret.index <= len;
+      }
+      if (caret.label !== undefined) return false;
+      if (!isTokenNode(node)) return false;
+      return Number.isInteger(caret.index) && caret.index >= 0 && caret.index <= tokenText(node).length;
     }
   }
 }
@@ -189,6 +296,7 @@ export function entryPath(caret: Caret): Path {
     case 'node':
     case 'slot':
     case 'row':
+    case 'token':
       return caret.path;
   }
 }
@@ -208,7 +316,8 @@ function withStep(caret: Caret, depth: number, step: number): Caret {
       throw new Error('engine: empty caret cannot pass through a row');
     case 'node':
     case 'slot':
-    case 'row': {
+    case 'row':
+    case 'token': {
       const path = [...caret.path];
       path[depth] = step;
       return { ...caret, path };

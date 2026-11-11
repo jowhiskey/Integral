@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Integral — editor demo (visual-test case browser)</title>
+    <style>
+      /* Page layout (demo refinement): the whole page is exactly one viewport —
+         header + case grid + testing area never scroll at page level; the
+         case grid and the readout panels scroll internally. */
+      html {
+        height: 100%;
+      }
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 0;
+        padding: 0.4em 0.9em;
+        height: 100vh;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      h1 {
+        font-size: 1.05em;
+        margin: 0 0 0.15em;
+      }
+      #app {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.45em;
+      }
+      details.about {
+        font-size: 0.82em;
+        color: #555;
+      }
+      details.about summary {
+        cursor: pointer;
+      }
+      details.about p {
+        margin: 0.25em 0;
+        max-width: 78em;
+      }
+
+      /* ——— case browser: compact header row + internally scrolling grid ——— */
+      .browser {
+        flex: 0 1 auto;
+        min-height: 8em;
+        max-height:50vh;
+        display: flex;
+        flex-direction: column;
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        padding: 0.3em 0.7em;
+      }
+      .browser-head {
+        display: flex;
+        align-items: baseline;
+        gap: 1.2em;
+        flex-wrap: wrap;
+      }
+      .browser h2 {
+        font-size: 0.95em;
+        margin: 0.15em 0;
+      }
+      details.hint {
+        font-size: 0.8em;
+        color: #555;
+      }
+      details.hint summary {
+        cursor: pointer;
+      }
+      details.hint p {
+        margin: 0.2em 0;
+        max-width: 72em;
+      }
+      .case-scroll {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow-y: auto;
+      }
+      .browser .cat h3 {
+        margin: 0.5em 0 0.2em;
+        font-size: 0.9em;
+      }
+      .browser ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        columns: 5;
+        column-gap: 1.2em;
+      }
+      @media (max-width: 1100px) {
+        .browser ul {
+          columns: 3;
+        }
+      }
+      .browser li {
+        break-inside: avoid;
+        margin: 0.1em 0;
+      }
+      .browser button[data-case-id] {
+        font: inherit;
+        font-size: 0.78em;
+        text-align: left;
+        width: 100%;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        background: #fafafa;
+        padding: 0.1em 0.35em;
+        cursor: pointer;
+      }
+      .browser button[data-case-id].active {
+        border-color: #357;
+        background: #e8f0fa;
+        font-weight: 600;
+      }
+
+      /* ——— testing area: editor column + AST-JSON panel + MathML-source panel ——— */
+      .stage {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        gap: 0.7em;
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        padding: 0.35em 0.7em;
+      }
+      .editor-col {
+        flex: 0 0 21em;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.3em;
+        overflow-y: auto;
+      }
+      .label {
+        font-size: 0.75em;
+        color: #666;
+      }
+      #case-editor {
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        background: #fff;
+        padding: 0.25em 0.5em;
+        font-size: 1.25em;
+        min-height: 2.1em;
+        outline: none;
+      }
+      #case-editor:focus {
+        border-color: #357;
+      }
+      button[data-run-keys] {
+        font: inherit;
+        font-size: 0.8em;
+        align-self: flex-start;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        background: #fafafa;
+        padding: 0.15em 0.5em;
+        cursor: pointer;
+      }
+      .caret-readout {
+        font-family: ui-monospace, monospace;
+        font-size: 0.78em;
+        color: #357;
+        background: #eef3fb;
+        border: 1px solid #d5e0f0;
+        border-radius: 4px;
+        padding: 0.15em 0.45em;
+        white-space: nowrap;
+        overflow-x: auto;
+      }
+      .note {
+        font-size: 0.8em;
+        color: #444;
+      }
+      .note .rules {
+        display: block;
+        color: #357;
+        font-family: ui-monospace, monospace;
+      }
+      .panel {
+        flex: 1 1 0;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      pre.src {
+        flex: 1 1 0;
+        min-height: 0;
+        margin: 0.15em 0 0;
+        overflow: auto;
+        background: #fafafa;
+        border: 1px solid #e4e4e4;
+        border-radius: 4px;
+        padding: 0.35em 0.5em;
+        font-family: ui-monospace, monospace;
+        font-size: 0.72em;
+        line-height: 1.35;
+        white-space: pre;
+      }
+
+      /* ——— the case editor ——— */
+      .integral-editor {
+        min-height: 1.8em;
+        font-size: 1.1em;
+        cursor: text; /* the MathML container is a text surface — show the text cursor */
+      }
+
+      /* ——— the IME / dead-key event log (standing IME-debug tool) ——— */
+      .ime-log {
+        flex: 0 0 auto;
+        max-height: 18vh;
+        display: flex;
+        flex-direction: column;
+        border: 1px solid #ccc;
+        border-radius: 6px;
+        padding: 0.3em 0.7em;
+      }
+      .ime-log .label {
+        display: flex;
+        align-items: baseline;
+        gap: 0.8em;
+      }
+      .ime-log .label button {
+        font: inherit;
+        font-size: 0.78em;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        background: #fafafa;
+        padding: 0.1em 0.6em;
+        cursor: pointer;
+      }
+      .ime-log pre.src {
+        flex: 1 1 auto;
+        min-height: 3em;
+        margin: 0.15em 0 0;
+        overflow: auto;
+        background: #f4f8f3;
+        border: 1px solid #e4e4e4;
+        border-radius: 4px;
+        padding: 0.3em 0.5em;
+        font-family: ui-monospace, monospace;
+        font-size: 0.72em;
+        line-height: 1.35;
+        white-space: pre;
+      }
+
+      /* ——— T9 insertion vocabulary buttons ——— */
+      .vocab-ops {
+        display: flex;
+        align-items: baseline;
+        gap: 0.5em;
+        flex-wrap: wrap;
+      }
+      .vocab-ops button {
+        font: inherit;
+        font-size: 0.85em;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        background: #fafafa;
+        padding: 0.1em 0.5em;
+        cursor: pointer;
+      }
+
+      /* S-098 seam marker: the subtle styling hook rendered between two adjacent
+         numbers of a glyph-less multiply row (the forbidden number-number
+         adjacency). Visible but quieter than an error. The carrier is a classed
+         mspace that carries its own height/depth (MathML Core), so the host
+         paints a visible tint with a plain background — no layout workarounds.
+         Restyle to taste in the live check. */
+      math .integral-seam {
+        background: rgba(198, 40, 40, 0.3);
+        border-radius: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Integral editor demo — visual-test case browser</h1>
+    <details class="about">
+      <summary>about this page (dev-only demo, not part of the published package)</summary>
+      <p>
+        The case list below is the visual-test catalog (<code>demo/cases.ts</code>), grouped by category with stable
+        IDs. Click a case to load its seed (formula + starting caret) into the case editor; click the active case
+        again to reset to the seed. Instruction cases (marked <code>keys</code>) seed the empty formula — the “type
+        instruction” button runs the key sequence through the real keyboard path. In the editor: type, move with the
+        arrow keys, Backspace / Ctrl+Backspace, undo/redo (Ctrl+Z, Ctrl+Y or Ctrl+Shift+Z), and click to place the
+        caret. The testing area shows the live data without devtools: the stored AST envelope as pretty JSON, the
+        generated MathML as pretty source (right of the JSON), and a caret-state readout under the editor.
+      </p>
+    </details>
+    <div id="app"></div>
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

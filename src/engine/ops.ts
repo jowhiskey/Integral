@@ -23,21 +23,23 @@ import {
   entryPath,
   hasSlot,
   isRowNode,
+  isTokenNode,
   nodeAt,
   rowArgs,
+  sameCaret,
   setSlot,
   slotValue,
   slotsOf,
+  tokenText,
   type Caret,
   type Path,
   type SlotName,
 } from './caret.js';
 import { EngineError } from './errors.js';
-import { NAV_PROFILES, resolveMove, type NavDir } from './nav.js';
+import { NAV_PROFILES, entryStation, rowEndStation, resolveMove, type NavDir } from './nav.js';
 
 /** Where an op acts — always an explicit path, never a policy decision.
  *
- *  Arc-session-3 additions (insert-only placements; deleteAt rejects them):
  *  `fill` targets a NULL args cell (the operand-expected position a typed
  *  operator leaves behind — filling replaces the null in place, one op);
  *  `replaceRoot` / `replaceSlot` / `replaceCell` target an OCCUPIED root /
@@ -54,18 +56,21 @@ export type Position =
   | { readonly at: 'replaceSlot'; readonly path: Path; readonly slot: SlotName }
   | { readonly at: 'replaceCell'; readonly path: Path; readonly index: number };
 
-/** The occupied-replace placements (swap replaces a whole re-folded row
+/** The occupied-replace placements (typing relocations swap a whole subrow
  *  subtree at one of these, reusing the replace mechanics). */
 export type ReplacePosition =
   | { readonly at: 'replaceRoot' }
   | { readonly at: 'replaceSlot'; readonly path: Path; readonly slot: SlotName }
   | { readonly at: 'replaceCell'; readonly path: Path; readonly index: number };
 
-/** Place the given node at a position: fill the empty root slot, fill an
- *  empty fixed slot, or splice into an args row at an index. */
+/** Insert data: the node to place. `node` is null ONLY for the `row` position
+ *  — the null-cell splice (rework session 2a): a typed glyph extends its
+ *  same-op row by growing a separator slot there, the null cell being the
+ *  glyph's pending operand (leading/interior/trailing all legal, rendered
+ *  bare per the session-1 T7 split). Every other position requires a node. */
 export interface InsertOp {
   readonly op: 'insert';
-  readonly node: NodeJson;
+  readonly node: NodeJson | null;
   readonly at: Position;
 }
 
@@ -92,37 +97,45 @@ export interface MoveOp {
 }
 
 /**
- * Swap an operator mid-row (arc session 4): replace the subtree at `at` with
- * `node` (the re-folded maximal row), landing the caret at `to` — the changed
- * operator's junction in the new shape (a row seam, or the natural dive for
- * frac/pow swaps). The op is pure data: policy computes the restructuring,
- * the reducer is its executor. Reuses the replace placements' mechanics and
- * their occupancy errors; the relocation is the op's own defined rule (the
- * policy never corrects placement with moveCaret).
+ * Place a node at a position with an EXPLICIT result caret (rework session
+ * 2a; the mechanical successor of the swap op). The transform is the insert/
+ * insert-position semantics (root/slot/row/fill/replace*, occupancy errors
+ * included); the relocation is the op's own `to` — validated like every
+ * caret. The typing policy computes both the node and where the caret lands
+ * ("directly after the inserted token"), so one typed token = one op = one
+ * log entry with exact placement.
  */
-export interface SwapOp {
-  readonly op: 'swap';
-  /** The restructured replacement subtree (the whole maximal row node). */
-  readonly node: NodeJson;
-  /** Replace placement for the swapped-out subtree (root/slot/cell). */
-  readonly at: ReplacePosition;
-  /** Caret after the swap; validated against the transformed tree. */
+export interface PlaceOp {
+  readonly op: 'place';
+  /** Null is legal only for the `row` position (the null-cell splice with
+   *  an explicit result caret — the guard in insertInto enforces it). */
+  readonly node: NodeJson | null;
+  readonly at: Position;
+  /** Caret after the op; validated against the transformed tree. */
   readonly to: Caret;
 }
 
 /** The op vocabulary — plain data values (serializable, so op logs can be
  *  persisted, replayed, and property-tested without a DOM). */
-export type Op = InsertOp | DeleteAtOp | MoveCaretOp | MoveOp | SwapOp;
+export type Op = InsertOp | DeleteAtOp | MoveCaretOp | MoveOp | PlaceOp;
 
-/** One applied op. Undo snapshots the full tree + caret state before the op —
- *  mechanics chosen over inverse ops: byte-exact restoration by construction
- *  and no inverse-derivation asymmetries; entries are plain data (hosts may
- *  merge them later, per the spec's op-log note). */
+/** One undo UNIT (rework session 5, U1): an array of ops. Single-op actions
+ *  (structure keys, Backspace, …) carry one-op arrays; a consecutive typing
+ *  run coalesces into one entry carrying the whole run's ops — the run
+ *  boundary is controller-side (the last action kind is tracked there), NOT
+ *  derivable from the log. The snapshots are taken before the unit's FIRST
+ *  op, so undo restores the pre-unit tree and caret byte-exactly and redo
+ *  replays the ops in order (the reducer is pure, so the post-unit state
+ *  reproduces byte-exactly). Mechanics chosen over inverse ops: byte-exact
+ *  restoration by construction, no inverse-derivation asymmetries; entries
+ *  are plain data (hosts may merge them later, per the spec's op-log note).
+ *  Runtime-only editor state, never serialized — an internal shape change,
+ *  not a schema change. */
 export interface LogEntry {
-  readonly op: Op;
-  /** Envelope snapshot taken before the op applied. */
+  readonly ops: readonly Op[];
+  /** Envelope snapshot taken before the unit's first op applied. */
   readonly before: Envelope;
-  /** Caret state before the op applied. */
+  /** Caret state before the unit's first op applied. */
   readonly caretBefore: Caret;
 }
 
@@ -135,6 +148,10 @@ export interface EditingState {
   readonly root: MathNode | null;
   readonly caret: Caret;
   readonly log: readonly LogEntry[];
+  /** Redo list (additive): entries popped off the log by undo. Any NEW
+   *  tree-changing op clears it (applyMutating); pure movement and undo/redo
+   *  themselves keep it. Empty = redo is a defined no-op. */
+  readonly redo: readonly LogEntry[];
   readonly vocabulary?: StaticVocabulary;
 }
 
@@ -143,13 +160,39 @@ const EMPTY_ENVELOPE: Envelope = { v: 1, root: null };
 /**
  * Open an editing session. `envelope` is validated through fromJSON (typed
  * ValidationError on invalid trees); omitted = the empty formula. The initial
- * caret is the defined per-state default: `empty` for an empty formula, the
- * root node otherwise.
+ * caret is the just-typed analog (rework 4a — the old root node-caret is
+ * unreachable-ized per OA-visual-trumps; its documented readings normalize
+ * onto the states that actually paint there):
+ * - an INCOMPLETE tree pends in its first empty station — the □ slot or the
+ *   pending null cell (the natural continue);
+ * - a lone text token / sub / unit rests at its in-token END (the node
+ *   caret's "right edge" reading);
+ * - a complete op row rests at its collapsed row end;
+ * - a complete fenced/fenceless container (group/fn/frac/pow/root) rests at
+ *   its whole-structure after-station (the additive node `side: 'right'`).
  */
 export function initSession(envelope?: unknown, vocabulary?: StaticVocabulary): EditingState {
   const root = fromJSON(envelope ?? EMPTY_ENVELOPE, vocabulary);
-  const caret: Caret = root === null ? { kind: 'empty' } : { kind: 'node', path: [] };
-  return { root, caret, log: [], vocabulary };
+  if (root === null) return { root, caret: { kind: 'empty' }, log: [], redo: [], vocabulary };
+  const env = toJSON(root);
+  const pend = firstEmpty(env.root as NodeJson);
+  if (pend !== null) {
+    return {
+      root,
+      caret: 'slot' in pend ? { kind: 'slot', path: [], slot: pend.slot } : { kind: 'row', path: [], index: pend.index },
+      log: [],
+      redo: [],
+      vocabulary,
+    };
+  }
+  const t = (env.root as NodeJson).type;
+  const caret: Caret =
+    t === 'group' || t === 'fn' || t === 'frac' || t === 'pow' || t === 'root'
+      ? { kind: 'node', path: [], side: 'right' }
+      : t === 'op'
+        ? (rowEndStation(env, [], 'right', NAV_PROFILES) ?? { kind: 'node', path: [] })
+        : (entryStation(env, [], 'right', NAV_PROFILES) ?? { kind: 'node', path: [] });
+  return { root, caret, log: [], redo: [], vocabulary };
 }
 
 /** The session's current tree envelope (what the host persists). */
@@ -166,34 +209,97 @@ export function caretResolves(root: MathNode | null, caret: Caret): boolean {
 
 // ——— Reducer ———
 
-/** Pure reducer: apply one op. Never mutates the given state; on error the
- *  state is unchanged and nothing is logged. Position/address mistakes throw
- *  EngineError; contract violations (invalid inserted node, arity/budget
- *  overruns) propagate fromJSON's ValidationError / ValidationLimitError. */
-export function applyOp(state: EditingState, op: Op): EditingState {
-  switch (op.op) {
-    case 'insert':
-      return applyMutating(state, op, insertInto);
-    case 'deleteAt':
-      return applyMutating(state, op, deleteAtFrom);
-    case 'moveCaret':
-      return applyMoveCaret(state, op);
-    case 'move':
-      return applyMove(state, op);
-    case 'swap':
-      // Replace mechanics reused: occupancy errors, strict replace semantics,
-      // the fromJSON gate — the only op-owned extra is the junction caret.
-      return applyMutating(state, op, swapInto);
-    default:
-      throw new EngineError('unknown-op', `applyOp: unknown op ${JSON.stringify((op as { op: unknown }).op)}`);
+/** Options for applying ops (rework session 5, U1). */
+export interface ApplyOpts {
+  /** Typing-run coalescing: when true and the log is non-empty, the unit
+   *  EXTENDS the last entry instead of starting a new one — the entry keeps
+   *  its pre-run snapshots (`before` / `caretBefore`) and appends the ops to
+   *  `ops`. The caller (the controller) tracks the last action kind and only
+   *  sets this for typing-class actions; run boundaries are not derivable
+   *  from the op log. Any tree-changing op still clears the redo list (U3). */
+  readonly extendOpenUnit?: boolean;
+}
+
+/** Pure reducer: apply one op as its own undo unit. Never mutates the given
+ *  state; on error the state is unchanged and nothing is logged.
+ *  Position/address mistakes throw EngineError; contract violations (invalid
+ *  inserted node, arity/budget overruns) propagate fromJSON's ValidationError
+ *  / ValidationLimitError. */
+export function applyOp(state: EditingState, op: Op, opts: ApplyOpts = {}): EditingState {
+  return applyOps(state, [op], opts);
+}
+
+/** Apply a list of ops as ONE undo unit: the ops replay in order through the
+ *  pure reducer (each op validated/relocated against the intermediate state),
+ *  and the log gains a single entry carrying the whole op array plus the
+ *  pre-unit snapshots. A unit of only `move` ops is pure movement — nothing
+ *  is logged. `moveCaret` units log but keep the redo list (pinned semantics);
+ *  tree-changing ops (insert/deleteAt/place) clear it. On error the state is
+ *  unchanged and nothing is logged. With `extendOpenUnit` (U1) the unit merges
+ *  into the last log entry instead of appending a new one. */
+export function applyOps(state: EditingState, ops: readonly Op[], opts: ApplyOpts = {}): EditingState {
+  if (ops.length === 0) return state;
+  const before = toJSON(state.root);
+  const caretBefore = state.caret;
+  let cur: EditingState = state;
+  let mutating = false;
+  let clearsRedo = false;
+  for (const op of ops) {
+    switch (op.op) {
+      case 'move':
+        cur = applyMove(cur, op);
+        break;
+      case 'moveCaret':
+        cur = applyMoveCaretRaw(cur, op);
+        mutating = true; // logged, but keeps the redo list (pinned semantics)
+        break;
+      case 'insert':
+        cur = applyMutatingRaw(cur, op, insertInto);
+        mutating = true;
+        clearsRedo = true;
+        break;
+      case 'deleteAt':
+        cur = applyMutatingRaw(cur, op, deleteAtFrom);
+        mutating = true;
+        clearsRedo = true;
+        break;
+      case 'place':
+        // Insert-position transform with the op's own explicit result caret.
+        cur = applyMutatingRaw(cur, op, placeInto);
+        mutating = true;
+        clearsRedo = true;
+        break;
+      default:
+        throw new EngineError('unknown-op', `applyOps: unknown op ${JSON.stringify((op as { op: unknown }).op)}`);
+    }
   }
+  if (!mutating) return cur; // pure movement: never logged
+  if (opts.extendOpenUnit === true && state.log.length > 0) {
+    const last = state.log[state.log.length - 1];
+    const merged: LogEntry = {
+      ops: [...last.ops, ...ops],
+      before: last.before,
+      caretBefore: last.caretBefore,
+    };
+    return {
+      root: cur.root,
+      caret: cur.caret,
+      log: [...state.log.slice(0, -1), merged],
+      redo: clearsRedo ? [] : state.redo,
+      vocabulary: state.vocabulary,
+    };
+  }
+  const entry: LogEntry = { ops: [...ops], before, caretBefore };
+  return {
+    root: cur.root,
+    caret: cur.caret,
+    log: [...state.log, entry],
+    redo: clearsRedo ? [] : state.redo,
+    vocabulary: state.vocabulary,
+  };
 }
 
 const NAV_DIRS: readonly NavDir[] = ['left', 'right', 'up', 'down'];
-
-function sameCaret(a: Caret, b: Caret): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
-}
 
 /** Relative movement: resolved against the nav profiles; the tree is never
  *  touched, the log is never appended. Unresolvable/uninteresting targets
@@ -210,11 +316,12 @@ function applyMove(state: EditingState, op: MoveOp): EditingState {
     // unreachable: the resolver only addresses real positions
     throw new Error('engine invariant: movement produced an unresolvable caret');
   }
-  return { root: state.root, caret: target, log: state.log, vocabulary: state.vocabulary };
+  return { root: state.root, caret: target, log: state.log, redo: state.redo, vocabulary: state.vocabulary };
 }
 
-/** Walk back exactly one op: restore the tree and caret snapshotted before it.
- *  Undo on an empty log is a defined no-op — returns the state as-is. */
+/** Walk back exactly one undo UNIT: restore the tree and caret snapshotted
+ *  before the unit's first op. Undo on an empty log is a defined no-op —
+ *  returns the state as-is (U4). */
 export function undo(state: EditingState): EditingState {
   if (state.log.length === 0) return state;
   const entry = state.log[state.log.length - 1];
@@ -222,6 +329,7 @@ export function undo(state: EditingState): EditingState {
     root: fromJSON(entry.before, state.vocabulary),
     caret: entry.caretBefore,
     log: state.log.slice(0, -1),
+    redo: [...state.redo, entry],
     vocabulary: state.vocabulary,
   };
 }
@@ -230,12 +338,35 @@ export function undo(state: EditingState): EditingState {
  *  structuredClone's type declaration lives in DOM libs, which this subpath
  *  must not pull in. Envelopes are JSON by definition, so nothing survives a
  *  JSON clone that shouldn't. */
+/** Step the redo list forward one unit: replay the undone entry's ops onto
+ *  its own before-snapshot. The reducer is pure and deterministic, so the
+ *  replay reproduces the post-unit state byte-exactly (tree, caret, and the
+ *  re-logged entry) with zero inverse-op derivation. Redo on an empty list is
+ *  a defined no-op — returns the state as-is. The remaining redo entries
+ *  survive (only a NEW op clears the list, in applyOps). */
+
+export function redo(state: EditingState): EditingState {
+  if (state.redo.length === 0) return state;
+  const entry = state.redo[state.redo.length - 1];
+  const redoRest = state.redo.slice(0, -1);
+  const base: EditingState = {
+    root: fromJSON(entry.before, state.vocabulary),
+    caret: entry.caretBefore,
+    log: state.log,
+    redo: redoRest,
+    vocabulary: state.vocabulary,
+  };
+  const applied = applyOps(base, entry.ops);
+  return { ...applied, redo: redoRest };
+}
+
 const cloneEnvelope = (env: Envelope): Envelope => JSON.parse(JSON.stringify(env)) as Envelope;
 
-/** One tree-mutating op: serialize + clone, transform the clone at the JSON
- *  level, rebuild through fromJSON (the contract gate), relocate the caret
- *  by the op's defined rule. */
-function applyMutating<T extends InsertOp | DeleteAtOp | SwapOp>(
+/** One tree-mutating op, log-neutral: serialize + clone, transform the clone
+ *  at the JSON level, rebuild through fromJSON (the contract gate), relocate
+ *  the caret by the op's defined rule. The caller (applyOps) owns the log and
+ *  redo-list handling — one call = no log entry by itself. */
+function applyMutatingRaw<T extends InsertOp | DeleteAtOp | PlaceOp>(
   state: EditingState,
   op: T,
   transform: (env: Envelope, op: T) => void,
@@ -244,31 +375,31 @@ function applyMutating<T extends InsertOp | DeleteAtOp | SwapOp>(
   const env = cloneEnvelope(before);
   transform(env, op);
   const root = fromJSON(env, state.vocabulary);
-  const caret = relocateCaret(state.caret, op, env);
+  const caret = relocateCaret(state.caret, op, env, before);
   if (!caretResolvesIn(env, caret)) {
     // unreachable: the relocation rules cover every removal/shift case
     throw new Error('engine invariant: caret normalization failed');
   }
-  return { root, caret, log: [...state.log, { op, before, caretBefore: state.caret }], vocabulary: state.vocabulary };
+  return { root, caret, log: state.log, redo: state.redo, vocabulary: state.vocabulary };
 }
 
-function applyMoveCaret(state: EditingState, op: MoveCaretOp): EditingState {
+/** moveCaret, log-neutral: validate the target against the tree and set the
+ *  caret; the caller logs the unit. */
+function applyMoveCaretRaw(state: EditingState, op: MoveCaretOp): EditingState {
   const before = toJSON(state.root);
   if (!caretResolvesIn(before, op.to)) {
     throw new EngineError('caret-invalid', `moveCaret: caret does not resolve in this tree (${JSON.stringify(op.to)})`);
   }
-  return {
-    root: state.root,
-    caret: op.to,
-    log: [...state.log, { op, before, caretBefore: state.caret }],
-    vocabulary: state.vocabulary,
-  };
+  return { root: state.root, caret: op.to, log: state.log, redo: state.redo, vocabulary: state.vocabulary };
 }
 
 // ——— Op transforms (JSON level; the envelope is the reducer's working copy) ———
 
 function insertInto(env: Envelope, op: InsertOp): void {
   const at = op.at;
+  if (op.node === null && at.at !== 'row') {
+    throw new EngineError('unknown-op', `insert: a null cell splice is row-position-only (got '${at.at}')`);
+  }
   switch (at.at) {
     case 'root': {
       if (env.root !== null) {
@@ -376,9 +507,11 @@ function deleteAtFrom(env: Envelope, op: DeleteAtOp): void {
   }
 }
 
-/** The swap transform: the replace placements' own mechanics, nothing more —
- *  the policy handed the reducer a finished replacement subtree. */
-function swapInto(env: Envelope, op: SwapOp): void {
+/** The place transform: the insert-position mechanics (incl. occupancy
+ *  errors) — the typing policy hands the reducer a finished node. A null
+ *  node is legal only for the row position (the null-cell splice with an
+ *  explicit result caret). */
+function placeInto(env: Envelope, op: PlaceOp): void {
   insertInto(env, { op: 'insert', node: op.node, at: op.at });
 }
 
@@ -454,6 +587,29 @@ function diveCaret(inserted: NodeJson, path: Path): Caret {
     : { kind: 'row', path, index: empty.index };
 }
 
+/** A token caret sitting exactly on a replaced num/sym keeps its in-token
+ *  offset, clamped to the new length — a shrink (backspace peel) keeps the
+ *  offset, a grow (digit merge / letter glue) advances the caret one position
+ *  past the inserted text. Returns null when the rule does not apply (the
+ *  replace relocates by the dive rule instead). */
+function preservedTokenCaret(
+  caretBefore: Caret,
+  replacedPath: Path,
+  op: InsertOp,
+  before: Envelope,
+): Caret | null {
+  if (caretBefore.kind !== 'token' || !samePath(caretBefore.path, replacedPath)) return null;
+  if (op.node !== null && !isTokenNode(op.node)) return null;
+  const beforeNode = nodeAt(before, caretBefore.path);
+  if (beforeNode === null || !isTokenNode(beforeNode)) return null;
+  const newLen = op.node === null ? 0 : tokenText(op.node).length;
+  const index =
+    newLen > tokenText(beforeNode).length
+      ? Math.min(caretBefore.index + 1, newLen)
+      : Math.min(caretBefore.index, newLen);
+  return { kind: 'token', path: replacedPath, index };
+}
+
 /**
  * After an op the caret is always in a defined state. Rules:
  * - insert at root          → the new node (root path).
@@ -466,10 +622,9 @@ function diveCaret(inserted: NodeJson, path: Path): Caret {
  * - row splice              → coordinates in the spliced row's address space
  *                             shift with the splice (adjustRowCaret); nothing
  *                             else moves.
- * - swap (arc session 4)    → the changed operator's junction in the
- *                             re-folded row: a row seam on the new binding
- *                             for operator swaps, the natural dive for ÷/^
- *                             (structure tokens carry their own empty slot).
+ * - null-cell splice        → the row-plug shift above; the caret plays
+ *                             through adjustRowCaret like any splice (a
+ *                             typed glyph's seam sits directly after it).
  * - fill (null args cell)   → the caret that was in the filled cell, or on
  *                             the row's owner, moves onto the new node
  *                             (owner hop mirrors the slot rule); every
@@ -480,6 +635,9 @@ function diveCaret(inserted: NodeJson, path: Path): Caret {
  *                             or onto the inserted node when it has none.
  *                             Carets outside the replaced content survive
  *                             unchanged — a replace never shifts coordinates.
+ * - place (rework 2a)       → the op's own explicit `to` (validated); the
+ *                             typing policy computes it ("directly after
+ *                             the inserted token").
  * - deleteAt at root        → the empty-formula caret.
  * - deleteAt clearing a slot → the now-empty slot; only a caret whose address
  *                             was inside the removed subtree falls back to it,
@@ -491,11 +649,15 @@ function diveCaret(inserted: NodeJson, path: Path): Caret {
  * The final validity check happens in applyMutating — a relocation rule that
  * produced an unresolvable caret is an engine bug, not an accepted state.
  */
-function relocateCaret(caretBefore: Caret, op: InsertOp | DeleteAtOp | SwapOp, env: Envelope): Caret {
-  if (op.op === 'swap') {
-    // The swap's own relocation: the junction caret the policy derived from
-    // the re-folded shape (row seam on the changed operator, or the natural
-    // dive for divide/pow). Validated like every relocation below.
+function relocateCaret(
+  caretBefore: Caret,
+  op: InsertOp | DeleteAtOp | PlaceOp,
+  env: Envelope,
+  before: Envelope,
+): Caret {
+  if (op.op === 'place') {
+    // The place op's own relocation: the caret the typing policy derived.
+    // Validated like every relocation below.
     return op.to;
   }
   const at = op.at;
@@ -529,21 +691,27 @@ function relocateCaret(caretBefore: Caret, op: InsertOp | DeleteAtOp | SwapOp, e
       if (op.op !== 'insert') {
         throw new EngineError('unknown-op', `deleteAt: position '${at.at}' is insert-only`);
       }
-      return diveCaret(op.node, []);
+      return preservedTokenCaret(caretBefore, [], op, before) ?? diveCaret(op.node!, []);
     }
     case 'replaceSlot':
       if (op.op !== 'insert') {
         throw new EngineError('unknown-op', `deleteAt: position '${at.at}' is insert-only`);
       }
-      return enteredThrough(caretBefore, at.path, at.slot)
-        ? diveCaret(op.node, [...at.path, at.slot])
-        : caretBefore;
+      return (
+        preservedTokenCaret(caretBefore, [...at.path, at.slot], op, before) ??
+        (enteredThrough(caretBefore, at.path, at.slot)
+          ? diveCaret(op.node!, [...at.path, at.slot])
+          : caretBefore)
+      );
     case 'replaceCell':
       if (op.op !== 'insert') {
         throw new EngineError('unknown-op', `deleteAt: position '${at.at}' is insert-only`);
       }
-      return enteredThroughCell(caretBefore, at.path, at.index)
-        ? diveCaret(op.node, [...at.path, at.index])
-        : caretBefore;
+      return (
+        preservedTokenCaret(caretBefore, [...at.path, at.index], op, before) ??
+        (enteredThroughCell(caretBefore, at.path, at.index)
+          ? diveCaret(op.node!, [...at.path, at.index])
+          : caretBefore)
+      );
   }
 }

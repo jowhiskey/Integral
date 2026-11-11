@@ -1,0 +1,229 @@
+<script lang="ts">
+  // Demo case browser (DOM-layer arc session 5 + the demo-refinement interlude):
+  // the visual-test catalog from ./cases.ts rendered as a clickable case list
+  // grouped by category. Clicking a case entry loads its seed AST + seed caret
+  // into the single case editor; clicking the active case again resets to the
+  // seed. Cases with a `keys` instruction (typed-from-empty) get a button that
+  // types the instruction through the real keyboard path.
+  //
+  // The testing area around the case editor carries three live readouts (no
+  // devtools needed): the stored AST envelope as pretty JSON, the generated
+  // MathML as pretty source (right of the JSON panel), and the caret state
+  // (kind + position path) under the editor. All three refresh from the
+  // controller's onStateChange, which fires on every op AND every caret
+  // placement (keystrokes, clicks, arrows, case loads).
+  // Dev-only — not part of the published package.
+  import { onMount } from 'svelte';
+  import { toMathML } from '../src/ast/index.js';
+  import { EditorController, IntegralEditor } from '../src/editor/index.js';
+  import { caretResolvesIn, envelopeOf, type Caret, type EditingState } from '../src/engine/index.js';
+  import { CATEGORIES, CASES, type CatalogCase } from './cases.js';
+  import { attachImeLogger, type ImeLogLine } from './ime-logger.js';
+
+  let caseContainer: HTMLDivElement | undefined = $state();
+  let controller: EditorController | null = null;
+  let activeId: string | null = $state(null);
+  let caretText = $state('—');
+  let jsonText = $state('—');
+  let mathmlText = $state('—');
+  /** Session-5 rider readout: the last classified typing-op rejection
+   *  (ValidationError from the reducer's fromJSON gate) — a no-op on the tree. */
+  let rejectionText = $state('—');
+  /** The IME / dead-key event log (standing debug tool): latest line first,
+   *  bounded so the pane stays readable. */
+  let imeLines: readonly ImeLogLine[] = $state([]);
+  const MAX_IME_LINES = 80;
+
+  const activeCase = $derived(CASES.find((c) => c.id === activeId) ?? null);
+
+  /** Citable caret readout: kind + position path (+ slot / row index / token
+   *  offset, + the additive boundary flag when armed). */
+  function formatCaret(c: Caret): string {
+    const path = 'path' in c ? JSON.stringify(c.path) : '[]';
+    const at =
+      c.kind === 'slot' ? ` .${c.slot}`
+      : c.kind === 'row' ? ` #${c.index}`
+      : c.kind === 'token' ? ` @${c.index}`
+      : '';
+    return `${c.kind} ${path}${at}${c.boundary === true ? ' boundary' : ''}`;
+  }
+
+  /** Pretty-print the generated MathML string: one tag per line, indented by
+   *  depth (text content on its own line). Demo-only source view. */
+  function prettyMathml(src: string): string {
+    const tokens = src.match(/<[^>]*>|[^<]+/g) ?? [];
+    let depth = 0;
+    const lines: string[] = [];
+    for (const t of tokens) {
+      if (t.startsWith('</')) {
+        depth = Math.max(0, depth - 1);
+        lines.push(`${'  '.repeat(depth)}${t}`);
+      } else if (t.startsWith('<')) {
+        lines.push(`${'  '.repeat(depth)}${t}`);
+        if (!t.endsWith('/>')) depth += 1;
+      } else if (t.trim() !== '') {
+        lines.push(`${'  '.repeat(depth)}${t.trim()}`);
+      }
+    }
+    return lines.join('\n');
+  }
+
+  /** Live readouts from the current engine state: pretty AST JSON, pretty
+   *  MathML source, caret state. Wired to onStateChange (fires on ops and on
+   *  pure caret placement alike). */
+  function refresh(state: EditingState): void {
+    caretText = formatCaret(state.caret);
+    jsonText = JSON.stringify(envelopeOf(state), null, 2);
+    const mathml = toMathML(state.root);
+    mathmlText = mathml === '' ? '(empty formula)' : prettyMathml(mathml);
+    const rej = controller?.getLastRejection() ?? null;
+    rejectionText = rej === null ? '—' : `${rej.name} [${rej.kind}]: ${rej.message}`;
+  }
+
+  function loadCase(c: CatalogCase): void {
+    if (!caseContainer) return;
+    controller?.destroy();
+    caseContainer.replaceChildren();
+    controller = new EditorController(caseContainer, {
+      envelope: c.envelope,
+      onStateChange: refresh,
+    });
+    controller.placeCaret(c.caret); // seed caret applied (validated, never logged)
+    activeId = c.id;
+    caseContainer.focus();
+    refresh(controller.getState());
+  }
+
+  /** Type the case's instruction through the real DOM keydown path. */
+  function typeKeys(c: CatalogCase): void {
+    if (!caseContainer || c.keys === undefined) return;
+    caseContainer.focus();
+    for (const ch of c.keys) {
+      caseContainer.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true, cancelable: true }));
+    }
+  }
+
+  onMount(() => {
+    if (!caseContainer) return;
+    controller = new EditorController(caseContainer, {
+      envelope: { v: 1, root: null },
+      onStateChange: refresh,
+    });
+    refresh(controller.getState());
+    // S-106 demo default (session 5): blur-commit ends the editing session
+    // and the undo history dies with it — resume the committed envelope in a
+    // fresh session (discard). The controller's own blur handler (commit)
+    // runs idempotently alongside.
+    caseContainer.addEventListener('blur', () => {
+      const ctl = controller;
+      if (!caseContainer || !ctl) return;
+      const committed = ctl.commit();
+      const caret = ctl.getState().caret; // blur must not move the caret
+      ctl.destroy();
+      caseContainer.replaceChildren();
+      controller = new EditorController(caseContainer, { envelope: committed, onStateChange: refresh });
+      if (caretResolvesIn(committed, caret)) controller.placeCaret(caret); // resume where the caret was
+      refresh(controller.getState());
+    });
+    // The standing IME / dead-key event logger (capture-phase, passive —
+    // pure observation): attach to the case editor, latest first.
+    attachImeLogger(caseContainer, 'case', (line) => {
+      imeLines = [line, ...imeLines].slice(0, MAX_IME_LINES);
+    });
+  });
+
+  /** Collapse the raw lines into the pane's text (seq + surface + line). */
+  const imeText = $derived(
+    imeLines.length === 0
+      ? '(no events yet — focus an editor and type; dead-key compositions land here)'
+      : imeLines.map((l) => `${String(l.seq).padStart(3, ' ')} [${l.surface}] ${l.line}`).join('\n'),
+  );
+
+  function clearImeLog(): void {
+    imeLines = [];
+  }
+
+  // test/host accessors (the mounted component exposes these)
+  export function getActiveCaseId(): string | null {
+    return activeId;
+  }
+  export function getController(): EditorController | null {
+    return controller;
+  }
+</script>
+
+<div class="browser">
+  <div class="browser-head">
+    <h2>Case browser — active case: {activeId ?? 'none yet'}</h2>
+    <details class="hint">
+      <summary>how to use</summary>
+      <p>
+        Click a case to load its seed (formula + starting caret) into the case editor; click the active case again
+        to reset to the seed. Cases with a <code>keys</code> instruction seed the empty formula — use the “type
+        instruction” button (or just type) to run it. The panels right of the editor show the live AST JSON and
+        MathML source; the caret readout sits under the editor.
+      </p>
+    </details>
+  </div>
+  <div class="case-scroll">
+    {#each CATEGORIES as cat}
+      <section class="cat">
+        <h3>{cat.key} — {cat.title}</h3>
+        <ul>
+          {#each CASES.filter((c) => c.category === cat.key) as c}
+            <li>
+              <button type="button" data-case-id={c.id} class:active={c.id === activeId} onclick={() => loadCase(c)}>
+                {c.id} — {c.label}
+              </button>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/each}
+  </div>
+</div>
+
+<div class="stage">
+  <div class="editor-col">
+    <div class="label">case editor — loads the active case’s seed; re-click the active case to reset</div>
+    <div id="case-editor" bind:this={caseContainer} class="integral-editor" tabindex="0" role="textbox" aria-label="case editor"></div>
+    {#if activeCase?.keys !== undefined}
+      <button type="button" data-run-keys onclick={() => activeCase && typeKeys(activeCase)}>
+        type instruction `{activeCase.keys}`
+      </button>
+    {/if}
+    <div class="vocab-ops">
+      <span class="label">T9 insertion vocabulary (the palette/suggestion surface):</span>
+      <!-- 4b-1 (I-20/I-21): the vocabulary buttons keep the EDITOR focused —
+           a button click moves focus to the button and every keydown would
+           die at the controller's focus gate ("no key moves the caret"). -->
+      <button type="button" data-insert-root onclick={() => { controller?.insertRoot(); caseContainer?.focus(); }}>√ insert</button>
+      <button type="button" data-insert-mroot onclick={() => { controller?.insertRoot({ mroot: true }); caseContainer?.focus(); }}>ⁿ√ insert</button>
+      <button type="button" data-insert-sub onclick={() => { controller?.insertSubscript(); caseContainer?.focus(); }}>x₍₎ insert</button>
+    </div>
+    <div class="caret-readout" data-caret>caret {caretText}</div>
+    <div class="rejection-readout" data-rejection>rejection {rejectionText}</div>
+    {#if activeCase}
+      <div class="note">
+        <strong>{activeCase.id}</strong> — {activeCase.stress}
+        <span class="rules">rules: {activeCase.rules.join(', ')}</span>
+      </div>
+    {/if}
+  </div>
+  <div class="panel">
+    <div class="label">stored AST envelope — pretty JSON (live)</div>
+    <pre class="src" data-json>{jsonText}</pre>
+  </div>
+  <div class="panel">
+    <div class="label">generated MathML — pretty source (live)</div>
+    <pre class="src" data-mathml>{mathmlText}</pre>
+  </div>
+</div>
+
+<div class="ime-log">
+  <div class="label">
+    IME / dead-key event log — the standing IME-debug tool (capture-phase, passive, latest first)
+    <button type="button" data-ime-clear onclick={clearImeLog}>clear</button>
+  </div>
+  <pre class="src" data-ime-lines>{imeText}</pre>
+</div>
