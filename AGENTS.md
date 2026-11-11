@@ -12,7 +12,7 @@ docs/context/   # editor-spec.md — the frozen AST spec (read before touching n
 ```
 
 ## Hard rules
-1. **Never edit `AGENTS.md` or `docs/context/*`.** These files are generated from the spec/knowledge base and synced from outside. Note warranted doc changes in your session report.
+1. **Never edit `AGENTS.md` or `docs/context/*`.** These files are generated from the spec/knowledge base and synced from outside. Note warranted doc changes in your session report. **Exception: `RULES.md` (repo root) is yours** — the agent-owned live rule file; update it per the protocol in its header (behavior rulings land there with the implementing commit).
 2. **Branching is tiered (2026-11-06).** Single-session, complete work goes **directly on `develop`** (trunk: no feature branch, no PR — commit only after the local suite is green, push only on the owner's explicit go). Multi-session or risky work goes on `feature/<name>` branches off `develop`, merged via one PR at completion. `main` is release-only; never commit to `main`.
 3. **The AST JSON format and the vocabulary interface are versioned contracts — additive-only.** `fromJSON` must validate structural invariants.
 4. **No plain-text input/REPL features here** — text parsing belongs to host applications; Integral is the live WYSIWYG editor only.
@@ -35,7 +35,7 @@ CI exists since 2026-11-06: `.github/workflows/ci.yml`, PR-triggered plus a nigh
 | Anything AST-related (nodes, JSON, vocabulary, walker) | `docs/context/editor-spec.md` |
 | Editing engine (ops, caret, movement, typing policy, undo/redo, backspace) | `docs/context/editor-spec.md` |
 | Editor DOM layer (MathML rendering, caret overlay, click placement, keyboard incl. backspace) | `docs/context/editor-spec.md` |
-| Editing behavior contract (typing, navigation, clicks, deletion, undo/redo, special keys) | `docs/context/interaction.md` |
+| Editing behavior (typing, navigation, clicks, deletion, undo/redo, special keys) | `RULES.md` first (repo root — the live rule file; it supersedes the mirrors during the iteration phase and you may edit it), then `docs/context/interaction.md` |
 
 ## History & docs feedback
 - **Recent history:** `git log` — docs commits carry structured session records (what landed, why, impact, friction). Your session brief carries the current state; this file and `docs/context/*` carry the stable reference.
