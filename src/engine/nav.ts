@@ -945,6 +945,19 @@ export function resolveMove(
           // zone to its right rests at the R-flank station, else the climb.
           const scriptFlank = cellFlank(env, caret.path, 'right');
           if (scriptFlank !== null) return scriptFlank;
+          // OA-sub-right-exit (rec-mwesfxub-7, 2026-11-13 — closes the N-12
+          // trap): at a row border with no glyph zone (the sub is the row's
+          // last cell — implicit rows render no glyphs) the exit rests at the
+          // row-end seam BEHIND the sub (the D5 highlight's seat), never a
+          // clamp back onto the script end (which the climb's twin collapse
+          // would produce — a no-op).
+          const subRef = refOfPath(caret.path);
+          if (subRef.at === 'cell') {
+            const subRow = nodeAt(env, subRef.path);
+            if (subRow !== null && isRowNode(subRow) && subRef.index === rowArgs(subRow).length - 1) {
+              return { kind: 'row', path: subRef.path, index: subRef.index + 1 };
+            }
+          }
           return climb(env, caret.path, 'right', registry);
         }
         return climb(env, caret.path, dir, registry);

@@ -81,12 +81,16 @@
 //  - Ctrl+BS at a left-adjacent STRUCTURE/fenced container/fence: the D5
 //    highlight chain (not a whole delete) — the structure-confirm stays
 //    two-step.
-//  - forward Delete at a □ slot / facing structures/fenced containers/nested
-//    rows / at dangling glyphs / at pending cells: silent no-op.
+//  - forward Delete at a □ slot / facing fenced containers/nested rows / at
+//    dangling glyphs / at pending cells: silent no-op. Facing a FENCELESS 2D
+//    structure it arms the D5 highlight instead (OA-del-highlight,
+//    rec-mwe0xrj1-0, 2026-11-13 — supersedes the session-3 parked no-op).
 //  - a `0.|` whose 0 deletes empties the in-progress number (a bare dot is
 //    unrepresentable) — the whole num node goes.
 //  - a sub's cross-label boundaries: BS at the script's offset 0 with script
-//    content is a silent no-op (labels are separate text channels).
+//    content is a silent no-op (labels are separate text channels); shrinking
+//    a label to empty is legal (OA-sub-label-empty, rec-mwesfxub-7) — the next
+//    BS at the empty label takes the S-102 unwrap.
 
 import type { Envelope, NodeJson } from '../ast/json.js';
 
@@ -123,7 +127,7 @@ import {
   unitOf,
   withRefSet,
 } from './internal.js';
-import { edgeStation, entryStation } from './nav.js';
+import { edgeStation, entryStation, NAV_PROFILES, rowEndStation } from './nav.js';
 
 import { applyOps, envelopeOf, type EditingState, type Op, type Position } from './ops.js';
 
@@ -400,7 +404,10 @@ function subLabelChar(env: Envelope, node: NodeJson, path: Path, label: SubLabel
   const drop = index - 1;
   const next = text.slice(0, drop) + text.slice(drop + 1);
   const ref = refOfPath(path);
-  if (!subLabelShapeOk(label, next)) {
+  // OA-sub-label-empty (rec-mwesfxub-7, 2026-11-13): shrinking a label to the
+  // EMPTY string is legal (the incomplete state — the script renders □ per
+  // OA-sub-placeholder); only a shape-breaking NON-empty remainder no-ops.
+  if (next !== '' && !subLabelShapeOk(label, next)) {
     return noopDecision({ kind: 'token', path, index, label }); // a shape-breaking shrink: silent no-op
   }
   const to: Caret = { kind: 'token', path, index: drop, label };
@@ -849,7 +856,16 @@ function glyphSplice(env: Envelope, rowPath: Path, nullIndex: number, station: C
     // slot (the pre-fix landing dived into the fraction's numerator).
     const contentPath = pathOfRef(ref);
     const flank = ref.at === 'root' || ref.at === 'slot' ? edgeStation(after, contentPath, facing) : null;
-    const to = flank ?? spliceStation(after, ref, facing);
+    // OA-promote-row-end (rec-mwe11hta-1, 2026-11-13): a promoted ROW payload at
+    // a bare root/slot lands at its own row-border station (rowEndStation — the
+    // seam behind a trailing structure), never dived into the trailing
+    // structure's interior (the radicand dive was the bug: the caret must rest
+    // at `row [] #2`, where the next BS fires the D5 highlight).
+    const to =
+      flank ??
+      (ref.at !== 'cell' && isRowNode(cells[0])
+        ? rowEndStation(after, contentPath, facing, NAV_PROFILES) ?? spliceStation(after, ref, facing)
+        : spliceStation(after, ref, facing));
     return { kind: 'glyph', ops: [{ op: 'place', node: cells[0], at: replacePosOfRef(ref), to }], caret: to };
   }
   const to: Caret = { kind: 'row', path: rowPath, index: Math.min(nullIndex, cells.length) };
@@ -1351,6 +1367,8 @@ export function backspace(state: EditingState, opts: BackspaceOpts = {}): Editin
 
 export interface DeleteOpts {
   readonly ctrl?: boolean;
+  /** The armed D5 highlight target (the confirming Del deletes it with content). */
+  readonly highlighted?: Path | null;
   readonly units?: ReadonlySet<string>;
 }
 
@@ -1362,15 +1380,33 @@ export type DeleteKind =
   | 'glyph' // OA-del-glyph: the binding operator glyph removed (Del at an operator gap)
   | 'close-fence' // OA-fence-flank: the movable close glyph removed (Del at a fenced content end)
   | 'open-fence' // OA-fence-flank: the opening fence removed (Del at a group's left flank)
-  | 'container-death'; // an empty fenced container dies whole (D9's reading via the fence-flank Del)
+  | 'container-death' // an empty fenced container dies whole (D9's reading via the fence-flank Del)
+  | 'highlight' // OA-del-highlight: the D5 forward mirror's first press (transient, nothing logs)
+  | 'delete-structure'; // OA-del-highlight confirm: the highlighted structure deletes WITH its content
 
 export interface DeleteDecision {
   readonly kind: DeleteKind;
   readonly ops: readonly Op[];
   readonly caret: Caret;
+  /** The D5 target structure's path (present on highlight + delete-structure). */
+  readonly target?: Path;
 }
 
 const delNoop = (caret: Caret): DeleteDecision => ({ kind: 'noop', ops: [], caret });
+
+/** OA-del-highlight (rec-mwe0xrj1-0, 2026-11-13) — the D5 forward mirror: Del
+ *  at the station immediately BEFORE a fenceless 2D structure (the row seam
+ *  facing it, or its left flank) arms the same transient red highlight BS arms
+ *  from the after-station; the confirming Del (the armed target passed back
+ *  through opts) deletes the structure WITH its content — at an args cell the
+ *  pending null stays (OA-pending-null). Nothing logs on the highlight (U2). */
+function d5GateFwd(env: Envelope, target: Path, station: Caret, ctx: { readonly highlighted?: Path | null }): DeleteDecision {
+  if (ctx.highlighted !== undefined && ctx.highlighted !== null && samePath(ctx.highlighted, target)) {
+    const death = tokenDeath(env, target, station);
+    return { kind: 'delete-structure', ops: death.ops, caret: death.caret, target };
+  }
+  return { kind: 'highlight', ops: [], caret: station, target };
+}
 
 /** Del's whole-token death: the D3-mirror freeing mechanics (identical to BS). */
 function delTokenDeath(env: Envelope, path: Path, caret: Caret): DeleteDecision {
@@ -1414,18 +1450,21 @@ function forwardText(env: Envelope, node: NodeJson, path: Path, keep: string, to
 /**
  * The pure forward-Delete decision — the D1/D3 mirrors (D1: the character
  * right of the caret, caret stays put; D3: everything right within the token,
- * the whole right-adjacent TEXT token at a gap) + D4 on the empty formula.
+ * the whole right-adjacent TEXT token at a gap) + D4 on the empty formula +
+ * the D5 forward mirror (OA-del-highlight, rec-mwe0xrj1-0): Del at the seam or
+ * left flank immediately BEFORE a fenceless 2D structure arms the transient
+ * highlight (kind 'highlight', nothing logs — U2); the confirming Del
+ * (opts.highlighted = the armed target) deletes the structure WITH its content.
  * UNRULED mirrors are NAMED silent no-ops (the D4 rejection pattern): Del at
- * a □ slot, Del facing a fenceless structure / fenced container / nested
- * row, Del at dangling glyphs and pending cells, Del past the rightmost
- * right-adjacent token. A dangling close fence node still dies whole (it is
- * a movable glyph token, C4).
+ * a □ slot, Del facing a fenced container / nested row, Del at dangling
+ * glyphs and pending cells, Del past the rightmost right-adjacent token. A
+ * dangling close fence node still dies whole (it is a movable glyph token, C4).
  */
 export function decideDelete(env: Envelope, caret: Caret, opts: DeleteOpts = {}): DeleteDecision {
   if (!caretResolvesIn(env, caret)) {
     throw new EngineError('caret-invalid', `decideDelete: caret does not resolve (${JSON.stringify(caret)})`);
   }
-  const ctx = { ctrl: opts.ctrl === true, units: opts.units ?? dfltUnits() };
+  const ctx = { ctrl: opts.ctrl === true, highlighted: opts.highlighted, units: opts.units ?? dfltUnits() };
   switch (caret.kind) {
     case 'empty':
       return delNoop(caret); // D4 (S-078)
@@ -1435,7 +1474,9 @@ export function decideDelete(env: Envelope, caret: Caret, opts: DeleteOpts = {})
         if (caret.label === undefined || caret.index >= subLabelText(node, caret.label).length) return delNoop(caret);
         const text = subLabelText(node, caret.label);
         const next = text.slice(0, caret.index) + text.slice(caret.index + 1);
-        if (!subLabelShapeOk(caret.label, next)) return delNoop(caret);
+        // OA-sub-label-empty (rec-mwesfxub-7): the empty shrink is legal (the □
+        // state), only a shape-breaking non-empty remainder no-ops.
+        if (next !== '' && !subLabelShapeOk(caret.label, next)) return delNoop(caret);
         const grown = subWithLabel(node, caret.label, next);
         return { kind: 'char', ops: [{ op: 'place', node: grown, at: replacePosOfRef(refOfPath(caret.path)), to: caret }], caret };
       }
@@ -1481,7 +1522,11 @@ export function decideDelete(env: Envelope, caret: Caret, opts: DeleteOpts = {})
           const kind: DeleteKind = fwd.kind === 'container-death' ? 'container-death' : 'open-fence';
           return { kind, ops: fwd.ops, caret: fwd.caret };
         }
-        return delNoop(caret); // fn head atomic / fenceless structure: named no-op
+        // OA-del-highlight (rec-mwe0xrj1-0): Del at the left flank of a
+        // fenceless 2D structure arms the D5 highlight (the before-side
+        // mirror of BS's after-station); the fn head stays atomic (named no-op).
+        if (isD5Structure(node)) return d5GateFwd(env, caret.path, caret, ctx);
+        return delNoop(caret); // fn head atomic: named no-op
       }
       if (caret.side === 'right') {
         const ref = refOfPath(caret.path);
@@ -1527,8 +1572,12 @@ export function decideDelete(env: Envelope, caret: Caret, opts: DeleteOpts = {})
         return delNoop(caret);
       }
       const target = args[caret.index] as NodeJson;
-      if (isD5Structure(target) || isRowNode(target) || target.type === 'group' || target.type === 'fn') {
-        return delNoop(caret); // structures/rows/containers right-adjacent: unruled
+      // OA-del-highlight (rec-mwe0xrj1-0): Del at the seam facing a fenceless
+      // 2D structure arms the D5 highlight (was the named no-op); rows and
+      // fenced containers right-adjacent stay named no-ops.
+      if (isD5Structure(target)) return d5GateFwd(env, [...caret.path, caret.index], caret, ctx);
+      if (isRowNode(target) || target.type === 'group' || target.type === 'fn') {
+        return delNoop(caret); // rows/containers right-adjacent: unruled
       }
       if (target.type === 'fence') {
         const ref = refOfPath([...caret.path, caret.index]);
@@ -1642,6 +1691,7 @@ function forwardGap(env: Envelope, caret: Caret, ctx: { ctrl: boolean; units: Re
 export function forwardDelete(state: EditingState, opts: DeleteOpts = {}): EditingState {
   const decision = decideDelete(envelopeOf(state), state.caret, {
     ctrl: opts.ctrl,
+    highlighted: opts.highlighted,
     units: opts.units ?? new Set(state.vocabulary?.units ?? defaultStaticVocabulary.units),
   });
   return applyOps(state, decision.ops); // U1 (session 5): one key = one undo unit

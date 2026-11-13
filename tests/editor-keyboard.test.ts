@@ -105,6 +105,31 @@ describe('key classification (pure)', () => {
     expect(classifyKey(ev('Home', { ctrl: true })).kind).toBe('ignore');
     expect(classifyKey(ev('End', { ctrl: true })).kind).toBe('ignore');
     expect(classifyKey(ev('PageDown')).kind).toBe('ignore');
+    // T9 entry key (rec-mwesdgob-6, 2026-11-13): `_` (Shift+Slash on US layouts)
+    // triggers the subscript insertion — not a typing token
+    expect(classifyKey(ev('_'))).toEqual({ kind: 'insertSubscript' });
+    expect(classifyKey(ev('_', { shift: true }))).toEqual({ kind: 'insertSubscript' });
+  });
+});
+
+describe('T9 `_` entry key (rec-mwesdgob-6, 2026-11-13)', () => {
+  it('typing x then `_` (shift+Slash) inserts the subscript over x; one undo unit; letters then fill the script label', () => {
+    const { controller, container } = make({ v: 1, root: null });
+    container.focus();
+    press(container, 'x');
+    expect(j(envelopeOf(controller.getState()).root)).toBe(j(sym('x')));
+    const ev = press(container, '_', { shift: true, code: 'Slash' });
+    expect(ev.defaultPrevented).toBe(true);
+    expect(j(envelopeOf(controller.getState()).root)).toBe(j({ type: 'sub', base: 'x', sub: '' }));
+    expect(j(controller.getState().caret)).toBe(j({ kind: 'token', path: [], index: 0, label: 'sub' }));
+    expect(controller.getState().log.length).toBe(2); // the `x` run + the `_` insertion — one op = one undo step (U2)
+    press(container, '5');
+    expect(j(envelopeOf(controller.getState()).root)).toBe(j({ type: 'sub', base: 'x', sub: '5' }));
+    expect(controller.getState().log.length).toBe(3);
+    press(container, 'z', { ctrl: true }); // undo the digit (its own run)
+    expect(j(envelopeOf(controller.getState()).root)).toBe(j({ type: 'sub', base: 'x', sub: '' }));
+    press(container, 'z', { ctrl: true }); // undo the `_` insertion
+    expect(j(envelopeOf(controller.getState()).root)).toBe(j(sym('x')));
   });
 });
 

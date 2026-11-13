@@ -120,7 +120,13 @@ describe('test logger — recording state machine, baseline, per-action entries'
     expect(base.ast).toEqual({ v: 1, root: null });
     expect(base.mathml).toBe('');
     expect(base.caret).toEqual({ kind: 'empty' });
-    expect(base.caretRect).toEqual({ x: 0, y: 0, w: 2, h: 0 }); // jsdom zero layout
+    // OA-empty-caret re-pin (rec-mwes87dv-3, 2026-11-13): the empty formula's
+    // caret is VISIBLE — the 0-height math rect falls back to the computed font
+    // metrics (jsdom default 16px font, 'normal' line ≈ 1.2em → y = (19.2−16)/2)
+    expect(base.caretRect!.x).toBe(0);
+    expect(base.caretRect!.y).toBeCloseTo((16 * 1.2 - 16) / 2, 10);
+    expect(base.caretRect!.w).toBe(2);
+    expect(base.caretRect!.h).toBe(16);
     expect(base.rects).toHaveProperty('math');
     expect(Object.keys(base.styles!.math as Record<string, string>).sort()).toEqual([...STYLE_WHITELIST].sort());
 

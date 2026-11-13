@@ -292,6 +292,47 @@ describe('D5 highlight-then-delete through the keyboard (transient, never logged
   });
 });
 
+describe('OA-del-highlight (rec-mwe0xrj1-0, 2026-11-13): forward Delete BEFORE a fenceless structure mirrors D5 — first Del arms the red highlight (transient, never logged), the second Del deletes WITH content', () => {
+  const SEED = {
+    v: 1,
+    root: op('add', num(1), frac(num(1), num(2))), // 1 + 1/2, caret at the seam before the frac
+  };
+
+  const structureEl = (controller: EditorController, path: readonly (number | string)[]): Element | null =>
+    controller.getRendered()?.elementByPath.get(JSON.stringify(path)) ?? null;
+
+  it('Del at row [] #1 (the seam facing the frac) arms the highlight; the confirming Del deletes the structure, pending null stays; one undo restores it whole', () => {
+    const { controller, container } = make(SEED);
+    container.focus();
+    controller.placeCaret(rowc([], 1));
+    const before = controller.getState();
+    press(container, 'Delete');
+    expect(controller.getState()).toBe(before); // nothing applied
+    expect(controller.getState().log.length).toBe(0); // U2: the highlight NEVER logs
+    const el = structureEl(controller, [1]);
+    expect(el!.classList.contains('integral-highlight')).toBe(true); // the red paint
+    press(container, 'Delete'); // the confirming Del
+    expect(j(controller.getEnvelope().root)).toBe(j(op('add', num(1), null))); // the + dangles (OA-pending-null)
+    expect(j(controller.getState().caret)).toBe(j(rowc([], 1)));
+    expect(controller.getState().log.length).toBe(1); // the DELETE is the unit
+    expect(structureEl(controller, [1])).toBeNull(); // the structure is gone from the render
+    press(container, 'z', { ctrl: true });
+    expect(j(controller.getEnvelope().root)).toBe(j(SEED.root));
+    expect(j(controller.getState().caret)).toBe(j(rowc([], 1)));
+  });
+
+  it('a non-confirming input clears the armed highlight (same lifecycle as the BS side)', () => {
+    const { controller, container } = make(SEED);
+    container.focus();
+    controller.placeCaret(rowc([], 1));
+    press(container, 'Delete'); // arm
+    expect(structureEl(controller, [1])!.classList.contains('integral-highlight')).toBe(true);
+    press(container, 'ArrowLeft'); // any non-confirming input clears it, no log
+    expect(controller.getState().log.length).toBe(0);
+    expect(structureEl(controller, [1])!.classList.contains('integral-highlight')).toBe(false);
+  });
+});
+
 // sanity: the fixture envelopes round-trip
 it('fixture envelopes are legal', () => {
   expect(toJSON(initSession({ v: 1, root: frac(num(12), num(3)) }).root).root).toEqual({

@@ -1,8 +1,10 @@
 // Caret overlay — browser-only. The caret is NEVER inside the MathML: an
 // absolutely-positioned blinking div over the editor container, anchored from
-// getBoundingClientRect() of the UID-mapped elements. In-token positions
-// interpolate linearly over the number's extent rect (per-glyph Range rects
-// remain a possible refinement).
+// getBoundingClientRect() of the UID-mapped elements. In-token positions paint
+// at the per-CHARACTER boundary (a collapsed Range over the token's text node)
+// when the platform measures ranges (OA-token-glyph-paint, rec-mwes18zj-1);
+// with no range layout (jsdom) they fall back to linear interpolation over the
+// token's extent rect.
 //
 // Anchor per caret kind (all coordinates in the same space as the rects, i.e.
 // page/client coordinates; updateCaretOverlay re-bases them onto the container):
@@ -245,6 +247,72 @@ function tokenRect(
   return null;
 }
 
+/** The element whose text node carries a token caret's text (a sub's own label
+ *  element, the unit's upright label mi, a num/sym's extent-first fragment). */
+function tokenElement(
+  rendered: RenderedMath,
+  caret: Extract<Caret, { kind: 'token' }>,
+  node: NodeJson,
+): Element | null {
+  if (node.type === 'sub') {
+    if (caret.label !== 'base' && caret.label !== 'sub') return null;
+    const labels = rendered.subLabels.get(pathKey(caret.path));
+    if (labels === undefined) return null;
+    return caret.label === 'base' ? labels.base : labels.script;
+  }
+  if (node.type === 'unit') {
+    return rendered.elementByPath.get(pathKey(caret.path)) ?? null;
+  }
+  if (node.type === 'num' || node.type === 'sym') {
+    return rendered.extents.get(pathKey(caret.path))?.first ?? null;
+  }
+  return null;
+}
+
+/** The first descendant text node of an element (MathML tokens carry their
+ *  text in a direct child). */
+function firstTextNode(el: Element): Text | null {
+  for (const child of el.childNodes) {
+    if (child.nodeType === 3) return child as Text;
+    if (child.nodeType === 1) {
+      const t = firstTextNode(child as Element);
+      if (t !== null) return t;
+    }
+  }
+  return null;
+}
+
+/** OA-token-glyph-paint (rec-mwes18zj-1, 2026-11-13): the x of an in-token
+ *  caret is the CHARACTER boundary — a collapsed Range at the offset over the
+ *  token's own text node — whenever the platform measures range rects (a
+ *  real layout: height > 0). Null when no per-glyph measurement is available
+ *  (jsdom: Range.getBoundingClientRect is absent; the caller then interpolates
+ *  linearly over the extent, the pre-fix behavior). */
+function glyphBoundaryX(
+  rendered: RenderedMath,
+  caret: Extract<Caret, { kind: 'token' }>,
+  node: NodeJson,
+  index: number,
+): number | null {
+  const el = tokenElement(rendered, caret, node);
+  if (el === null) return null;
+  const text = firstTextNode(el);
+  if (text === null || index > text.length) return null;
+  const doc = rendered.math.ownerDocument;
+  if (typeof doc.createRange !== 'function') return null;
+  const range = doc.createRange();
+  if (typeof range.getBoundingClientRect !== 'function') return null;
+  try {
+    range.setStart(text, index);
+    range.collapse(true);
+    const r = range.getBoundingClientRect();
+    if (r.height > 0) return r.left; // real layout; a 0-height rect = no layout → fallback
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 /**
  * Pixel anchor for a caret in a rendered tree. Returns null when the caret does
  * not resolve against the rendered maps (should not happen for engine-valid
@@ -254,7 +322,18 @@ export function caretAnchor(env: Envelope, caret: Caret, rendered: RenderedMath)
   switch (caret.kind) {
     case 'empty': {
       const r = rectOf(rendered.math);
-      return { x: r.left, y: r.top, height: r.height };
+      if (r.height > 0) return { x: r.left, y: r.top, height: r.height };
+      // OA-empty-caret (rec-mwes87dv-3, 2026-11-13): the empty <math> carries
+      // no layout height (a 0-height rect) — paint a full caret line from the
+      // computed font metrics instead (the em box centered in the line box),
+      // anchored at the math element's left edge where the first glyph lands.
+      const view = rendered.math.ownerDocument.defaultView;
+      const style = view !== null ? view.getComputedStyle(rendered.math) : null;
+      const fsRaw = style !== null ? parseFloat(style.fontSize) : NaN;
+      const font = Number.isFinite(fsRaw) && fsRaw > 0 ? fsRaw : 16;
+      const lhRaw = style !== null ? parseFloat(style.lineHeight) : NaN;
+      const line = Number.isFinite(lhRaw) && lhRaw > 0 ? lhRaw : font * 1.2; // 'normal' ≈ 1.2em
+      return { x: r.left, y: r.top + Math.max(0, (line - font) / 2), height: font };
     }
     case 'node': {
       const r = extentRect(rendered, caret.path);
@@ -349,9 +428,10 @@ export function caretAnchor(env: Envelope, caret: Caret, rendered: RenderedMath)
       return r === null ? null : { x: r.right, y: r.top, height: r.height };
     }
     case 'token': {
-      // in-token: the character boundary within the token's rect, linearly
-      // interpolated (glyph metrics are reserved for a later session; the
-      // extent is the stubbed-rect-testable anchor).
+      // in-token: the character boundary within the token's rect — measured
+      // per glyph via a collapsed Range (OA-token-glyph-paint,
+      // rec-mwes18zj-1); the linear interpolation over the extent is the
+      // no-layout fallback (stubbed-rect tests).
       const node = nodeAt(env, caret.path);
       if (node === null) return null;
       const tr = tokenRect(rendered, caret, node);
@@ -384,7 +464,10 @@ export function caretAnchor(env: Envelope, caret: Caret, rendered: RenderedMath)
           if (mid !== null) return { x: mid.x, y: mid.top, height: mid.height };
         }
       }
-      const x = len === 0 ? rect.left : rect.left + (caret.index / len) * (rect.right - rect.left);
+      // OA-token-glyph-paint (rec-mwes18zj-1): per-glyph x when the platform
+      // measures ranges; linear interpolation over the extent otherwise.
+      const gx = glyphBoundaryX(rendered, caret, node, caret.index);
+      const x = gx ?? (len === 0 ? rect.left : rect.left + (caret.index / len) * (rect.right - rect.left));
       return { x, y: rect.top, height: rect.height };
     }
   }

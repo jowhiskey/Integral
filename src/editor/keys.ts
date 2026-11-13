@@ -47,6 +47,7 @@ export type KeyAction =
   | { readonly kind: 'undo' }
   | { readonly kind: 'redo' }
   | { readonly kind: 'deadPow' }
+  | { readonly kind: 'insertSubscript' }
   | { readonly kind: 'ignore' };
 
 /** U1 coalescing class (rework session 5 + OA-undo-burst, ruled 2026-11-10):
@@ -84,6 +85,7 @@ export const isTypingToken = (token: TypedToken): boolean =>
  *                              blur; the post-blur behavior is the host's).
  *  - Backspace                → backspace (D1–D9); Delete → forward delete
  *                              (the ruled D1/D3 mirrors + named no-op defaults).
+ *  - `_` → the T9 subscript insertion trigger (rec-mwesdgob-6, 2026-11-13).
  *  - a printable single character (key.length === 1, no Ctrl/Meta/Alt) → a
  *    typing key; `token` is undefined when the char is outside the pinned
  *    keymap (unknown token — still a handled key).
@@ -127,6 +129,11 @@ export function classifyKey(event: {
     case 'Tab':
     case 'Escape':
       return { kind: 'commit' }; // K2/K3 blur-commit (session 5)
+    case '_':
+      // T9 entry key (rec-mwesdgob-6, 2026-11-13): `_` (Shift+Slash on US
+      // layouts) triggers the subscript insertion vocabulary call — the key
+      // event only, the insertion behavior is unchanged.
+      return { kind: 'insertSubscript' };
     case 'Dead':
       // T8, as amended by the owner directive (2026-11-09, live check): ANY
       // dead-key press arms the pending power — layout-independent, no

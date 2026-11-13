@@ -186,6 +186,7 @@ describe('in-token caret overlay anchor (stubbed rects)', () => {
     stub.setMath({ left: 100, top: 50, width: 300, height: 40 });
     const env = { v: 1, root: { type: 'op', op: 'add', args: [num(12), sym('b')] } };
     const controller = new EditorController(container, { envelope: env });
+    container.focus(); // OA-caret-focus re-pin (rec-mwes87dv-3): the caret paints only while focused
     stub.syncPath(controller.getRendered()!, { '[0]': { left: 100, top: 52, width: 20, height: 10 } });
     controller.placeCaret(token([0], 1));
     const caretDiv = container.querySelector('.integral-caret') as HTMLElement;

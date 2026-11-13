@@ -21,9 +21,9 @@ import {
   applyOps,
   caretResolvesIn,
   decideBackspace,
+  decideDelete,
   EngineError,
   envelopeOf,
-  forwardDelete,
   initSession,
   insertRoot as engineInsertRoot,
   insertSubscript as engineInsertSubscript,
@@ -147,6 +147,10 @@ export class EditorController {
   /** The last classified typing-op rejection (session-5 rider) — reported,
    *  never swallowed; a no-op on the tree. */
   private lastRejection: ControllerRejection | null = null;
+  /** OA-caret-focus (rec-mwes87dv-3, 2026-11-13): the overlay caret paints only
+   *  while the editor container is focused (the keydown handler already acts
+   *  only while focused; the caret div now hides on blur too). */
+  private focused = false;
 
   constructor(container: HTMLElement, options: EditorControllerOptions = {}) {
     this.container = container;
@@ -166,6 +170,7 @@ export class EditorController {
     container.addEventListener('keydown', this.handleKeydown);
     container.addEventListener('keyup', this.handleKeyup);
     container.addEventListener('compositionend', this.handleCompositionEnd);
+    container.addEventListener('focus', this.handleFocus);
     container.addEventListener('blur', this.handleBlur);
     this.render();
   }
@@ -331,11 +336,29 @@ export class EditorController {
     this.commitState(next);
   }
 
-  /** One forward Delete key (the D1/D3 mirrors + the named no-op defaults):
-   *  at most one op = one log entry; a defined no-op changes nothing. */
-  private deleteKey(ctrl: boolean): void {
+  /** One forward Delete key (the D1/D3 mirrors + the named no-op defaults +
+   *  the D5 forward mirror, OA-del-highlight rec-mwe0xrj1-0): at the station
+   *  immediately BEFORE a fenceless 2D structure the first Del arms the
+   *  transient highlight (nothing applied, nothing logged — U2) and the
+   *  confirming Del (the armed target passed back through opts) deletes the
+   *  structure WITH its content. At most one op = one log entry. */
+  private deleteKey(ctrl: boolean, confirm: Path | null): void {
     this.lastAction = 'other'; // Delete is a non-typing action — it closes the run (U1)
-    const next = this.tryEngine(() => forwardDelete(this.state, { ctrl }));
+    const decision = this.tryEngine(() =>
+      decideDelete(toJSON(this.state.root), this.state.caret, {
+        ctrl,
+        highlighted: confirm,
+        units: unitSetOf(this.state),
+      }),
+    );
+    if (decision === null) return;
+    if (decision.kind === 'highlight' && decision.target !== undefined) {
+      this.highlighted = decision.target;
+      this.paintHighlight(this.highlighted, true);
+      return;
+    }
+    // U1: one key = one undo unit ({ops:[...]})
+    const next = this.tryEngine(() => applyOps(this.state, decision.ops));
     if (next === null || next === this.state) return; // rejected or defined no-op
     this.commitState(next);
   }
@@ -375,11 +398,16 @@ export class EditorController {
   }
 
   /** Re-anchor the caret overlay against the current rendered tree (e.g. after a
-   *  resize/scroll changed element rects). Does not rebuild the MathML. */
+   *  resize/scroll changed element rects). Does not rebuild the MathML. The
+   *  caret div is visible ONLY while the container is focused
+   *  (OA-caret-focus, rec-mwes87dv-3). */
   updateCaret(): void {
-    if (this.rendered !== null) {
-      updateCaretOverlay(this.caretDiv, this.container, toJSON(this.state.root), this.state.caret, this.rendered);
+    if (this.rendered === null) return;
+    if (!this.focused) {
+      this.caretDiv.style.display = 'none';
+      return;
     }
+    updateCaretOverlay(this.caretDiv, this.container, toJSON(this.state.root), this.state.caret, this.rendered);
   }
 
   private readonly handleClick = (event: MouseEvent): void => {
@@ -439,8 +467,15 @@ export class EditorController {
     this.container.blur();
   }
 
+  private readonly handleFocus = (): void => {
+    this.focused = true; // OA-caret-focus (rec-mwes87dv-3): show the caret while focused
+    this.updateCaret();
+  };
+
   private readonly handleBlur = (): void => {
+    this.focused = false; // OA-caret-focus (rec-mwes87dv-3): hide the caret on blur
     this.commit();
+    this.updateCaret(); // re-anchors → hidden while unfocused
   };
 
   /** Resolve a pending dead-^ with (at most) one typed character: the power
@@ -573,7 +608,13 @@ export class EditorController {
         return;
       case 'delete':
         event.preventDefault();
-        this.deleteKey(action.ctrl);
+        this.deleteKey(action.ctrl, confirmHighlight);
+        return;
+      case 'insertSubscript':
+        // T9 entry key (rec-mwesdgob-6, 2026-11-13): `_` → the subscript
+        // insertion vocabulary call; one op = one undo step.
+        event.preventDefault();
+        this.insertSubscript();
         return;
       case 'type':
         // A typing key is handled (preventDefault) even when the token ends up
@@ -669,6 +710,7 @@ export class EditorController {
     this.container.removeEventListener('keydown', this.handleKeydown);
     this.container.removeEventListener('keyup', this.handleKeyup);
     this.container.removeEventListener('compositionend', this.handleCompositionEnd);
+    this.container.removeEventListener('focus', this.handleFocus);
     this.container.removeEventListener('blur', this.handleBlur);
   }
 }

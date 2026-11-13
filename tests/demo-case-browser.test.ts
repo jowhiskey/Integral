@@ -12,7 +12,7 @@ import { mount, unmount } from 'svelte';
 
 import App from '../demo/App.svelte';
 import { CASES, CATEGORIES } from '../demo/cases.js';
-import { envelopeOf, initSession, settleUnits, typeToken } from '../src/engine/index.js';
+import { envelopeOf, initSession, insertSubscript, settleUnits, typeToken } from '../src/engine/index.js';
 import { KEYMAP } from '../src/editor/keys.js';
 import type { EditorController } from '../src/editor/index.js';
 import { countNodes } from './editor-support.js';
@@ -181,10 +181,12 @@ describe('demo case browser', () => {
       // key does)
       let expected = initSession(c.envelope);
       for (const ch of c.keys!) {
-        const token = KEYMAP[ch]!;
+        const token = KEYMAP[ch];
         const isLetter = token !== undefined && token.t === 'leaf' && token.node.type === 'sym' && ch.length === 1;
         if (!isLetter) expected = settleUnits(expected);
-        expected = typeToken(expected, token!);
+        // the `_` key routes through the T9 subscript entry (rec-mwesdgob-6,
+        // 2026-11-13) exactly as the DOM path's classifyKey does
+        expected = ch === '_' ? insertSubscript(expected) : typeToken(expected, token!);
       }
       const state = app.getController()!.getState();
       expect(envelopeOf(state), `${c.id} typed envelope`).toEqual(envelopeOf(expected));

@@ -204,6 +204,22 @@ describe('T9 — subscript insertion (v1 label mode)', () => {
     expect(resolveMove(env, { kind: 'node', path: [0], side: 'right' } as Caret, 'right')).toEqual({ kind: 'token', path: [1], index: 0 });
   });
 
+  it('OA-sub-right-exit (rec-mwesfxub-7, 2026-11-13 — closes the N-12 trap): at a row border with no glyph zone the script end exits to the row-end seam BEHIND the sub (the D5 seat), never clamps to self', () => {
+    // implicit row (no glyphs): ·x₅ at the root row's end
+    const env: Envelope = { v: 1, root: imp(null, sub('x', '5')) };
+    const scriptEnd: Caret = { kind: 'token', path: [1], index: 1, label: 'sub' };
+    expect(resolveMove(env, scriptEnd, 'right')).toEqual({ kind: 'row', path: [], index: 2 });
+    expect(resolveMove(env, { kind: 'row', path: [], index: 2 }, 'right')).toBe(null); // N3 at the formula end
+    // an explicit row's end behaves the same
+    const env2: Envelope = { v: 1, root: add(sym('x'), sub('y', '5')) };
+    expect(resolveMove(env2, { kind: 'token', path: [1], index: 1, label: 'sub' }, 'right')).toEqual({ kind: 'row', path: [], index: 2 });
+    // mid-row (glyph zone) keeps the R-flank station; a lone sub keeps the N3 no-op
+    const env3: Envelope = { v: 1, root: add(sub('a', 'b'), sym('c')) };
+    expect(resolveMove(env3, { kind: 'token', path: [0], index: 1, label: 'sub' }, 'right')).toEqual({ kind: 'node', path: [0], side: 'right' });
+    const lone: Envelope = { v: 1, root: sub('x', '5') };
+    expect(resolveMove(lone, { kind: 'token', path: [], index: 1, label: 'sub' }, 'right')).toBe(null);
+  });
+
   it('the seam-left symbol converts (the row path); elsewhere the template places/fills per the T7 branches', () => {
     const conv = insertSubscript(at(add(sym('a'), sym('b')), { kind: 'row', path: [], index: 1 }));
     expectTree(conv, add(sub('a', ''), sym('b')));

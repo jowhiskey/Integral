@@ -10,6 +10,7 @@ import { fromJSON } from '../src/ast/serialize.js';
 import type { NodeJson } from '../src/ast/json.js';
 
 import {
+  applyOps,
   backspace,
   caretResolves,
   decideBackspace,
@@ -936,5 +937,54 @@ describe('OA-invisible-death — an all-null implicit (glyph-less) row renders n
     expect(j(envelopeOf(s).root)).toBe('null');
     expect(s.caret).toEqual({ kind: 'empty' });
     legal(s);
+  });
+});
+
+// ——— micro-fix cluster 2026-11-13 (log integral-testlog-cluster-2026-11-13T09-45-11-382Z) ———
+
+describe('2026-11-13 micro-fix cluster — rec-mwe11hta-1 + rec-mwesfxub-7', () => {
+  it('OA-promote-row-end (rec-mwe11hta-1): BS at the trailing-null seam of a nested row promotes the surviving ROW to its row-end border station (row [] #2), never into the trailing root’s radicand; the next BS then fires the D5 highlight', () => {
+    // add[ add[1, ·√(50)], null ] with the caret at the outer trailing pending cell
+    const seed = op('add', op('add', num(1), jmp(null, { type: 'root', radicand: num(50) })), null);
+    const d = decideBackspace(envOf(seed), rowc([], 1));
+    expect(d.kind).toBe('glyph');
+    expect(d.caret).toEqual(rowc([], 2)); // NOT token [1,1,'radicand'] @2
+    let s = backspace(at(seed, rowc([], 1)));
+    expect(j(envelopeOf(s).root)).toBe(j(op('add', num(1), jmp(null, { type: 'root', radicand: num(50) }))));
+    expect(s.caret).toEqual(rowc([], 2));
+    legal(s);
+    // the next BS at that station highlights the nested root structure (D5)
+    const d2 = decideBackspace(envelopeOf(s), s.caret);
+    expect(d2.kind).toBe('highlight');
+    expect(d2.target).toEqual([1, 1]);
+    const d3 = decideBackspace(envelopeOf(s), s.caret, { highlighted: [1, 1] });
+    expect(d3.kind).toBe('delete-structure');
+    s = applyOps(s, d3.ops);
+    expect(j(envelopeOf(s).root)).toBe(j(op('add', num(1), null))); // the invisible all-null mul died with it (OA-invisible-death)
+    legal(s);
+  });
+
+  it('OA-sub-label-empty (rec-mwesfxub-7): BS in a sub label is char-wise down to the EMPTY label (the □ state); the next BS at the empty script unwraps — the sub dies, the base stays (S-102)', () => {
+    let s = backspace(at(jmp(null, sub('x', '5')), tokc([1], 1, 'sub')));
+    expect(j(envelopeOf(s).root)).toBe(j(jmp(null, sub('x', ''))));
+    expect(s.caret).toEqual(tokc([1], 0, 'sub')); // before the □
+    legal(s);
+    s = backspace(s); // BS at the empty script → S-102 unwrap
+    expect(j(envelopeOf(s).root)).toBe(j(jmp(null, sym('x'))));
+    expect(s.caret).toEqual(rowc([], 2));
+    legal(s);
+    // the base label empties the same way; then the baseless sub dies outright
+    let s2 = backspace(at(sub('a', 'x'), tokc([], 1, 'base')));
+    expect(j(envelopeOf(s2).root)).toBe(j(sub('', 'x')));
+    legal(s2);
+    s2 = backspace(s2);
+    expect(j(envelopeOf(s2).root)).toBe('null');
+    expect(s2.caret).toEqual({ kind: 'empty' });
+    legal(s2);
+    // multi-char scripts still peel letter-wise (unchanged)
+    const s3 = backspace(at(sub('x', 'abc'), tokc([], 3, 'sub')));
+    expect(j(envelopeOf(s3).root)).toBe(j(sub('x', 'ab')));
+    expect(s3.caret).toEqual(tokc([], 2, 'sub'));
+    legal(s3);
   });
 });

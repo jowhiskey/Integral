@@ -11,7 +11,7 @@ import type { Caret } from '../src/engine/index.js';
 import { caretAnchor, updateCaretOverlay } from '../src/editor/caret-overlay.js';
 import { EditorController } from '../src/editor/controller.js';
 import { buildMathML, caretKey } from '../src/editor/mathml-dom.js';
-import { stubRects, type Rect } from './editor-support.js';
+import { asDomRect, stubRects, type Rect } from './editor-support.js';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -132,6 +132,7 @@ describe('updateCaretOverlay: the overlay div is positioned relative to the cont
 
     const env: Envelope = { v: 1, root: { type: 'frac', num: num(5), den: null } };
     const controller = new EditorController(container, { envelope: env });
+    container.focus(); // OA-caret-focus re-pin (rec-mwes87dv-3): the caret paints only while focused
     const rendered = controller.getRendered()!;
     stub.syncPath(rendered, {
       '[]': { left: 105, top: 55, width: 30, height: 20 },
@@ -168,6 +169,7 @@ describe('updateCaretOverlay: the overlay div is positioned relative to the cont
     const stub = stubRects({ container: { left: 100, top: 50, width: 300, height: 40 } });
     stub.setMath({ left: 102, top: 54, width: 0, height: 24 });
     const controller = new EditorController(container, { envelope: { v: 1, root: null } });
+    container.focus(); // OA-caret-focus re-pin (rec-mwes87dv-3): the caret paints only while focused
     controller.updateCaret();
     const caretDiv = container.querySelector('.integral-caret') as HTMLElement;
     expect(caretDiv.style.left).toBe('2px');
@@ -184,5 +186,78 @@ describe('updateCaretOverlay: the overlay div is positioned relative to the cont
     const rendered = buildMathML(fromJSON(env), document);
     updateCaretOverlay(caretDiv, container, env, { kind: 'node', path: [7] }, rendered); // not in the maps
     expect(caretDiv.style.display).toBe('none');
+  });
+});
+
+// ——— micro-fix cluster 2026-11-13 (rec-mwes18zj-1 + rec-mwes87dv-3) ———
+
+describe('2026-11-13: glyph-aware token caret + empty-formula caret + focus-gated visibility', () => {
+  it('OA-token-glyph-paint (rec-mwes18zj-1): with range layout available, the in-token caret paints at the per-CHARACTER boundary (Range rect), not the even interpolation', () => {
+    const env: Envelope = { v: 1, root: sym('smmm') };
+    const rendered = buildMathML(fromJSON(env), document);
+    const stub = stubRects();
+    stub.syncPath(rendered, { '[]': { left: 11, top: 12, width: 58.5, height: 20 } });
+    // no Range layout (jsdom default): the linear fallback stands
+    expect(caretAnchor(env, { kind: 'token', path: [], index: 1 }, rendered)).toEqual({ x: 25.625, y: 12, height: 20 });
+    // stub a per-glyph range measurement: s = 5px, each m = 16.17px-ish → boundaries 11, 16, 32, 48, 64
+    const widths = [5, 16, 16, 16];
+    const proto = Range.prototype as unknown as { getBoundingClientRect?: unknown };
+    const had = Object.prototype.hasOwnProperty.call(proto, 'getBoundingClientRect');
+    const prev = proto.getBoundingClientRect;
+    (proto as { getBoundingClientRect: () => DOMRect }).getBoundingClientRect = function (this: Range) {
+      let x = 11;
+      for (let i = 0; i < this.startOffset && i < widths.length; i++) x += widths[i];
+      return asDomRect({ left: x, top: 12, width: 0, height: 20 });
+    };
+    try {
+      expect(caretAnchor(env, { kind: 'token', path: [], index: 0 }, rendered)).toEqual({ x: 11, y: 12, height: 20 });
+      expect(caretAnchor(env, { kind: 'token', path: [], index: 1 }, rendered)).toEqual({ x: 16, y: 12, height: 20 }); // after "s", not 25.625
+      expect(caretAnchor(env, { kind: 'token', path: [], index: 2 }, rendered)).toEqual({ x: 32, y: 12, height: 20 });
+      expect(caretAnchor(env, { kind: 'token', path: [], index: 4 }, rendered)).toEqual({ x: 64, y: 12, height: 20 });
+    } finally {
+      if (had) (proto as { getBoundingClientRect: unknown }).getBoundingClientRect = prev;
+      else delete (proto as { getBoundingClientRect?: unknown }).getBoundingClientRect;
+    }
+    // the fallback is back once the range layout is gone
+    expect(caretAnchor(env, { kind: 'token', path: [], index: 1 }, rendered)).toEqual({ x: 25.625, y: 12, height: 20 });
+  });
+
+  it('OA-empty-caret (rec-mwes87dv-3): a 0-height empty <math> rect still paints a full caret line from the computed font metrics (em box centered in the line box)', () => {
+    const env: Envelope = { v: 1, root: null };
+    const rendered = buildMathML(null, document);
+    const stub = stubRects();
+    stub.setMath({ left: 102, top: 54, width: 0, height: 0 }); // the degenerate empty-math rect
+    document.body.appendChild(rendered.math); // getComputedStyle needs a connected element in jsdom
+    // jsdom's math element has no CSSOM .style — set the font through a document stylesheet
+    const styleEl = document.createElement('style');
+    styleEl.textContent = 'math { font-size: 20px; }';
+    document.head.appendChild(styleEl);
+    try {
+      const a = caretAnchor(env, { kind: 'empty' }, rendered);
+      expect(a).not.toBeNull();
+      expect(a!.x).toBe(102);
+      expect(a!.y).toBeCloseTo(54 + (20 * 1.2 - 20) / 2, 10); // 'normal' line-height ≈ 1.2em
+      expect(a!.height).toBe(20);
+    } finally {
+      styleEl.remove();
+    }
+    // a math rect WITH height keeps the plain anchor (unchanged pin shape)
+    stub.setMath({ left: 100, top: 50, width: 40, height: 30 });
+    expect(caretAnchor(env, { kind: 'empty' }, rendered)).toEqual({ x: 100, y: 50, height: 30 });
+  });
+
+  it('OA-caret-focus (rec-mwes87dv-3): the overlay caret div is hidden while the editor is unfocused, painted on focus, hidden again on blur', () => {
+    const container = document.createElement('div');
+    container.id = 'container';
+    document.body.appendChild(container);
+    const stub = stubRects({ container: { left: 100, top: 50, width: 300, height: 40 } });
+    stub.setMath({ left: 100, top: 50, width: 300, height: 40 });
+    const controller = new EditorController(container, { envelope: { v: 1, root: num(5) } });
+    const caretDiv = container.querySelector('.integral-caret') as HTMLElement;
+    expect(caretDiv.style.display).toBe('none'); // unfocused: hidden from the initial render on
+    container.focus();
+    expect(caretDiv.style.display).toBe('block'); // focused: painted
+    container.blur();
+    expect(caretDiv.style.display).toBe('none'); // blurred: hidden again
   });
 });

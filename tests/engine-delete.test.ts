@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import { fromJSON } from '../src/ast/serialize.js';
 
 import {
+  applyOps,
   backspace,
   caretResolves,
   decideDelete,
@@ -78,6 +79,12 @@ describe('Forward Delete — the D1 mirror in tokens (the char right of the care
     let state = forwardDelete(at(sub('x', 'abc'), tokc([], 1, 'sub')));
     expect(j(envelopeOf(state).root)).toBe(j(sub('x', 'ac')));
     expect(state.caret).toEqual(tokc([], 1, 'sub'));
+    legal(state);
+    // OA-sub-label-empty forward mirror (rec-mwesfxub-7): Del at the script's
+    // last char shrinks to the EMPTY label (the □ state) — not a no-op
+    state = forwardDelete(at(sub('x', '5'), tokc([], 0, 'sub')));
+    expect(j(envelopeOf(state).root)).toBe(j(sub('x', '')));
+    expect(state.caret).toEqual(tokc([], 0, 'sub'));
     legal(state);
     // the trailing dot goes and the flag with it (5.| + Del → 5|)
     state = forwardDelete(at(num(5, true), tokc([], 1)));
@@ -160,13 +167,54 @@ describe('Forward Delete — the NAMED silent no-op defaults (unruled mirrors, t
     expect(d.kind).toBe('noop');
   });
 
-  it('Del at the seam facing a fenceless structure (x + |frac): silent no-op — the glyph is LEFT of the caret (BS territory)', () => {
+  it('OA-del-highlight (rec-mwe0xrj1-0, 2026-11-13): Del at the seam facing a fenceless structure arms the D5 highlight (was the named no-op); the confirming Del deletes it WITH content, pending null stays', () => {
     const seed = op('add', sym('x'), frac(num(1), num(2)));
-    const d = decideDelete(envOf(seed), rowc([], 1));
-    expect(d.kind).toBe('noop');
-    const state = forwardDelete(at(seed, rowc([], 1)));
-    expect(j(envelopeOf(state).root)).toBe(j(seed));
-    expect(state.log.length).toBe(0);
+    const arm = decideDelete(envOf(seed), rowc([], 1));
+    expect(arm.kind).toBe('highlight');
+    expect(arm.target).toEqual([1]);
+    expect(arm.ops).toEqual([]); // U2: the highlight never logs
+    const confirm = decideDelete(envOf(seed), rowc([], 1), { highlighted: [1] });
+    expect(confirm.kind).toBe('delete-structure');
+    let state = at(seed, rowc([], 1));
+    state = applyOps(state, confirm.ops);
+    expect(j(envelopeOf(state).root)).toBe(j(op('add', sym('x'), null))); // OA-pending-null
+    expect(state.caret).toEqual(rowc([], 1));
+    legal(state);
+    // the left flank station arms the same highlight; an unrelated armed target does not confirm
+    expect(decideDelete(envOf(seed), { kind: 'node', path: [1], side: 'left' }).kind).toBe('highlight');
+    expect(decideDelete(envOf(seed), rowc([], 1), { highlighted: [0] }).kind).toBe('highlight');
+    // through the state wrapper: arm is a no-op state, confirm applies one unit
+    const armed = forwardDelete(at(seed, rowc([], 1)));
+    expect(j(envelopeOf(armed).root)).toBe(j(seed));
+    expect(armed.log.length).toBe(0);
+    const confirmed = forwardDelete(at(seed, rowc([], 1)), { highlighted: [1] });
+    expect(j(envelopeOf(confirmed).root)).toBe(j(op('add', sym('x'), null)));
+    expect(confirmed.log.length).toBe(1);
+    legal(confirmed);
+  });
+
+  it('OA-del-highlight fires for every fenceless kind at the facing seam and the left flank (frac/pow/root/sub/op-pow)', () => {
+    const mid = (structure: unknown) => op('add', sym('x'), structure as never);
+    const kinds: [unknown, string][] = [
+      [frac(num(1), num(2)), 'frac'],
+      [{ type: 'pow', base: sym('a'), exp: num(2) }, 'pow'],
+      [{ type: 'root', radicand: sym('a') }, 'root'],
+      [sub('b', 'm'), 'sub'],
+      [op('pow', sym('a'), num(2)), 'op-pow'],
+    ];
+    for (const [structure, name] of kinds) {
+      const env = envOf(mid(structure));
+      expect(decideDelete(env, rowc([], 1)).kind, name).toBe('highlight');
+      expect(decideDelete(env, rowc([], 1), { highlighted: [1] }).kind, name).toBe('delete-structure');
+      // the left flank is a node-`side` station (containers only — an op-pow row is not one)
+      if (!((structure as { type: string }).type === 'op')) {
+        expect(decideDelete(env, { kind: 'node', path: [1], side: 'left' }).kind, name).toBe('highlight');
+      }
+    }
+    // fenced containers and nested rows keep the named no-op
+    expect(decideDelete(envOf(mid(group(op('add', sym('a'), sym('b'))))), rowc([], 1)).kind).toBe('noop');
+    expect(decideDelete(envOf(mid(fn('sin', [sym('a')]))), rowc([], 1)).kind).toBe('noop');
+    expect(decideDelete(envOf(mid(op('multiply', sym('a'), sym('b')))), rowc([], 1)).kind).toBe('noop');
   });
 
   it('Del at the seam facing a fenced container / a nested row: named no-ops (unchanged — the glyph is left of the caret)', () => {

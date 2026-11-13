@@ -126,6 +126,15 @@ export const CASES: readonly CatalogCase[] = [
     envelope: env(num(5)),
     caret: tk([], 1), // 4a reseed (OA-token-end): the in-token end
   },
+  {
+    id: 'E-03',
+    rules: ['OA-empty-caret', 'OA-caret-focus', 'D4', 'C5'],
+    category: 'E',
+    label: 'empty formula, focused vs blurred (log rec-mwes87dv-3)',
+    stress: 'Focused: a full-height caret line paints at the math element’s left edge; blur the editor (click outside / Tab) — the caret disappears; focus again — it returns. Type `x` — the caret rides the token end.',
+    envelope: EMPTY_ENV,
+    caret: EMPTY,
+  },
 
   // ——— N: node types alone + stressed variants ———
   {
@@ -507,6 +516,16 @@ export const CASES: readonly CatalogCase[] = [
     label: 'type `2*3mm` + Space from empty',
     stress: 'A unit run inside an explicit row: the run rides a glyph-less juxtaposed pair within the `*` row; the leave key fires the S-051 conversion (the mixed-row rule never flattens the pair into the row).',
     keys: '2*3mm ',
+    envelope: EMPTY_ENV,
+    caret: EMPTY,
+  },
+  {
+    id: 'T-16',
+    rules: ['T9', 'OA-sub-label'],
+    category: 'T',
+    label: 'type `x_5` from empty — the `_` key (Shift+Slash) triggers the subscript (log rec-mwesdgob-6)',
+    stress: 'Type x, then `_` (shift+Slash), then 5 — the subscript converts over x and the digit lands in the script label; Backspace twice peels the script to □ and then unwraps the sub; one undo per step.',
+    keys: 'x_5',
     envelope: EMPTY_ENV,
     caret: EMPTY,
   },
@@ -1107,6 +1126,33 @@ export const CASES: readonly CatalogCase[] = [
     envelope: env(op('add', sym('a'), frac(num(1), num(2)))),
     caret: tk([0], 0),
   },
+  {
+    id: 'B-37',
+    rules: ['OA-del-highlight', 'D5', 'OA-del-glyph'],
+    category: 'B',
+    label: '1 + 1/2, caret at the seam before the fraction (log rec-mwe0xrj1-0)',
+    stress: 'Delete once — the fraction arms the red highlight (nothing logged); Delete again — the structure deletes with its content and the `+` dangles; one undo restores it whole.',
+    envelope: env(op('add', num(1), frac(num(1), num(2)))),
+    caret: rw([], 1),
+  },
+  {
+    id: 'B-38',
+    rules: ['OA-promote-row-end', 'OA-promote-border', 'D2', 'D5'],
+    category: 'B',
+    label: '1 + √50 with a dangling trailing +, caret at the trailing pending cell (log rec-mwe11hta-1)',
+    stress: 'Backspace — the outer row collapses and the caret rests at the row END (behind the ·√50), not inside the radicand; Backspace again — the root highlights red; once more — it deletes.',
+    envelope: env(op('add', op('add', num(1), jmp(null, root(num(50)))), null)),
+    caret: rw([], 1),
+  },
+  {
+    id: 'B-39',
+    rules: ['OA-sub-label-empty', 'OA-sub-right-exit', 'D1', 'D6', 'N4'],
+    category: 'B',
+    label: '·x₅ implicit, caret at the script’s end (log rec-mwesfxub-7)',
+    stress: 'Backspace — the script peels to the □ placeholder; Backspace again — the sub unwraps, the base x stays. ArrowRight from the script end — the caret exits to behind the subscript (the D5 seat), then typing continues the formula.',
+    envelope: env(jmp(null, sub('x', '5'))),
+    caret: { kind: 'token', path: [1], index: 1, label: 'sub' },
+  },
 
   // ——— M: navigation (horizontal + vertical) ———
   {
@@ -1279,6 +1325,15 @@ export const CASES: readonly CatalogCase[] = [
     stress: 'Type `)` — the fence completes and the caret lands at the group’s right flank INSIDE the denominator (never right of the whole fraction); walk Right/Left from there.',
     envelope: env(frac(num(1), group(op('add', sym('a'), sym('b')), false))),
     caret: tk(['den', 'child', 1], 1),
+  },
+  {
+    id: 'M-20',
+    rules: ['OA-sub-right-exit', 'N4', 'OA-flank-stations', 'D5'],
+    category: 'M',
+    label: '·x₅ implicit at the row end — the script end’s Right exit (log rec-mwesfxub-7, the N-12 trap)',
+    stress: 'From the script label’s end, ArrowRight must leave the subscript to the row-end seam behind it (never a no-op trap); from there Backspace arms the D5 highlight on the sub; ArrowRight again is the formula-end no-op.',
+    envelope: env(jmp(null, sub('x', '5'))),
+    caret: { kind: 'token', path: [1], index: 1, label: 'sub' },
   },
 
   // ——— K: click placement (seed + precise click target in `stress`) ———
@@ -1671,6 +1726,15 @@ export const CASES: readonly CatalogCase[] = [
     stress: 'Probe: click the outer mfrac’s left half at denominator height.',
     envelope: env(frac(op('add', sym('a'), sym('b')), op('add', sym('c'), sym('d')))),
     caret: tk(['num', 0], 1), // 4a reseed
+  },
+  {
+    id: 'P-09',
+    rules: ['OA-token-glyph-paint', 'N1'],
+    category: 'P',
+    label: 'the symbol smmm — caret per letter width (log rec-mwes18zj-1)',
+    stress: 'Walk Right through smmm — the caret must step at each glyph’s own width (s is narrow, m wide), not at even fractions of the whole symbol.',
+    envelope: env(sym('smmm')),
+    caret: tk([], 0),
   },
 
   // ——— V: contract rendering states (rework session 1) ———

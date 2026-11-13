@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { fromJSON } from '../src/ast/index.js';
-import { applyOp, caretResolves, caretResolvesIn, initSession, typeToken } from '../src/engine/index.js';
+import { applyOp, caretResolves, caretResolvesIn, initSession, insertSubscript, typeToken } from '../src/engine/index.js';
 import { KEYMAP } from '../src/editor/keys.js';
 import { CASES, CATEGORIES } from '../demo/cases.js';
 
@@ -68,7 +68,13 @@ describe('demo case catalog — structure and hygiene', () => {
     // structure promoted to a bare root/slot by a glyph removal lands at its
     // border station, in front of / behind it, never inside its first slot).
     // the 2026-11-11 `=` session (rules A1–A7) adds the A-family labels.
-    const RULE_PATTERN = /^(T\d\d?|N\d|C\d|D\d|U\d|K\d|A\d|S-\d{3}|OA-(digit-glue|juxtaposition|projection|fence|dot-eval|mixed|root-grab|sub-label|visual-trumps|token-end|vertical-default|flank-stations|fence-flank|seam-caret-height|vmem-nesting|index-horizontal|del-glyph|closeparen-exit|sinarg-merge|glyph-click-halves|unit-single-seam|unit-seam-paint|after-structure-shift|undo-burst|invisible-death|promote-border))$/;
+    // the 2026-11-13 micro-fix session adds: OA-del-highlight (Del before a
+    // fenceless structure arms the D5 highlight), OA-promote-row-end (a
+    // promoted ROW lands at its row-end border station), OA-sub-label-empty +
+    // OA-sub-right-exit (sub label emptying + the script-end Right exit),
+    // OA-token-glyph-paint (per-glyph in-token caret x), OA-empty-caret +
+    // OA-caret-focus (the empty formula's visible caret, focus-gated).
+    const RULE_PATTERN = /^(T\d\d?|N\d|C\d|D\d|U\d|K\d|A\d|S-\d{3}|OA-(digit-glue|juxtaposition|projection|fence|dot-eval|mixed|root-grab|sub-label|visual-trumps|token-end|vertical-default|flank-stations|fence-flank|seam-caret-height|vmem-nesting|index-horizontal|del-glyph|closeparen-exit|sinarg-merge|glyph-click-halves|unit-single-seam|unit-seam-paint|after-structure-shift|undo-burst|invisible-death|promote-border|del-highlight|promote-row-end|sub-label-empty|sub-right-exit|token-glyph-paint|empty-caret|caret-focus))$/;
     for (const c of CASES) {
       expect(c.rules.length > 0, `${c.id} carries at least one rule ref`).toBe(true);
       for (const rule of c.rules) {
@@ -106,6 +112,10 @@ describe('demo case catalog — seed legality', () => {
     for (const c of instructionCases) {
       let state = initSession(c.envelope);
       for (const ch of c.keys!) {
+        if (ch === '_') {
+          state = insertSubscript(state); // T9 entry key (rec-mwesdgob-6, 2026-11-13) — not a KEYMAP token
+          continue;
+        }
         const token = KEYMAP[ch];
         expect(token, `${c.id}: key ${JSON.stringify(ch)} not in KEYMAP`).toBeDefined();
         state = typeToken(state, token!);
