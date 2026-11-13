@@ -1153,6 +1153,15 @@ export const CASES: readonly CatalogCase[] = [
     envelope: env(jmp(null, sub('x', '5'))),
     caret: { kind: 'token', path: [1], index: 1, label: 'sub' },
   },
+  {
+    id: 'B-40',
+    rules: ['OA-promote-row-end', 'D2', 'D5', 'OA-visual-trumps'],
+    category: 'B',
+    label: '2·(1 + √50 +) — the dangling trailing + inside a row cell (log rec-mwe11hta-1, row-container extension)',
+    stress: 'Backspace at the trailing pending cell (row [1] #3) or at the parent seam behind the row cell (row [] #2) — the caret rests at the row END behind the ·√50, never inside the radicand; Backspace again — the root highlights red; once more — it deletes with content.',
+    envelope: env(jmp(num(2), op('add', num(1), jmp(null, root(num(50))), null))),
+    caret: rw([1], 3),
+  },
 
   // ——— M: navigation (horizontal + vertical) ———
   {

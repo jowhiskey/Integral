@@ -964,6 +964,37 @@ describe('2026-11-13 micro-fix cluster — rec-mwe11hta-1 + rec-mwesfxub-7', () 
     legal(s);
   });
 
+  it('OA-promote-row-end row-container extension (rec-mwe11hta-1): the multi-cell glyph splice at the row end also lands at the row-border station — flat, nested in a row cell, and via the parent seam — never into the radicand; the next BS then fires the D5 highlight on the root', () => {
+    // flat: add[1, ·√50, null], BS at the trailing pending cell row [] #3
+    let s = backspace(at(op('add', num(1), jmp(null, { type: 'root', radicand: num(50) }), null), rowc([], 3)));
+    expect(j(envelopeOf(s).root)).toBe(j(op('add', num(1), jmp(null, { type: 'root', radicand: num(50) }))));
+    expect(s.caret).toEqual(rowc([], 2)); // NOT token [1,1,'radicand'] @2
+    legal(s);
+    let d = decideBackspace(envelopeOf(s), s.caret);
+    expect(d.kind).toBe('highlight');
+    expect(d.target).toEqual([1, 1]);
+    // nested in a row container: jmp[2, add[1, ·√50, null]], BS at row [1] #3
+    s = backspace(at(jmp(num(2), op('add', num(1), jmp(null, { type: 'root', radicand: num(50) }), null)), rowc([1], 3)));
+    expect(s.caret).toEqual(rowc([1], 2)); // NOT token [1,1,1,'radicand'] @2
+    legal(s);
+    d = decideBackspace(envelopeOf(s), s.caret);
+    expect(d.kind).toBe('highlight');
+    expect(d.target).toEqual([1, 1, 1]);
+    // ...and via the parent seam behind the nested row cell: row [] #2
+    s = backspace(at(jmp(num(2), op('add', num(1), jmp(null, { type: 'root', radicand: num(50) }), null)), rowc([], 2)));
+    expect(s.caret).toEqual(rowc([1], 2));
+    legal(s);
+    d = decideBackspace(envelopeOf(s), s.caret);
+    expect(d.kind).toBe('highlight');
+    expect(d.target).toEqual([1, 1, 1]);
+    // the confirm deletes the root with content (the all-null mul dies with it — OA-invisible-death)
+    const d3 = decideBackspace(envelopeOf(s), s.caret, { highlighted: [1, 1, 1] });
+    expect(d3.kind).toBe('delete-structure');
+    s = applyOps(s, d3.ops);
+    expect(j(envelopeOf(s).root)).toBe(j(jmp(num(2), op('add', num(1), null))));
+    legal(s);
+  });
+
   it('OA-sub-label-empty (rec-mwesfxub-7): BS in a sub label is char-wise down to the EMPTY label (the □ state); the next BS at the empty script unwraps — the sub dies, the base stays (S-102)', () => {
     let s = backspace(at(jmp(null, sub('x', '5')), tokc([1], 1, 'sub')));
     expect(j(envelopeOf(s).root)).toBe(j(jmp(null, sub('x', ''))));

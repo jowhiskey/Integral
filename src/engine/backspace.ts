@@ -881,7 +881,7 @@ function glyphSplice(env: Envelope, rowPath: Path, nullIndex: number, station: C
 
 /** The canonical rest state at the freed position after a pending-cell
  *  splice (4b-1): the cell at `index`'s left entry, or — at the row end —
- *  the last cell's right entry; null when neither resolves (a null cell
+ *  the row's own border station; null when neither resolves (a null cell
  *  or an empty row keeps its seam caret). */
 function spliceLand(after: Envelope, rowPath: Path, index: number): Caret | null {
   const row = nodeAt(after, rowPath) as NodeJson | null;
@@ -891,7 +891,16 @@ function spliceLand(after: Envelope, rowPath: Path, index: number): Caret | null
     return args[index] === null ? null : (entryStation(after, [...rowPath, index], 'left'));
   }
   if (args.length > 0 && args[args.length - 1] !== null) {
-    return entryStation(after, [...rowPath, args.length - 1], 'right');
+    // OA-promote-row-end (rec-mwe11hta-1, 2026-11-13 — the row-container
+    // extension): at the row end the landing is the row's BORDER station —
+    // a text-like end cell benches in-token (its end IS the row end), a
+    // trailing structure keeps the seam behind it, never the structure's
+    // content end (the radicand dive — the next BS must fire the D5
+    // highlight from that seam, not peel the radicand char-wise).
+    return (
+      rowEndStation(after, rowPath, 'right', NAV_PROFILES) ??
+      entryStation(after, [...rowPath, args.length - 1], 'right')
+    );
   }
   return null;
 }
