@@ -30,6 +30,7 @@ import {
   redo as engineRedo,
   resolveBoundary,
   sameCaret,
+  serializeOpLog,
   settleUnits,
   typeToken,
   undo,
@@ -38,6 +39,7 @@ import {
   type EditingState,
   type NavDir,
   type Op,
+  type OpLog,
   type Path,
   type TypedToken,
 } from '../engine/index.js';
@@ -70,6 +72,12 @@ export interface EditorControllerOptions {
   readonly onStateChange?: (state: EditingState) => void;
   /** Fired on caret placement (clicks); ops report through onStateChange. */
   readonly onCaretChange?: (caret: Caret) => void;
+  /** Fired when an undo empties the internal op log — the editor's own
+   *  history is spent and any further walk-back belongs to the outer layer.
+   *  Fires exactly on the undo that takes the log from non-empty to empty:
+   *  not at mount, not on a no-op undo of an already-empty log, and it
+   *  re-fires whenever a later undo re-empties the log. */
+  readonly onUndoExhausted?: () => void;
 }
 
 const CARET_CSS = `
@@ -113,6 +121,7 @@ export class EditorController {
   private mathEl: Element | null = null;
   private readonly onStateChange?: (state: EditingState) => void;
   private readonly onCaretChange?: (caret: Caret) => void;
+  private readonly onUndoExhausted?: () => void;
   /** Vertical positional memory V2 (never logged): one stored caret per child
    *  region of every vertically aligned parent, keyed by (parent path, slot) —
    *  path-keyed, so it is immune to full rebuilds; nothing ever clears it
@@ -166,6 +175,7 @@ export class EditorController {
     this.state = initSession(options.envelope, options.vocabulary);
     this.onStateChange = options.onStateChange;
     this.onCaretChange = options.onCaretChange;
+    this.onUndoExhausted = options.onUndoExhausted;
     container.addEventListener('click', this.handleClick);
     container.addEventListener('keydown', this.handleKeydown);
     container.addEventListener('keyup', this.handleKeyup);
@@ -211,6 +221,15 @@ export class EditorController {
     return envelopeOf(this.state);
   }
 
+  /** The session's op log as a versioned host-facing serialization (OpLog
+   *  v1): every logged op paired with its compact reverse step, so the log
+   *  plus the current envelope is enough to walk the session back op by op.
+   *  Serializes the LIVE undo stack — an entry popped by undo() leaves the
+   *  log until a redo() re-logs it. */
+  getOpLog(): OpLog {
+    return serializeOpLog(this.state);
+  }
+
   /** The latest rendered tree's UID maps (null before the first render). */
   getRendered(): RenderedMath | null {
     return this.rendered;
@@ -222,11 +241,17 @@ export class EditorController {
     this.commitState(applyOp(this.state, op));
   }
 
-  /** Step the op log back one entry and rebuild. */
+  /** Step the op log back one entry and rebuild. An undo that takes the log
+   *  from non-empty to EMPTY fires onUndoExhausted (after the commit) — the
+   *  editor's own history is spent; the keyboard's Ctrl+Z path flows through
+   *  here too. An empty-log undo is a defined no-op and fires nothing. */
   undo(): void {
     this.lastAction = 'other'; // history keys are non-typing actions (U1)
     this.takeHighlight(); // any input that is not the confirming BS clears it (D5)
-    this.commitState(undo(this.state));
+    const logLenBefore = this.state.log.length;
+    const next = undo(this.state);
+    this.commitState(next);
+    if (logLenBefore > 0 && next.log.length === 0) this.onUndoExhausted?.();
   }
 
   /** Step the redo list forward one entry and rebuild. */
@@ -234,6 +259,40 @@ export class EditorController {
     this.lastAction = 'other'; // history keys are non-typing actions (U1)
     this.takeHighlight(); // any input that is not the confirming BS clears it (D5)
     this.commitState(engineRedo(this.state));
+  }
+
+  /**
+   * Reseed the live controller in place from a stored envelope (the same
+   * shape the constructor accepts): the content becomes the envelope's
+   * document on THIS instance — the mount lifecycle (style injection,
+   * listeners, caret div) does not re-fire, and onStateChange fires once for
+   * the new content. The envelope goes through the same versioned fromJSON
+   * gate as the mount; an invalid, corrupted, or unknown-version envelope
+   * throws the typed ValidationError / ValidationLimitError and the live
+   * content is left untouched — nothing is half-applied.
+   *
+   * Internal-state semantics (each pinned in tests/editor-reset.test.ts):
+   * reset opens a FRESH session state — the undo log and the redo list are
+   * cleared (their `before` snapshots address the replaced document; walking
+   * back across a reseed would resurrect replaced content, so from here the
+   * history is the reseeded session's own) and the reset itself is NOT
+   * logged (undo right after a reset is a defined no-op). The caret is the
+   * mount-equivalent initial caret of the new document; the session
+   * vocabulary is kept. All transient controller state — the pending
+   * dead-key, the armed D5 highlight, the vertical memory, the last action
+   * kind, the last rejection — is discarded with the session it belonged to.
+   * Omitted envelope = the empty formula, mirroring mount.
+   */
+  reset(envelope?: unknown): void {
+    // Validate FIRST through the existing versioned path: a rejected envelope
+    // throws here and this.state is never touched.
+    const next = initSession(envelope, this.state.vocabulary);
+    this.pendingDeadPow = false;
+    this.takeHighlight();
+    this.vmem = new Map();
+    this.lastAction = 'other';
+    this.lastRejection = null;
+    this.commitState(next);
   }
 
   /** The live vertical-memory map (read-only view; tests/hosts may inspect it). */

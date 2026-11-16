@@ -9,6 +9,8 @@ export * from './errors.js';
 
 export * from './nav.js';
 
+export * from './oplog.js';
+
 export * from './ops.js';
 
 export * from './policy.js';
